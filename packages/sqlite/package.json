@@ -1,0 +1,60 @@
+{
+  "name": "@asksql/sqlite",
+  "version": "0.1.1",
+  "description": "SQLite connector for AskSQL. Works with better-sqlite3 or the built-in node:sqlite; full PRAGMA-based introspection.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b"
+  },
+  "dependencies": {
+    "@asksql/core": "workspace:*"
+  },
+  "peerDependencies": {
+    "better-sqlite3": ">=11"
+  },
+  "peerDependenciesMeta": {
+    "better-sqlite3": {
+      "optional": true
+    }
+  },
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "sideEffects": false,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rahulmahadik/AskSQL.git",
+    "directory": "packages/sqlite"
+  },
+  "homepage": "https://github.com/rahulmahadik/AskSQL#readme",
+  "publishConfig": {
+    "access": "public"
+  },
+  "author": "Rahul Mahadik <rahultkiet@gmail.com>",
+  "keywords": [
+    "sql",
+    "text-to-sql",
+    "nl2sql",
+    "natural-language",
+    "database",
+    "ai",
+    "llm",
+    "sql-generation",
+    "database-chat",
+    "ask-database",
+    "sqlite",
+    "better-sqlite3"
+  ]
+}

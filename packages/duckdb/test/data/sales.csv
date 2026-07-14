@@ -1,0 +1,6 @@
+id,customer,region,amount,ordered_at
+1,Ada,EU,1200.50,2026-01-15
+2,Grace,NA,980.00,2026-02-03
+3,Kat,NA,1500.25,2026-02-20
+4,Ada,EU,300.00,2026-03-01
+5,Linus,APAC,75.99,2026-03-15

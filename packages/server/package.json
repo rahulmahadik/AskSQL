@@ -1,0 +1,58 @@
+{
+  "name": "@asksql/server",
+  "version": "0.1.1",
+  "description": "AskSQL server sidecar: credential-holding HTTP handler with auth hook, server-side SQL guard, audit log. Framework-agnostic + Express/Next adapters.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./express": {
+      "types": "./dist/express.d.ts",
+      "default": "./dist/express.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b"
+  },
+  "dependencies": {
+    "@asksql/core": "workspace:*"
+  },
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "sideEffects": false,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rahulmahadik/AskSQL.git",
+    "directory": "packages/server"
+  },
+  "homepage": "https://github.com/rahulmahadik/AskSQL#readme",
+  "publishConfig": {
+    "access": "public"
+  },
+  "author": "Rahul Mahadik <rahultkiet@gmail.com>",
+  "keywords": [
+    "sql",
+    "text-to-sql",
+    "nl2sql",
+    "natural-language",
+    "database",
+    "ai",
+    "llm",
+    "sql-generation",
+    "database-chat",
+    "ask-database",
+    "express",
+    "sidecar",
+    "sse",
+    "backend"
+  ]
+}

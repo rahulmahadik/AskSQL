@@ -1,0 +1,5 @@
+[
+  {"id": 1, "name": "Ada", "tier": "gold", "lifetime_value": 5000000000000},
+  {"id": 2, "name": "Grace", "tier": "silver", "lifetime_value": 2500},
+  {"id": 3, "name": "Kat", "tier": "gold", "lifetime_value": 9999}
+]

@@ -1,0 +1,58 @@
+{
+  "name": "@asksql/mysql",
+  "version": "0.1.1",
+  "description": "MySQL connector for AskSQL. information_schema introspection + read-only session enforcement.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b"
+  },
+  "dependencies": {
+    "@asksql/core": "workspace:*"
+  },
+  "peerDependencies": {
+    "mysql2": ">=3.6"
+  },
+  "devDependencies": {
+    "mysql2": "^3.11.0"
+  },
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "sideEffects": false,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rahulmahadik/AskSQL.git",
+    "directory": "packages/mysql"
+  },
+  "homepage": "https://github.com/rahulmahadik/AskSQL#readme",
+  "publishConfig": {
+    "access": "public"
+  },
+  "author": "Rahul Mahadik <rahultkiet@gmail.com>",
+  "keywords": [
+    "sql",
+    "text-to-sql",
+    "nl2sql",
+    "natural-language",
+    "database",
+    "ai",
+    "llm",
+    "sql-generation",
+    "database-chat",
+    "ask-database",
+    "mysql",
+    "mariadb"
+  ]
+}

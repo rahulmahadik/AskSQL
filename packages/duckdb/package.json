@@ -1,0 +1,76 @@
+{
+  "name": "@asksql/duckdb",
+  "version": "0.1.1",
+  "description": "DuckDB connector for AskSQL. Local analytical processing of CSV/JSON/Parquet files; the zero-backend file-analytics path.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./browser": {
+      "types": "./dist/browser.d.ts",
+      "default": "./dist/browser.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b"
+  },
+  "dependencies": {
+    "@asksql/core": "workspace:*"
+  },
+  "peerDependencies": {
+    "@duckdb/node-api": ">=1.1",
+    "@duckdb/duckdb-wasm": ">=1.28"
+  },
+  "peerDependenciesMeta": {
+    "@duckdb/node-api": {
+      "optional": true
+    },
+    "@duckdb/duckdb-wasm": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@duckdb/node-api": "^1.5.4-r.1",
+    "@duckdb/duckdb-wasm": "^1.29.0"
+  },
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "sideEffects": false,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rahulmahadik/AskSQL.git",
+    "directory": "packages/duckdb"
+  },
+  "homepage": "https://github.com/rahulmahadik/AskSQL#readme",
+  "publishConfig": {
+    "access": "public"
+  },
+  "author": "Rahul Mahadik <rahultkiet@gmail.com>",
+  "keywords": [
+    "sql",
+    "text-to-sql",
+    "nl2sql",
+    "natural-language",
+    "database",
+    "ai",
+    "llm",
+    "sql-generation",
+    "database-chat",
+    "ask-database",
+    "duckdb",
+    "csv",
+    "parquet",
+    "excel",
+    "analytics",
+    "in-browser"
+  ]
+}

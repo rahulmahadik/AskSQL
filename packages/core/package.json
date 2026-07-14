@@ -1,0 +1,90 @@
+{
+  "name": "@asksql/core",
+  "version": "0.1.1",
+  "description": "AskSQL engine: schema catalog, AST SQL guard, prompt pipeline, LLM orchestration. Zero database drivers.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b"
+  },
+  "dependencies": {
+    "ai": "^7.0.0",
+    "node-sql-parser": "^5.3.0"
+  },
+  "peerDependencies": {
+    "@ai-sdk/anthropic": "^4",
+    "@ai-sdk/azure": "^4",
+    "@ai-sdk/google": "^4",
+    "@ai-sdk/groq": "^4",
+    "@ai-sdk/openai": "^4",
+    "@ai-sdk/openai-compatible": "^2"
+  },
+  "peerDependenciesMeta": {
+    "@ai-sdk/anthropic": {
+      "optional": true
+    },
+    "@ai-sdk/azure": {
+      "optional": true
+    },
+    "@ai-sdk/google": {
+      "optional": true
+    },
+    "@ai-sdk/groq": {
+      "optional": true
+    },
+    "@ai-sdk/openai": {
+      "optional": true
+    },
+    "@ai-sdk/openai-compatible": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@ai-sdk/anthropic": "^4.0.12",
+    "@ai-sdk/azure": "^4.0.11",
+    "@ai-sdk/google": "^4.0.12",
+    "@ai-sdk/groq": "^4.0.0",
+    "@ai-sdk/openai": "^4.0.11",
+    "@ai-sdk/openai-compatible": "^3.0.0"
+  },
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "sideEffects": false,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rahulmahadik/AskSQL.git",
+    "directory": "packages/core"
+  },
+  "homepage": "https://github.com/rahulmahadik/AskSQL#readme",
+  "publishConfig": {
+    "access": "public"
+  },
+  "author": "Rahul Mahadik <rahultkiet@gmail.com>",
+  "keywords": [
+    "sql",
+    "text-to-sql",
+    "nl2sql",
+    "natural-language",
+    "database",
+    "ai",
+    "llm",
+    "sql-generation",
+    "database-chat",
+    "ask-database",
+    "ast-guard",
+    "read-only",
+    "query"
+  ]
+}

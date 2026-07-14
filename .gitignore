@@ -1,0 +1,19 @@
+node_modules/
+dist/
+coverage/
+*.log
+*.tgz
+.env
+.env.*
+.DS_Store
+nohup.out
+*.tsbuildinfo
+examples/**/dist/
+examples/plain-html/asksql-widget.js
+
+# Internal-only working docs (design/BRD, plan, coverage + validation logs,
+# edge-case catalog). Kept locally; never published to the open-source repo.
+internal/
+
+# npm auth (never commit tokens)
+.npmrc

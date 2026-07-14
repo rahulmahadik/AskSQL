@@ -1,0 +1,29 @@
+{
+  "files": [],
+  "references": [
+    {
+      "path": "packages/core"
+    },
+    {
+      "path": "packages/duckdb"
+    },
+    {
+      "path": "packages/sqlite"
+    },
+    {
+      "path": "packages/postgres"
+    },
+    {
+      "path": "packages/mysql"
+    },
+    {
+      "path": "packages/server"
+    },
+    {
+      "path": "packages/react"
+    },
+    {
+      "path": "packages/mcp"
+    }
+  ]
+}

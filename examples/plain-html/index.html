@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AskSQL - plain HTML embed</title>
+    <style>
+      /* Aggressive host CSS to prove shadow-DOM isolation (WID-01). */
+      * { box-sizing: content-box; font-family: 'Comic Sans MS', cursive; }
+      body { margin: 0; padding: 40px; background: #fafafa; color: #222; }
+      button { all: unset; }
+    </style>
+  </head>
+  <body>
+    <h1>A regular website</h1>
+    <p>This page has no React and hostile global CSS. The AskSQL widget lives
+       in a shadow root, so nothing bleeds in or out.</p>
+
+    <!-- A host "scroll to top" button occupying the bottom-right corner. -->
+    <button id="scrolltop" title="Scroll to top"
+      style="position:fixed;bottom:24px;right:24px;width:44px;height:44px;border-radius:8px;
+             background:#111;color:#fff;border:none;cursor:pointer;font-size:18px;z-index:1000;">↑</button>
+
+    <!-- One script tag, one mount call. The bubble is placed bottom-LEFT so it
+         doesn't overlap the host's scroll-to-top button (bottom-right). -->
+    <script src="./asksql-widget.js"></script>
+    <script>
+      AskSQL.mount({
+        serverUrl: '/asksql',
+        title: 'Ask the Shop DB',
+        position: 'bottom-left',
+        suggestions: ['How many customers are there?', 'Total revenue from paid orders'],
+      });
+    </script>
+  </body>
+</html>
