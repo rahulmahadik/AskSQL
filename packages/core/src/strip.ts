@@ -24,15 +24,15 @@ export function stripCommentsAndStrings(sql: string): string {
     const c = sql[i]!;
     const next = i + 1 < n ? sql[i + 1]! : '';
 
-    // -- line comment
+    // -- line comment (ends at CR or LF; a lone CR must not hide trailing text)
     if (c === '-' && next === '-') {
-      while (i < n && sql[i] !== '\n') i++;
+      while (i < n && sql[i] !== '\n' && sql[i] !== '\r') i++;
       out.push(' ');
       continue;
     }
     // # line comment (MySQL)
     if (c === '#') {
-      while (i < n && sql[i] !== '\n') i++;
+      while (i < n && sql[i] !== '\n' && sql[i] !== '\r') i++;
       out.push(' ');
       continue;
     }
@@ -66,8 +66,11 @@ export function stripCommentsAndStrings(sql: string): string {
         continue;
       }
     }
-    // E'...' string with backslash escapes (PostgreSQL)
-    if ((c === 'e' || c === 'E') && next === "'") {
+    // E'...' backslash-escape string (PostgreSQL). The `E` must START a token:
+    // otherwise the trailing E of `LIKE'x'` / `date'...'` is misread as an E-string,
+    // treating `\'` as an escaped quote and running past the literal, which hides a
+    // following `;` from the multi-statement check. Never widen without a test.
+    if ((c === 'e' || c === 'E') && next === "'" && !/[A-Za-z0-9_$]/.test(sql[i - 1] ?? '')) {
       i += 2;
       while (i < n) {
         if (sql[i] === '\\') i += 2;

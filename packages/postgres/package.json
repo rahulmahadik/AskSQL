@@ -1,6 +1,6 @@
 {
   "name": "@asksql/postgres",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "PostgreSQL connector for AskSQL. Full schema introspection (tables, views, indexes, triggers, functions, enums, FKs) + read-only session enforcement.",
   "type": "module",
   "main": "./dist/index.js",
@@ -18,14 +18,14 @@
     "build": "tsc -b"
   },
   "dependencies": {
-    "@asksql/core": "workspace:*"
+    "@asksql/core": "workspace:^"
   },
   "peerDependencies": {
     "pg": ">=8.11"
   },
   "devDependencies": {
-    "pg": "^8.13.0",
-    "@types/pg": "^8.11.0"
+    "@types/pg": "^8.20.0",
+    "pg": "^8.22.0"
   },
   "license": "Apache-2.0",
   "engines": {
@@ -55,6 +55,7 @@
     "ask-database",
     "postgres",
     "postgresql",
-    "pg"
+    "pg",
+    "text2sql"
   ]
 }

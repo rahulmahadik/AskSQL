@@ -1,6 +1,6 @@
 {
   "name": "@asksql/server",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "AskSQL server sidecar: credential-holding HTTP handler with auth hook, server-side SQL guard, audit log. Framework-agnostic + Express/Next adapters.",
   "type": "module",
   "main": "./dist/index.js",
@@ -22,7 +22,7 @@
     "build": "tsc -b"
   },
   "dependencies": {
-    "@asksql/core": "workspace:*"
+    "@asksql/core": "workspace:^"
   },
   "license": "Apache-2.0",
   "engines": {
@@ -53,6 +53,10 @@
     "express",
     "sidecar",
     "sse",
-    "backend"
+    "backend",
+    "openai",
+    "anthropic",
+    "ollama",
+    "text2sql"
   ]
 }

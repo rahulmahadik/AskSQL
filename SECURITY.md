@@ -47,6 +47,125 @@ untrusted input. High-value targets:
 
 ## Defense in depth
 
-Even if the guard were bypassed, connectors open **read-only** database sessions,
-so a slipped write still hits a read-only transaction. Report guard bypasses
-regardless - the read-only session is a backstop, not the boundary.
+The guard is the boundary. Behind it, each connector adds a backstop that does
+not depend on the guard's lexer agreeing with the server's parser:
+
+| Connector | Behind the guard |
+|---|---|
+| Postgres | `BEGIN READ ONLY`, plus the **extended query protocol** - one statement per message, so multi-statement text is rejected by the server |
+| MySQL | `START TRANSACTION READ ONLY`; `mysql2` defaults `multipleStatements` to false |
+| SQLite | the handle is opened read-only; `prepare()` compiles a single statement |
+| DuckDB | a **prepared statement** - exactly one statement, rejected otherwise |
+
+DuckDB is the one engine with **no read-only session** (`readOnlySession: false`),
+because it must create views over the files you load. Its prepared statement is
+therefore load-bearing, not a nicety.
+
+Report guard bypasses regardless. These backstops are a second line, not the
+boundary - and a bypass that only a backstop catches is still a bug.
+
+## Scanner alerts, and what they mean
+
+Automated scanners (Socket, Snyk, `npm audit`) report on the whole dependency
+graph. The alerts below come from dependencies, not from AskSQL's own code. Each
+is checkable with the command shown.
+
+**AskSQL's own code has no `eval`, no shell access, no filesystem access, and no
+network calls of its own, in any of the nine packages.**
+
+### "Uses eval" / "Obfuscated code"
+
+Source: `node-sql-parser`, the parser the guard uses. The flagged code is the
+`globalThis` polyfill every bundler emits:
+
+```js
+r = function () { return this }();
+try { r = r || new Function("return this")(); } catch (t) { /* ... */ }
+```
+
+That is not dynamic execution of SQL or anything else, and it lives only in the
+package's 15 minified `umd/*.umd.js` **browser** bundles (minified is what trips
+the obfuscation heuristic). `node-sql-parser` declares no `browser`, `exports`,
+or `module` field - only `main: index.js` - so Node and bundlers both resolve
+`index.js`, which contains **zero** `eval`. The UMD files are reachable only by
+deep-importing `node-sql-parser/umd/...`, which AskSQL never does. Check it:
+
+```sh
+P=$(node -e "console.log(require.resolve('node-sql-parser'))")
+echo "$P"                             # -> .../node-sql-parser/index.js
+grep -c "eval(\|new Function(" "$P"   # -> 0
+```
+
+### "Network access" / "URL strings" / "Environment variable access"
+
+Source: `pg`, `mysql2`, `ai`, `@ai-sdk/*`. A Postgres driver connects to Postgres
+and reads `PGHOST`; an AI SDK calls a model endpoint and reads an API key. This
+is the job.
+
+### "Shell access"
+
+Source: `cross-spawn` (via `@modelcontextprotocol/sdk`, which spawns MCP servers
+over stdio) and `detect-libc` (via `better-sqlite3`, which detects glibc/musl to
+pick a prebuilt binary). Both arrive only through **optional peer dependencies**:
+if you do not install the MCP SDK or `better-sqlite3`, neither is in your tree.
+
+### "Unmaintained" (not updated in five years)
+
+This alert is **accurate**. The packages are `pg` and `mysql2` internals:
+`is-property` (2014), `pg-int8` (2017), `xtend` (2019), `pg-types` (2019),
+`postgres-array`, `postgres-date`, `postgres-interval`, `generate-function`,
+`safer-buffer`. They are small, finished packages that the standard Postgres and
+MySQL drivers depend on. `pg` and `mysql2` are themselves actively maintained and
+together serve over 40 million downloads a week - every Node application talking
+to Postgres or MySQL has exactly these in its tree. Removing them would mean not
+using the standard drivers.
+
+### "New author"
+
+AskSQL is new. Time is the only fix.
+
+## What AskSQL itself ships
+
+- **No install scripts.** Nothing compiles or downloads when you install any
+  `@asksql/*` package.
+- **A small tree.** `npm i @asksql/core` installs six packages: `ai`,
+  `node-sql-parser`, three `@ai-sdk/*`, and `big-integer`.
+- **Drivers are optional peers.** You install only the one you use, so you choose
+  your own trust surface.
+
+## Choosing a SQLite driver
+
+`@asksql/sqlite` accepts either driver. It is a real choice:
+
+| | `node:sqlite` (built in) | `better-sqlite3` |
+|---|---|---|
+| Install | nothing - built into Node 22.5+ | native module: `prebuild-install \|\| node-gyp rebuild` |
+| Scanner alerts | none | install script, shell access (`detect-libc`) |
+| Works with `--ignore-scripts` | yes | no |
+| Integers above 2^53 | throws, or exact BigInts with `readBigInts: true` | returns a lossy number |
+| Node 20 | not available | works |
+
+Neither is wrong. `node:sqlite` costs nothing to install and refuses to lose
+precision silently; `better-sqlite3` is battle-tested and supports Node 20. Pass
+whichever you have:
+
+```js
+// Zero dependencies, Node 22.5+
+import { DatabaseSync } from 'node:sqlite';
+new SqliteConnector({ id: 'app', name: 'App', database: new DatabaseSync('app.db', { readOnly: true }) });
+
+// Or the native driver
+import Database from 'better-sqlite3';
+new SqliteConnector({ id: 'app', name: 'App', database: new Database('app.db', { readonly: true }) });
+```
+
+## Provenance
+
+From 0.1.2, packages are published by GitHub Actions with
+[npm provenance](https://docs.npmjs.com/generating-provenance-statements): a
+signed attestation tying each tarball to the commit and workflow that built it.
+Verify what you installed:
+
+```sh
+npm audit signatures
+```

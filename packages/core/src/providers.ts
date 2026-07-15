@@ -41,13 +41,24 @@ const CLOUD_PROVIDERS: ReadonlySet<ProviderName> = new Set([
 
 const OLLAMA_DEFAULT_BASE_URL = 'http://localhost:11434/v1';
 
-function assertBaseUrl(url: string): void {
+const isLoopback = (h: string): boolean =>
+  h === 'localhost' || h === '127.0.0.1' || h === '::1' || h === '[::1]' || h.endsWith('.localhost');
+
+/** Link-local range (169.254.0.0/16), which includes the cloud instance-metadata address. */
+const isLinkLocal = (h: string): boolean => /^169\.254\./.test(h) || /^fe80:/i.test(h) || h === '[fe80::]';
+
+/**
+ * Validate a user-supplied AI endpoint URL. Never interpolate the raw URL into an
+ * error (it may embed credentials). When `carriesSecret`, refuse plaintext http to
+ * a remote host and link-local/metadata hosts, so an API key cannot be exfiltrated.
+ */
+function assertBaseUrl(url: string, carriesSecret: boolean): void {
   let parsed: URL;
   try {
     parsed = new URL(url);
   } catch {
     throw new AskSqlError('CONFIG_ERROR', {
-      detail: `invalid baseURL: ${url}`,
+      detail: 'baseURL is not a valid URL',
       userMessage: 'The AI endpoint URL is not a valid URL.',
     });
   }
@@ -61,6 +72,18 @@ function assertBaseUrl(url: string): void {
     throw new AskSqlError('CONFIG_ERROR', {
       detail: 'baseURL has no hostname',
       userMessage: 'The AI endpoint URL has no host.',
+    });
+  }
+  if (isLinkLocal(parsed.hostname)) {
+    throw new AskSqlError('CONFIG_ERROR', {
+      detail: 'baseURL points at a link-local address',
+      userMessage: 'That AI endpoint address is not allowed.',
+    });
+  }
+  if (carriesSecret && parsed.protocol !== 'https:' && !isLoopback(parsed.hostname)) {
+    throw new AskSqlError('CONFIG_ERROR', {
+      detail: 'refusing to send apiKey over http to a remote host',
+      userMessage: 'Refusing to send the API key over http to a remote host. Use https, or a local endpoint.',
     });
   }
 }
@@ -85,13 +108,13 @@ export async function resolveModel(config: ProviderConfig): Promise<ModelLike> {
       userMessage: 'No AI model is configured. Set a model name in your AskSQL configuration.',
     });
   }
-  if (CLOUD_PROVIDERS.has(config.provider) && !config.apiKey) {
+  if (CLOUD_PROVIDERS.has(config.provider) && !config.apiKey?.trim()) {
     throw new AskSqlError('CONFIG_ERROR', {
       detail: `${config.provider} requires apiKey`,
       userMessage: 'The AI provider needs an API key. Add it to your AskSQL configuration.',
     });
   }
-  if (config.baseURL) assertBaseUrl(config.baseURL);
+  if (config.baseURL) assertBaseUrl(config.baseURL, Boolean(config.apiKey));
 
   switch (config.provider) {
     case 'openai': {
@@ -107,7 +130,9 @@ export async function resolveModel(config: ProviderConfig): Promise<ModelLike> {
     case 'google': {
       const mod = await importProvider('@ai-sdk/google');
       const create = mod['createGoogleGenerativeAI'] as (o: object) => (id: string) => ModelLike;
-      return create({ apiKey: config.apiKey })(config.model);
+      // Honor a user-supplied baseURL instead of silently sending the key to the
+      // vendor cloud (assertBaseUrl above already validated it).
+      return create({ apiKey: config.apiKey, ...(config.baseURL ? { baseURL: config.baseURL } : {}) })(config.model);
     }
     case 'azure': {
       // Fail at config time, not mid-request: without either setting, the SDK
@@ -117,6 +142,14 @@ export async function resolveModel(config: ProviderConfig): Promise<ModelLike> {
           detail: 'azure requires resourceName or baseURL',
           userMessage:
             'Azure needs the resource name from your endpoint (https://<resource>.openai.azure.com) or a full baseURL. For Azure AI Foundry endpoints (*.services.ai.azure.com), use the openai provider with a baseURL instead.',
+        });
+      }
+      // resourceName is interpolated into https://<resourceName>.openai.azure.com,
+      // so restrict it to the characters Azure actually allows in a resource name.
+      if (config.resourceName && !/^[A-Za-z0-9][A-Za-z0-9-]{1,62}[A-Za-z0-9]$/.test(config.resourceName)) {
+        throw new AskSqlError('CONFIG_ERROR', {
+          detail: 'invalid azure resourceName',
+          userMessage: 'The Azure resource name contains invalid characters.',
         });
       }
       const mod = await importProvider('@ai-sdk/azure');
@@ -143,7 +176,7 @@ export async function resolveModel(config: ProviderConfig): Promise<ModelLike> {
           userMessage: 'The OpenAI-compatible provider needs a base URL.',
         });
       }
-      assertBaseUrl(baseURL);
+      assertBaseUrl(baseURL, Boolean(config.apiKey));
       return create({
         name: config.provider,
         baseURL,

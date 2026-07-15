@@ -29,7 +29,8 @@ const find = (sql: string, c: SchemaCatalog = CAT) => firstUnknownColumn(sql, c,
 
 describe('firstUnknownColumn - round 1: basic detection', () => {
   it('flags a hallucinated column on a table', () => {
-    expect(find('SELECT is_canceled FROM appointments')?.column).toBe(undefined); // unqualified -> fail open
+    // Single base table: an unqualified invented column is now attributable and caught.
+    expect(find('SELECT is_canceled FROM appointments')?.column).toBe('is_canceled');
     expect(find('SELECT appointments.is_canceled FROM appointments')?.column).toBe('is_canceled');
   });
   it('passes a valid qualified column', () => {
@@ -67,8 +68,21 @@ describe('firstUnknownColumn - round 2: alias resolution', () => {
 });
 
 describe('firstUnknownColumn - round 3: fail-open (never block a valid query)', () => {
-  it('ignores unqualified columns', () => {
-    expect(find('SELECT service_name, made_up_col FROM services')).toBeNull();
+  it('catches an unqualified invented column when there is exactly one base table', () => {
+    expect(find('SELECT service_name, made_up_col FROM services')?.column).toBe('made_up_col');
+  });
+  it('catches an unqualified invented column across a join when every table is known', () => {
+    expect(find('SELECT made_up_col FROM appointments JOIN services ON appointments.service_id = services.service_id')?.column).toBe('made_up_col');
+  });
+  it('fails open on an unqualified column when a joined table is not in the catalog', () => {
+    expect(find('SELECT made_up_col FROM services JOIN bookings ON services.service_id = bookings.service_id')).toBeNull();
+  });
+  it('allows an unqualified column that belongs to the other joined table', () => {
+    expect(find('SELECT first_name FROM appointments JOIN employees ON appointments.employee_id = employees.employee_id')).toBeNull();
+  });
+  it('does not flag a SELECT alias used in ORDER BY / HAVING', () => {
+    expect(find('SELECT count(*) AS n FROM services ORDER BY n DESC')).toBeNull();
+    expect(find('SELECT service_name AS s FROM services ORDER BY s')).toBeNull();
   });
   it('ignores SELECT * and table.*', () => {
     expect(find('SELECT * FROM services')).toBeNull();

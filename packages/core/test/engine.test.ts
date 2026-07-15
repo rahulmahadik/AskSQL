@@ -225,16 +225,18 @@ describe('DB-error auto-repair suggestion', () => {
   it('attaches a corrected query to the error without executing it', async () => {
     // Connector fails when the SQL references a non-existent column, succeeds
     // otherwise. The model first emits the bad column, then a good one.
+    // A runtime error the hallucination floor cannot see (division by zero on
+    // valid columns), so it reaches the DB and the suggestFix path runs.
     const conn = new FakeConnector((sql) => {
-      if (/missing_col/.test(sql)) throw new AskSqlError('DB_QUERY_ERROR', { userMessage: 'column "missing_col" does not exist' });
+      if (/1 \/ 0|1\/0/.test(sql)) throw new AskSqlError('DB_QUERY_ERROR', { userMessage: 'division by zero' });
       return { columns: [{ name: 'id', kind: 'number' }], rows: [[1]], rowCount: 1, truncated: false, durationMs: 1, warnings: [] };
     });
     const engine = createAskSql({
       connectors: [conn],
-      model: model(['```sql\nSELECT missing_col FROM users\n```', '```sql\nSELECT id FROM users\n```']),
+      model: model(['```sql\nSELECT 1 / 0 AS x FROM users\n```', '```sql\nSELECT id FROM users\n```']),
     });
     const ans = await engine.ask('give me the thing');
-    expect(ans.sql).toMatch(/missing_col/); // first attempt passed guard + table check
+    expect(ans.sql).toMatch(/1 \/ 0/); // first attempt passed guard + column floor
     let caught: unknown;
     try {
       await ans.run();

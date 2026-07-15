@@ -89,7 +89,9 @@ export class SqliteConnector implements Connector {
     } catch (err) {
       throw new AskSqlError('CONFIG_ERROR', {
         detail: `cannot open sqlite file: ${err instanceof Error ? err.message : String(err)}`,
-        userMessage: 'The SQLite driver is not installed. Run: npm install better-sqlite3',
+        userMessage:
+          "No SQLite driver available. Pass a database handle from Node's built-in sqlite " +
+          '(Node 22.5+), or run: npm install better-sqlite3',
         cause: err,
       });
     }
@@ -213,11 +215,11 @@ export class SqliteConnector implements Connector {
     const clipped = truncated ? rawRows.slice(0, maxRows) : rawRows;
     const colNames = clipped.length > 0 ? Object.keys(clipped[0]!) : [];
     // SQLite exposes no result-column types, so infer each kind from the first
-    // non-null value in that column.
+    // non-null value in the column.
     const columns: ResultColumn[] = colNames.map((name) => ({
-          name,
-          kind: inferKind(clipped.find((r) => r[name] != null)?.[name]),
-  }));
+      name,
+      kind: inferKind(clipped.find((r) => r[name] != null)?.[name]),
+    }));
     const rows = clipped.map((r) => colNames.map((name) => shapeSqliteValue(r[name])));
     return {
       columns,

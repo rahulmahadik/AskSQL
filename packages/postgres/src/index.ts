@@ -37,6 +37,8 @@ export interface PostgresConnectorConfig {
   readonly database?: string;
   readonly ssl?: boolean | Record<string, unknown>;
   readonly max?: number;
+  /** Connect timeout in ms. Default 15000; pg's own default is 0 (wait forever). */
+  readonly connectTimeoutMs?: number;
   /** Include pg_catalog / information_schema in the catalog. Default false. */
   readonly includeSystemSchemas?: boolean;
 }
@@ -112,6 +114,9 @@ export class PostgresConnector implements Connector {
     if (this.config.ssl !== undefined) opts['ssl'] = this.config.ssl;
     opts['max'] = this.config.max ?? 5;
     opts['application_name'] = 'asksql';
+    // pg defaults connectionTimeoutMillis to 0 (wait forever); bound it so a
+    // blackholed/half-open host fails instead of hanging connect().
+    opts['connectionTimeoutMillis'] = this.config.connectTimeoutMs ?? 15_000;
     this.pool = new Pool(opts);
     // Fail fast + friendly on auth / unreachable.
     try {
@@ -193,8 +198,15 @@ export class PostgresConnector implements Connector {
       await client.query('BEGIN READ ONLY');
       await client.query(`SET LOCAL statement_timeout = ${Math.max(1, Math.floor(timeoutMs))}`);
 
-// rowMode 'array' preserves positional duplicate column names.
-      const res = await client.query({ text: sql, rowMode: 'array' } as unknown as string);
+      // rowMode 'array' preserves positional duplicate column names.
+      // queryMode 'extended' is a security backstop: the extended protocol allows
+      // one statement per message, so multi-statement text is rejected server-side
+      // even if it slipped past the guard's lexer. Do not switch to simple query.
+      const res = await client.query({
+        text: sql,
+        rowMode: 'array',
+        queryMode: 'extended',
+      } as unknown as string);
       await client.query('COMMIT').catch(() => {});
 
       const fields = res.fields ?? [];

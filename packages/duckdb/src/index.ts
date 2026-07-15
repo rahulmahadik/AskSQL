@@ -48,9 +48,14 @@ export interface DuckDbConnectorConfig {
   readonly files?: readonly FileSource[];
 }
 
+interface DuckPrepared {
+  runAndReadUntil(targetRowCount: number): Promise<DuckReader>;
+}
 interface DuckConnection {
   run(sql: string): Promise<unknown>;
   runAndReadUntil(sql: string, targetRowCount: number): Promise<DuckReader>;
+  /** Compiles exactly ONE statement; throws on a multi-statement string. */
+  prepare(sql: string): Promise<DuckPrepared>;
   closeSync?(): void;
   disconnectSync?(): void;
 }
@@ -99,6 +104,23 @@ export class DuckDbConnector implements Connector {
     const { DuckDBInstance } = await this.api();
     this.instance = await DuckDBInstance.create(this.config.path ?? ':memory:');
     this.conn = await this.instance.connect();
+    // Engine-level defense-in-depth. DuckDB has no read-only session, so the
+    // guard is the only barrier - and its denylist cannot cover DuckDB's open
+    // extension surface. Turning OFF implicit extension autoload/autoinstall
+    // means the dangerous families (httpfs http_*, postgres/mysql/sqlite
+    // scanners, spatial st_read*, gsheets) cannot load behind the guard's back:
+    // a query that reaches for one errors instead of executing. Extensions we
+    // need (excel for xlsx) are still loaded explicitly via INSTALL/LOAD.
+    for (const stmt of [
+      'SET autoinstall_known_extensions=false',
+      'SET autoload_known_extensions=false',
+    ]) {
+      try {
+        await this.conn.run(stmt);
+      } catch {
+        // Older DuckDB may not expose these settings; the guard denylist still applies.
+      }
+    }
     for (const f of this.config.files ?? []) await this.registerFile(f);
   }
 
@@ -191,11 +213,15 @@ private async ensureExcel(): Promise<void> {
     const started = Date.now();
     let reader: DuckReader;
     try {
+      // prepare() is a security backstop: DuckDB has no read-only session and
+      // runAndReadUntil would run multiple statements, so compiling exactly one
+      // statement is the only structural defence. Do not switch to conn.run().
+      const prepared = await conn.prepare(sql);
       // Bounded read: fetch at most maxRows+1 rows so `SELECT *` over a huge
       // file never materializes millions of JS objects.
-      reader = await withQueryTimeout(conn.runAndReadUntil(sql, maxRows + 1), opts?.timeoutMs ?? 30_000, opts?.signal);
+      reader = await withQueryTimeout(prepared.runAndReadUntil(maxRows + 1), opts?.timeoutMs ?? 30_000, opts?.signal);
     } catch (err) {
-    throw mapQueryError(err);
+      throw mapQueryError(err);
     }
 
     const names = reader.columnNames();

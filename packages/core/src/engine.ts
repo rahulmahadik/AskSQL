@@ -653,6 +653,21 @@ function collectCteNames(sql: string): ReadonlySet<string> {
 }
 
 /**
+ * Column aliases introduced by `... AS name` in the SELECT list. An `ORDER BY`
+ * or `HAVING` that references such an alias is legitimate, so these are excluded
+ * from the unqualified-column hallucination check. Conservative: any `AS name`
+ * anywhere in the statement is treated as an alias (over-collecting only ever
+ * makes the floor more lenient, never a false positive).
+ */
+function collectSelectAliases(sql: string): ReadonlySet<string> {
+  const names = new Set<string>();
+  for (const m of sql.matchAll(/\bas\s+["'`]?([A-Za-z_][A-Za-z0-9_]*)["'`]?/giu)) {
+    names.add(m[1]!.toLowerCase());
+  }
+  return names;
+}
+
+/**
  * Returns the first column reference whose (alias-resolved) base table exists
  * in the catalog but does NOT have that column - the column-level hallucination
  * floor. `columnList` resolves table aliases to their real base table, so
@@ -691,14 +706,43 @@ export function firstUnknownColumn(
   }
 
   const cteNames = collectCteNames(sql);
+  const aliases = collectSelectAliases(sql);
+
+  // The query's base tables that we know. An unqualified column is judged against
+  // them only when EVERY base table is known and there is no subquery, so a column
+  // can never legitimately come from a table/derivation we cannot see.
+  const queryTables: string[] = [];
+  let attributable = !/\(\s*select\b/iu.test(sql);
+  try {
+    for (const t of tableParser.tableList(sql, { database: grammar })) {
+      let name = (t.split('::')[2] ?? '').toLowerCase();
+      if (!name || name === 'null') continue;
+      if (name.includes('.')) name = name.slice(name.lastIndexOf('.') + 1);
+      if (cteNames.has(name) || SYSTEM_SCHEMAS.has(name)) continue;
+      if (byTable.has(name)) queryTables.push(name);
+      else attributable = false; // an unknown base table may own the column
+    }
+  } catch {
+    attributable = false;
+  }
 
   for (const ref of refs) {
     const parts = ref.split('::');
     let table = (parts[1] ?? '').toLowerCase();
     const column = (parts[2] ?? '').toLowerCase();
-    if (!table || table === 'null') continue; // unqualified - cannot safely attribute
     if (!column || column === '(.*)') continue; // wildcard / empty
-    // A schema-qualified table (schema.table) - check the bare name.
+
+    if (!table || table === 'null') {
+      // Unqualified: skip aliases; require every base table known; then it is
+      // invented iff none of the query's tables have it.
+      if (!attributable || aliases.has(column) || queryTables.length === 0) continue;
+      if (queryTables.some((t) => byTable.get(t)!.has(column))) continue;
+      const available = new Set<string>();
+      for (const t of queryTables) for (const c of byTable.get(t)!) available.add(c);
+      return { table: queryTables[0]!, column, available: [...available].sort() };
+    }
+
+    // Qualified: check the bare table name.
     if (table.includes('.')) table = table.slice(table.lastIndexOf('.') + 1);
     if (cteNames.has(table)) continue; // CTE relation - columns are the CTE's own
     if (SYSTEM_SCHEMAS.has(table)) continue;

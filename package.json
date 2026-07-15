@@ -17,8 +17,8 @@
     "changeset:publish": "pnpm build && changeset publish"
   },
   "devDependencies": {
-    "@ai-sdk/groq": "^4.0.0",
-    "@ai-sdk/openai-compatible": "^3.0.0",
+    "@ai-sdk/groq": "^4.0.10",
+    "@ai-sdk/openai-compatible": "^3.0.9",
     "@asksql/core": "workspace:*",
     "@asksql/duckdb": "workspace:*",
     "@asksql/mysql": "workspace:*",
@@ -26,16 +26,16 @@
     "@asksql/server": "workspace:*",
     "@asksql/sqlite": "workspace:*",
     "@changesets/cli": "^2.31.0",
-    "@types/node": "^26.0.0",
+    "@types/node": "^26.1.1",
     "axe-core": "^4.12.1",
     "esbuild": "^0.28.1",
-    "express": "^5.0.0",
+    "express": "^5.2.1",
     "fast-check": "^4.9.0",
-    "pg": "^8.13.0",
+    "pg": "^8.22.0",
     "puppeteer-core": "^25.3.0",
-    "tsup": "^8.0.0",
+    "tsup": "^8.5.1",
     "tsx": "^4.23.1",
-    "typescript": "^5.9.0",
-    "vitest": "^4.0.0"
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.10"
   }
 }

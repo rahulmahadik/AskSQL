@@ -336,7 +336,7 @@ export class MysqlConnector implements Connector {
 // Reliable backend id for KILL QUERY (thread-id wrappers vary).
       let connId: number | undefined;
       try {
-        const [idRows] = await conn.query('SELECT CONNECTION_ID AS id');
+        const [idRows] = await conn.query('SELECT CONNECTION_ID() AS id');
         connId = Number((idRows as Record<string, unknown>[])[0]?.['id']);
       } catch {
         /* cancel becomes best-effort if this fails */

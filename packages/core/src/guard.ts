@@ -52,10 +52,47 @@ const PG_DENY_FUNCTIONS = [
   'pg_terminate_backend', 'pg_cancel_backend', 'pg_reload_conf',
   'pg_rotate_logfile', 'pg_switch_wal', 'pg_promote', 'pg_create_restore_point',
   'pg_logical_emit_message', 'pg_notify', 'set_config',
-  'dblink', 'dblink_exec', 'dblink_connect', 'dblink_send_query',
-  'lo_import', 'lo_export',
+  'dblink', 'dblink_exec', 'dblink_connect', 'dblink_connect_u', 'dblink_send_query',
+  'dblink_open', 'dblink_fetch', 'dblink_close', 'dblink_cancel_query', 'dblink_get_result',
+  // Large objects are writable server-side storage; read AND write are denied.
+  'lo_import', 'lo_export', 'lo_put', 'lo_from_bytea', 'lo_unlink', 'lo_creat',
+  'lo_create', 'lowrite', 'loread', 'lo_open', 'lo_close', 'lo_truncate', 'lo_truncate64', 'lo_lseek', 'lo_lseek64',
+  'lo_get', 'lo_get_fragment', 'lo_read',
   'pg_advisory_lock', 'pg_advisory_lock_shared', 'pg_advisory_xact_lock',
-  'pg_advisory_xact_lock_shared', 'pg_try_advisory_lock',
+  'pg_advisory_xact_lock_shared', 'pg_try_advisory_lock', 'pg_try_advisory_lock_shared',
+  'pg_try_advisory_xact_lock', 'pg_try_advisory_xact_lock_shared',
+  'pg_advisory_unlock', 'pg_advisory_unlock_shared', 'pg_advisory_unlock_all',
+  // Replication slots and origins create/drop persistent server objects.
+  'pg_create_logical_replication_slot', 'pg_create_physical_replication_slot',
+  'pg_drop_replication_slot', 'pg_replication_origin_create', 'pg_replication_origin_drop',
+  'pg_replication_origin_session_setup', 'pg_replication_origin_session_reset',
+  'pg_replication_origin_advance', 'pg_replication_origin_xact_setup', 'pg_replication_origin_xact_reset',
+  'pg_logical_slot_get_changes', 'pg_logical_slot_get_binary_changes',
+  // Server-state resets and snapshot side effects.
+  'pg_stat_reset', 'pg_stat_reset_shared', 'pg_stat_reset_single_table_counters',
+  'pg_stat_reset_single_function_counters', 'pg_stat_reset_slru', 'pg_stat_reset_replication_slot',
+  'pg_export_snapshot', 'pg_log_backend_memory_contexts',
+  // Directory listing / filesystem disclosure.
+  'pg_ls_logdir', 'pg_ls_waldir', 'pg_ls_tmpdir', 'pg_ls_archive_statusdir',
+  'pg_ls_replslotdir', 'pg_ls_logicalsnapdir', 'pg_ls_logicalmapdir', 'pg_current_logfile',
+  'pg_logdir_ls', 'pg_read_server_files', 'fsdir',
+  // adminpack: arbitrary server-side file write/delete/rename - an RCE primitive.
+  'pg_file_write', 'pg_file_unlink', 'pg_file_rename', 'pg_file_sync',
+  // Server control: backups, WAL replay, replication-slot advance, extra resets.
+  'pg_start_backup', 'pg_stop_backup', 'pg_backup_start', 'pg_backup_stop',
+  'pg_wal_replay_pause', 'pg_wal_replay_resume', 'pg_replication_slot_advance',
+  'pg_stat_statements_reset', 'pg_import_system_collations',
+  // Index/cache maintenance side effects.
+  'gin_clean_pending_list', 'brin_summarize_new_values', 'brin_desummarize_range',
+  'brin_summarize_range', 'pgstattuple', 'pgstatindex', 'pgstatginindex',
+  // Functions that take SQL (or a whole table/schema/database) as a STRING and
+  // execute it. The AST walk cannot see inside a string literal, so without these
+  // `query_to_xml('SELECT pg_sleep(60)', ...)` bypasses every other denied entry.
+  'query_to_xml', 'query_to_xmlschema', 'query_to_xml_and_xmlschema',
+  'table_to_xml', 'table_to_xmlschema', 'table_to_xml_and_xmlschema',
+  'cursor_to_xml', 'cursor_to_xmlschema',
+  'schema_to_xml', 'schema_to_xmlschema', 'schema_to_xml_and_xmlschema',
+  'database_to_xml', 'database_to_xmlschema', 'database_to_xml_and_xmlschema',
   // Sequence mutations: read-only on Postgres/MySQL/SQLite via their read-only
   // session, but DuckDB relies solely on the guard, so deny them universally.
   'nextval', 'setval',
@@ -65,19 +102,77 @@ const MYSQL_DENY_FUNCTIONS = [
   'load_file', 'sleep', 'benchmark', 'get_lock', 'release_lock',
   'release_all_locks', 'master_pos_wait', 'source_pos_wait',
   'sys_exec', 'sys_eval',
+  'wait_for_executed_gtid_set', 'wait_until_sql_thread_after_gtids',
 ];
 
 const SQLITE_DENY_FUNCTIONS = [
   'load_extension', 'readfile', 'writefile', 'edit', 'fts3_tokenizer',
+  // fileio / zipfile extension siblings: file write, dir ops, arbitrary reads.
+  'mkdir', 'symlink', 'lsdir', 'fileio_read', 'fileio_write', 'zipfile',
 ];
 
-const DUCKDB_DENY_ALWAYS = ['getenv'];
+const DUCKDB_DENY_ALWAYS = [
+  'getenv',
+  // Scanner-extension functions run arbitrary SQL against, or attach, a foreign
+  // database (Postgres/MySQL/SQLite) - a write channel through a SELECT. DuckDB
+  // autoloads these extensions on first use, and it has no read-only session, so
+  // the guard is the only defence.
+  'postgres_execute', 'mysql_execute', 'sqlite_execute',
+  'postgres_query', 'mysql_query', 'sqlite_query',
+  'postgres_scan', 'postgres_scan_pushdown', 'mysql_scan', 'sqlite_scan',
+  'postgres_attach', 'mysql_attach', 'sqlite_attach',
+  'iceberg_scan', 'iceberg_metadata', 'iceberg_snapshots',
+  'delta_scan', 'ducklake_scan',
+  // Secret store disclosure.
+  'duckdb_secrets', 'which_secret',
+  // httpfs / community extensions make outbound network requests from a SELECT:
+  // http_get is SSRF (can reach the cloud instance-metadata endpoint), http_post/put
+  // are an exfiltration write channel. read_gsheet / fsdir read external data / dirs.
+  'http_get', 'http_post', 'http_put', 'http_delete', 'http_head', 'http_patch',
+  'read_gsheet', 'fsdir',
+  // query()/query_table() execute a SQL string in the same connection - the AST
+  // walk cannot see inside the string, so this is the string-exec class (like
+  // Postgres query_to_xml). A wrapped read_csv reads any file.
+  'query', 'query_table',
+  // Secret/credential loaders and session mutators.
+  'load_aws_credentials', 'set_current_schema',
+];
+
+/**
+ * DuckDB function-name SUFFIXES that are always a foreign-DB/scanner escape,
+ * whatever the extension prefix. Denylisting names alone cannot keep up with
+ * DuckDB's open extension surface, so any `<x>_execute` / `<x>_query` / `<x>_scan`
+ * / `<x>_attach` is refused on the duckdb dialect.
+ */
+const DUCKDB_DENY_SUFFIXES = ['_execute', '_query', '_scan', '_attach'];
+
+/** Postgres file/dir disclosure families - every member is admin-only, never a read-only analytics call. */
+const PG_DENY_PREFIXES = ['pg_ls_', 'pg_read_'];
+
+/**
+ * DuckDB function-name PREFIXES that are always a file/data reader (read_csv,
+ * read_parquet, read_avro, read_arrow, scan_arrow_ipc, ...). Registered files are
+ * queried by their VIEW name, never through a read_/scan_ call, so denying the
+ * whole prefix closes the arbitrary-file-read class against any current or future
+ * reader extension rather than chasing individual names.
+ */
+const DUCKDB_DENY_PREFIXES = ['read_', 'scan_'];
+
+/**
+ * Denied on the DuckDB dialect ONLY (not universal): current_setting reads back a
+ * setting value and is a legitimate read on Postgres, but on DuckDB it discloses
+ * cloud credentials configured via SET; prompt/open_prompt (flockmtl) make outbound
+ * LLM/HTTP calls.
+ */
+const DUCKDB_ONLY_DENY = ['current_setting', 'duckdb_settings', 'prompt', 'open_prompt'];
 
 /** File-reading table functions - denied unless policy.allowFileFunctions. */
 const DUCKDB_FILE_FUNCTIONS = [
   'read_csv', 'read_csv_auto', 'sniff_csv', 'read_parquet', 'parquet_scan',
   'read_json', 'read_json_auto', 'read_json_objects', 'read_ndjson',
-  'read_ndjson_auto', 'read_text', 'read_blob', 'read_xlsx', 'st_read', 'glob',
+  'read_ndjson_auto', 'read_text', 'read_blob', 'read_xlsx', 'glob',
+  // Spatial readers take a file-path argument (st_read denied; siblings too).
+  'st_read', 'st_readosm', 'st_readshp', 'st_read_meta',
   // Parquet metadata readers also take a file path and disclose file contents
   // (per-row-group min/max statistics) + probe the filesystem.
   'parquet_metadata', 'parquet_schema', 'parquet_file_metadata', 'parquet_kv_metadata',
@@ -116,7 +211,7 @@ const DEFAULT_DENY_SETS: Record<string, ReadonlySet<string>> = Object.fromEntrie
       engine,
       new Set<string>([
           ...(ENGINE_DENY[engine] ?? []),
-          ...(engine === 'duckdb' ? DUCKDB_FILE_FUNCTIONS : []),
+          ...(engine === 'duckdb' ? [...DUCKDB_FILE_FUNCTIONS, ...DUCKDB_ONLY_DENY] : []),
   ]),
 ]),
 );
@@ -129,6 +224,41 @@ const SQLITE_PRAGMA_READ_ALLOWLIST = new Set([
 
 const MYSQL_SHOW_ALLOW =
   /^\s*show\s+(full\s+)?(tables|databases|schemas|columns|fields|index|indexes|keys|create\s+table|create\s+view|table\s+status|triggers|events|open\s+tables|status|variables|character\s+set|collation|engines|warnings|errors)\b/i;
+
+/**
+ * True if the SQL contains a MySQL executable comment opener (`/*!`) outside a
+ * string literal. String literals are skipped so a legitimate `WHERE x = '/*!'`
+ * is not a false positive.
+ */
+function hasMysqlExecutableComment(sql: string): boolean {
+  let i = 0;
+  const n = sql.length;
+  while (i < n) {
+    const c = sql[i]!;
+    if (c === "'" || c === '"' || c === '`') {
+      const quote = c;
+      i++;
+      while (i < n) {
+        if (sql[i] === '\\' && quote !== '`') i += 2;
+        else if (sql[i] === quote && sql[i + 1] === quote) i += 2;
+        else if (sql[i] === quote) { i++; break; }
+        else i++;
+      }
+      continue;
+    }
+    // Skip line comments: a `/*!` inside `-- ...` or `# ...` is not executed by
+    // MySQL, so it must not trip the gate (over-block of a legit SELECT).
+    if ((c === '-' && sql[i + 1] === '-') || c === '#') {
+      while (i < n && sql[i] !== '\n' && sql[i] !== '\r') i++;
+      continue;
+    }
+    // Skip ordinary block comments so a `/*!` nested after a plain `/* ... */` is
+    // still found by the outer scan (we only bail on the executable opener itself).
+    if (c === '/' && sql[i + 1] === '*' && sql[i + 2] === '!') return true;
+    i++;
+  }
+  return false;
+}
 
 function blocked(sql: string, ruleId: string, reason: string): GuardVerdict {
   return {
@@ -144,6 +274,8 @@ function blocked(sql: string, ruleId: string, reason: string): GuardVerdict {
 
 interface WalkContext {
   readonly denySet: ReadonlySet<string>;
+  readonly denySuffixes: readonly string[];
+  readonly denyPrefixes: readonly string[];
   readonly maxDepth: number;
   violation?: { ruleId: string; reason: string };
 }
@@ -250,7 +382,7 @@ return;
     const name = functionNameOf(node);
     if (name) {
       const last = name.includes('.') ? name.slice(name.lastIndexOf('.') + 1) : name;
-      if (ctx.denySet.has(name) || ctx.denySet.has(last)) {
+      if (ctx.denySet.has(name) || ctx.denySet.has(last) || ctx.denySuffixes.some((s) => last.endsWith(s)) || ctx.denyPrefixes.some((p) => last.startsWith(p))) {
         ctx.violation = {
           ruleId: `function_denied:${last}`,
           reason: `The function ${last} is not allowed.`,
@@ -350,6 +482,15 @@ export function guardSql(input: GuardInput): GuardVerdict {
     return blocked(original, 'too_long', 'The statement is too long to verify safely.');
   }
 
+  // MySQL EXECUTES the body of `/*! ... */` and `/*!NNNNN ... */` comments, but
+  // the stripper (and node-sql-parser) treat them as ordinary comments and delete
+  // the code, so INTO OUTFILE, load_file, sleep, FOR UPDATE and multi-statements
+  // hidden inside one reach the server unseen. Fail closed: these are never in a
+  // legitimate read-only SELECT.
+  if (dialect.engine === 'mysql' && hasMysqlExecutableComment(trimmed)) {
+    return blocked(original, 'mysql_executable_comment', 'MySQL executable comments (/*! ... */) are not allowed.');
+  }
+
   const stripped = stripCommentsAndStrings(trimmed);
   if (hasMultipleStatements(stripped)) {
     return blocked(original, 'multi_statement', 'Only a single statement is allowed.');
@@ -392,7 +533,12 @@ export function guardSql(input: GuardInput): GuardVerdict {
 
   // ---- Lexical read-only floor (belt for shapes the AST may not expose) ----
   const strippedInner = stripCommentsAndStrings(inner);
-  if (/\bfor\s+(update|share|no\s+key\s+update|key\s+share)\b/iu.test(strippedInner)) {
+  // MySQL's `LOCK IN SHARE MODE` is the older spelling of `FOR SHARE` and takes
+  // the same row locks, so it must be blocked alongside FOR UPDATE/SHARE.
+  if (
+    /\bfor\s+(update|share|no\s+key\s+update|key\s+share)\b/iu.test(strippedInner) ||
+    /\block\s+in\s+share\s+mode\b/iu.test(strippedInner)
+  ) {
     return blocked(original, 'locking_clause', 'Row-locking clauses (FOR UPDATE/SHARE) are not allowed.');
   }
   if (/\binto\s+(outfile|dumpfile)\b/iu.test(strippedInner)) {
@@ -439,11 +585,20 @@ export function guardSql(input: GuardInput): GuardVerdict {
   : new Set<string>(
     [
       ...(ENGINE_DENY[dialect.engine] ?? []),
-      ...(dialect.engine === 'duckdb' && !policy.allowFileFunctions ? DUCKDB_FILE_FUNCTIONS : []),
+      ...(dialect.engine === 'duckdb' && !policy.allowFileFunctions ? [...DUCKDB_FILE_FUNCTIONS, ...DUCKDB_ONLY_DENY] : []),
       ...policy.denyFunctions,
     ].map((f) => f.toLowerCase()),
   );
-  const ctx: WalkContext = { denySet, maxDepth: policy.maxDepth };
+  const denySuffixes = dialect.engine === 'duckdb' ? DUCKDB_DENY_SUFFIXES : [];
+  // read_/scan_ is the file-reader class, so it follows the same allowFileFunctions
+  // policy as DUCKDB_FILE_FUNCTIONS (a browser sandbox may permit file reads).
+  const denyPrefixes =
+    dialect.engine === 'duckdb' && !policy.allowFileFunctions
+      ? DUCKDB_DENY_PREFIXES
+      : dialect.engine === 'postgres'
+        ? PG_DENY_PREFIXES
+        : [];
+  const ctx: WalkContext = { denySet, denySuffixes, denyPrefixes, maxDepth: policy.maxDepth };
   walk(root, ctx, 0);
   if (ctx.violation) {
     return blocked(original, ctx.violation.ruleId, ctx.violation.reason);

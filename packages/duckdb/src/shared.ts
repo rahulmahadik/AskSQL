@@ -33,6 +33,10 @@ export interface FileSource {
    * names - each becomes its own table, so you can join across sheets.
    */
   readonly sheet?: string;
+  /** Allow a URL path (http/s3/...). Off by default - a URL means a network read. */
+  readonly allowRemote?: boolean;
+  /** Allow glob metacharacters in the path to match multiple files. Off by default. */
+  readonly allowGlob?: boolean;
 }
 
 export const DUCK_CAPABILITIES: CapabilityFlags = {
@@ -116,6 +120,27 @@ export function sqlStr(s: string): string {
   return `'${s.replace(/'/g, "''")}'`;
 }
 
+/**
+ * A registered file path must be a plain local path. A URL scheme (http://, s3://,
+ * ...) makes DuckDB fetch over the network (SSRF if the path is untrusted), and a
+ * glob metacharacter fans one registration out to many files. Both are rejected
+ * unless the caller sets `allowRemote` / `allowGlob` on the source.
+ */
+export function assertSafeFilePath(file: FileSource): void {
+  if (!file.allowRemote && /^[a-z][a-z0-9+.-]*:\/\//i.test(file.path)) {
+    throw new AskSqlError('CONFIG_ERROR', {
+      detail: 'remote file URL not allowed',
+      userMessage: `"${basename(file.path)}" is a URL. Set allowRemote to read files over the network.`,
+    });
+  }
+  if (!file.allowGlob && /[*?[\]{}]/.test(file.path)) {
+    throw new AskSqlError('CONFIG_ERROR', {
+      detail: 'glob metacharacters not allowed in file path',
+      userMessage: `"${basename(file.path)}" contains a wildcard. Set allowGlob to match multiple files.`,
+    });
+  }
+}
+
 export function resolveFormat(file: FileSource): Exclude<FileFormat, 'auto'> {
   if (file.format && file.format !== 'auto') return file.format;
   const lower = file.path.toLowerCase();
@@ -128,6 +153,7 @@ export function resolveFormat(file: FileSource): Exclude<FileFormat, 'auto'> {
 
 /** SQL reader expression for a file source (path already registered/available). */
 export function readerFor(file: FileSource, format: Exclude<FileFormat, 'auto'>): string {
+  assertSafeFilePath(file);
   const p = sqlStr(file.path);
   switch (format) {
     case 'parquet':

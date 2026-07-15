@@ -1,6 +1,6 @@
 {
   "name": "@asksql/core",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "AskSQL engine: schema catalog, AST SQL guard, prompt pipeline, LLM orchestration. Zero database drivers.",
   "type": "module",
   "main": "./dist/index.js",
@@ -18,8 +18,8 @@
     "build": "tsc -b"
   },
   "dependencies": {
-    "ai": "^7.0.0",
-    "node-sql-parser": "^5.3.0"
+    "ai": "^7.0.26",
+    "node-sql-parser": "^5.4.0"
   },
   "peerDependencies": {
     "@ai-sdk/anthropic": "^4",
@@ -27,7 +27,7 @@
     "@ai-sdk/google": "^4",
     "@ai-sdk/groq": "^4",
     "@ai-sdk/openai": "^4",
-    "@ai-sdk/openai-compatible": "^2"
+    "@ai-sdk/openai-compatible": "^3"
   },
   "peerDependenciesMeta": {
     "@ai-sdk/anthropic": {
@@ -50,12 +50,12 @@
     }
   },
   "devDependencies": {
-    "@ai-sdk/anthropic": "^4.0.12",
-    "@ai-sdk/azure": "^4.0.11",
-    "@ai-sdk/google": "^4.0.12",
-    "@ai-sdk/groq": "^4.0.0",
-    "@ai-sdk/openai": "^4.0.11",
-    "@ai-sdk/openai-compatible": "^3.0.0"
+    "@ai-sdk/anthropic": "^4.0.14",
+    "@ai-sdk/azure": "^4.0.13",
+    "@ai-sdk/google": "^4.0.14",
+    "@ai-sdk/groq": "^4.0.10",
+    "@ai-sdk/openai": "^4.0.13",
+    "@ai-sdk/openai-compatible": "^3.0.9"
   },
   "license": "Apache-2.0",
   "engines": {
@@ -85,6 +85,11 @@
     "ask-database",
     "ast-guard",
     "read-only",
-    "query"
+    "query",
+    "openai",
+    "anthropic",
+    "ollama",
+    "offline-ai",
+    "local-llm"
   ]
 }

@@ -1,6 +1,6 @@
 {
   "name": "@asksql/sqlite",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "SQLite connector for AskSQL. Works with better-sqlite3 or the built-in node:sqlite; full PRAGMA-based introspection.",
   "type": "module",
   "main": "./dist/index.js",
@@ -18,7 +18,7 @@
     "build": "tsc -b"
   },
   "dependencies": {
-    "@asksql/core": "workspace:*"
+    "@asksql/core": "workspace:^"
   },
   "peerDependencies": {
     "better-sqlite3": ">=11"
@@ -55,6 +55,7 @@
     "database-chat",
     "ask-database",
     "sqlite",
-    "better-sqlite3"
+    "better-sqlite3",
+    "text2sql"
   ]
 }
