@@ -15,6 +15,16 @@ jobs:
       id-token: write # required for npm provenance
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify release tag is on main
+        run: |
+          git fetch origin main --quiet
+          if ! git merge-base --is-ancestor "${{ github.sha }}" origin/main; then
+            echo "::error::Tag ${{ github.ref_name }} (${{ github.sha }}) is not on main; refusing to publish."
+            exit 1
+          fi
+          echo "Release tag ${{ github.ref_name }} is on main; proceeding."
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
