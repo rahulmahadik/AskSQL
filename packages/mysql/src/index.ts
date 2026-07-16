@@ -93,10 +93,29 @@ export class MysqlConnector implements Connector {
   readonly id: string;
   readonly name: string;
   private pool: MysqlPool | null = null;
+  private resolvedDb: string | undefined;
 
   constructor(private readonly config: MysqlConnectorConfig) {
     this.id = config.id;
     this.name = config.name;
+  }
+
+  /**
+   * The database to introspect. With discrete config this is config.database;
+   * with a `uri` (DSN) the database is chosen by the connection string, so ask
+   * the server which one is current instead of filtering information_schema on an
+   * empty name (which would silently return zero tables). Cached after first look.
+   */
+  private async databaseName(): Promise<string> {
+    if (this.config.database) return this.config.database;
+    if (this.resolvedDb !== undefined) return this.resolvedDb;
+    try {
+      const r = await this.q('SELECT DATABASE() AS d');
+      this.resolvedDb = r[0]?.['d'] ? String(r[0]['d']) : '';
+    } catch {
+      this.resolvedDb = '';
+    }
+    return this.resolvedDb;
   }
 
   private async driver(): Promise<{ createPool(o: object | string): MysqlPool }> {
@@ -169,10 +188,10 @@ export class MysqlConnector implements Connector {
    * not categorical (too many distinct values, or any value is long). Bounded by
    * LIMIT + a MAX_EXECUTION_TIME hint so a big table cannot stall introspection.
    */
-  private async sampleColumn(table: string, column: string): Promise<string[] | undefined> {
+  private async sampleColumn(db: string, table: string, column: string): Promise<string[] | undefined> {
     const rows = await this.q(
       `SELECT /*+ MAX_EXECUTION_TIME(${SAMPLE_QUERY_TIMEOUT_MS}) */ DISTINCT ${backtick(column)} AS v ` +
-        `FROM ${backtick(this.config.database)}.${backtick(table)} ` +
+        `FROM ${backtick(db)}.${backtick(table)} ` +
         `WHERE ${backtick(column)} IS NOT NULL LIMIT ${VALUE_SAMPLE_MAX_DISTINCT + 1}`,
     );
     if (rows.length > VALUE_SAMPLE_MAX_DISTINCT) return undefined;
@@ -187,7 +206,7 @@ export class MysqlConnector implements Connector {
   }
 
   async introspect(): Promise<SchemaCatalog> {
-    const db = this.config.database;
+    const db = await this.databaseName();
     const warnings: string[] = [];
     const safe = async <T>(label: string, fn: () => Promise<T>, fallback: T): Promise<T> => {
       try {
@@ -273,7 +292,7 @@ export class MysqlConnector implements Connector {
           if (col.enumValues || !isSampleableMysqlType(col.dbType)) continue;
           budget--;
           try {
-            const sampled = await this.sampleColumn(table, col.name);
+            const sampled = await this.sampleColumn(db, table, col.name);
             if (sampled) list[i] = { ...col, sampledValues: sampled };
           } catch {
             // Best-effort: a locked-down, huge, or slow column just gets no samples.
