@@ -2,8 +2,9 @@
 
 The DuckDB connector for [AskSQL](https://github.com/rahulmahadik/AskSQL), with two entry points:
 
-- `@asksql/duckdb` (Node): query local CSV / JSON / Parquet / Excel files or a
-  DuckDB database through `@duckdb/node-api`.
+- `@asksql/duckdb` (Node): query local CSV / JSON / Parquet / Excel files, load a
+  portable `.sql` dump (CREATE TABLE + INSERT), or open a DuckDB database through
+  `@duckdb/node-api`.
 - `@asksql/duckdb/browser`: the same file analytics fully in the browser via
   DuckDB-WASM, with a Web Worker and optional OPFS persistence. Data never
   leaves the tab.

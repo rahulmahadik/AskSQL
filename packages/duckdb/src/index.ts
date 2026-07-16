@@ -19,7 +19,9 @@ import {
   type ResultSet,
   type SchemaCatalog,
 } from '@asksql/core';
+import { readFile } from 'node:fs/promises';
 import {
+  assertSafeFilePath,
   buildDuckCatalog,
   buildResultColumns,
   DUCK_CAPABILITIES,
@@ -33,6 +35,7 @@ import {
   sanitizeTableName,
   shapeDuckValue,
   uniqueTableName,
+  validateSqlDump,
   withQueryTimeout,
   type FileSource,
 } from './shared.js';
@@ -163,8 +166,10 @@ export class DuckDbConnector implements Connector {
  */
 async registerFile(file: FileSource): Promise<string> {
     const conn = this.connection();
-    const table = uniqueTableName(sanitizeTableName(file.table), this.registered);
     const format = resolveFormat(file);
+    // A .sql file is executed to build its own tables, not read as one table.
+    if (format === 'sql') return this.registerSqlDump(file);
+    const table = uniqueTableName(sanitizeTableName(file.table), this.registered);
     if (format === 'xlsx') await this.ensureExcel();
     const reader = readerFor(file, format);
     try {
@@ -176,11 +181,54 @@ async registerFile(file: FileSource): Promise<string> {
 }
 }
 
-/** Remove a previously registered file view. */
+/**
+ * Load a portable .sql dump (CREATE TABLE + INSERT) and expose the tables it
+ * creates. Vendor dumps (mysqldump / pg_dump) and file/network statements are
+ * rejected with a clear message BEFORE anything runs. Returns the first table
+ * the script created.
+ */
+private async registerSqlDump(file: FileSource): Promise<string> {
+  assertSafeFilePath(file);
+  let content: string;
+  try {
+    content = await readFile(file.path, 'utf8');
+  } catch (err) {
+    throw mapFileError(file, err);
+  }
+  validateSqlDump(content);
+  const conn = this.connection();
+  const before = await this.tableNames();
+  try {
+    await conn.run(content);
+  } catch (err) {
+    throw mapFileError(file, err);
+  }
+  const created = [...(await this.tableNames())].filter((t) => !before.has(t));
+  if (created.length === 0) {
+    throw new AskSqlError('FILE_PARSE', {
+      detail: 'sql upload created no tables',
+      userMessage: `"${file.path.split(/[\\/]/).pop()}" ran but created no tables. An uploadable SQL file must CREATE TABLE and INSERT its data.`,
+    });
+  }
+  for (const t of created) this.registered.add(t);
+  return created[0]!;
+}
+
+/** Names of tables/views currently in the main schema. */
+private async tableNames(): Promise<Set<string>> {
+  const reader = await this.connection().runAndReadUntil(
+    "SELECT table_name FROM information_schema.tables WHERE table_schema = 'main'",
+    100_000,
+  );
+  return new Set(reader.getRowObjects().map((r) => String(r['table_name'])));
+}
+
+/** Remove a previously registered file source (view for data files, table for a .sql dump). */
 async unregisterFile(table: string): Promise<void> {
   const name = sanitizeTableName(table);
   if (!this.registered.has(name)) return;
-  await this.connection().run(`DROP VIEW IF EXISTS ${quoteIdent(name)}`);
+  await this.connection().run(`DROP VIEW IF EXISTS ${quoteIdent(name)}`).catch(() => {});
+  await this.connection().run(`DROP TABLE IF EXISTS ${quoteIdent(name)}`).catch(() => {});
   this.registered.delete(name);
 }
 
@@ -228,16 +276,21 @@ private async ensureExcel(): Promise<void> {
    * Rebuilds the catalog immutably rather than mutating readonly column arrays.
    */
   private async attachSampledValues(catalog: SchemaCatalog): Promise<SchemaCatalog> {
+    // NUL-join the key: identifiers may contain dots, so a plain "a.b.c" join
+    // would collide (table "a.b" col "c" vs table "a" col "b.c").
+    const key = (schema: string | undefined, table: string, col: string): string =>
+      [schema ?? 'main', table, col].join('\u0000');
     const sampled = new Map<string, string[]>();
     let budget = MAX_SAMPLED_COLUMNS;
     for (const t of catalog.tables) {
+      if (t.kind === 'view') continue; // sampling a view runs its query
       for (const c of t.columns) {
         if (budget <= 0) break;
         if (!isSampleableDuckType(c.dbType)) continue;
         budget--;
         try {
           const values = await this.sampleColumn(t.schema, t.name, c.name);
-          if (values) sampled.set(`${t.schema ?? 'main'}.${t.name}.${c.name}`, values);
+          if (values) sampled.set(key(t.schema, t.name, c.name), values);
         } catch {
           // Best-effort: a bad column just gets no samples.
         }
@@ -249,7 +302,7 @@ private async ensureExcel(): Promise<void> {
       tables: catalog.tables.map((t) => ({
         ...t,
         columns: t.columns.map((c) => {
-          const values = sampled.get(`${t.schema ?? 'main'}.${t.name}.${c.name}`);
+          const values = sampled.get(key(t.schema, t.name, c.name));
           return values ? { ...c, sampledValues: values } : c;
         }),
       })),

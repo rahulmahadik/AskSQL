@@ -40,7 +40,7 @@ runs until a deterministic guard has proven the SQL is read-only.
 
 - **Two surfaces, one engine** - `<AskSqlBubble/>` (Intercom-style chat head) and
   `<AskSqlChat/>` (full page), plus headless `useAskSql` for custom UIs.
-- **Local-first** - upload CSV / JSON / Parquet and query them in-process with DuckDB; run a
+- **Local-first** - upload CSV / JSON / Parquet / a portable SQL dump and query them in-process with DuckDB; run a
   fully local model with Ollama. Data and credentials never have to leave your infrastructure.
 - **Verifiable safety** - read-only by default, a deterministic **AST-based SQL guard** (not
   regex), optional human approval before execution, and query audit.
@@ -169,7 +169,7 @@ dependency you install yourself.
 | PostgreSQL | `@asksql/postgres` | `pg` | `connectionString` (or `host`/`port`/`user`/`password`/`database`) |
 | MySQL / MariaDB | `@asksql/mysql` | `mysql2` | `uri` + `database`, or `host`/`port`/`user`/`password`/`database` |
 | SQLite | `@asksql/sqlite` | `better-sqlite3` (or `node:sqlite`) | `file` path, or pass an existing `database` handle |
-| DuckDB | `@asksql/duckdb` | `@duckdb/node-api` (Node) / `@duckdb/duckdb-wasm` (browser) | `path` (`:memory:` default) and/or `files` to register CSV/JSON/Parquet/Excel as tables (each file, or each Excel `sheet`, becomes its own joinable table) |
+| DuckDB | `@asksql/duckdb` | `@duckdb/node-api` (Node) / `@duckdb/duckdb-wasm` (browser) | `path` (`:memory:` default) and/or `files` to register CSV/JSON/Parquet/Excel/`.sql` as tables (each data file or Excel `sheet` becomes its own joinable table; a portable `.sql` dump runs its CREATE + INSERT and exposes the tables it builds) |
 
 ```ts
 new PostgresConnector({ id: 'shop', name: 'Shop', connectionString: process.env.DATABASE_URL });

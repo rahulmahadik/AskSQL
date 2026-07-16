@@ -17,7 +17,7 @@ import {
   type TableInfo,
 } from '@asksql/core';
 
-export type FileFormat = 'csv' | 'json' | 'ndjson' | 'parquet' | 'xlsx' | 'auto';
+export type FileFormat = 'csv' | 'json' | 'ndjson' | 'parquet' | 'xlsx' | 'sql' | 'auto';
 
 export interface FileSource {
   /** Table name to register the file as (sanitized). */
@@ -148,7 +148,42 @@ export function resolveFormat(file: FileSource): Exclude<FileFormat, 'auto'> {
   if (lower.endsWith('.xlsx') || lower.endsWith('.xls')) return 'xlsx';
   if (lower.endsWith('.ndjson')) return 'ndjson';
   if (lower.endsWith('.json')) return 'json';
+  if (lower.endsWith('.sql')) return 'sql';
   return 'csv';
+}
+
+/**
+ * A .sql upload is EXECUTED to build tables, so - unlike a generated query - it
+ * is not read-only-guarded. Reject the two things that matter before running it:
+ * vendor dumps DuckDB cannot parse (a helpful message beats a cryptic parser
+ * error), and statements that would reach the filesystem, network, or load
+ * extensions. What survives is structure + data: CREATE TABLE / INSERT and the like.
+ */
+export function validateSqlDump(content: string): void {
+  if (/`/.test(content) || /\bENGINE\s*=/i.test(content) || /\/\*!\d/.test(content)) {
+    throw new AskSqlError('FILE_PARSE', {
+      detail: 'mysqldump syntax detected in .sql upload',
+      userMessage:
+        'This looks like a MySQL (mysqldump) file, which cannot be loaded directly. Re-export it as CSV, or as portable SQL - plain CREATE TABLE and INSERT statements.',
+    });
+  }
+  if (/\bCOPY\b[\s\S]*?\bFROM\s+stdin/i.test(content) || /^\s*\\[.]/m.test(content) || /^\s*\\connect\b/im.test(content)) {
+    throw new AskSqlError('FILE_PARSE', {
+      detail: 'pg_dump syntax detected in .sql upload',
+      userMessage:
+        'This looks like a PostgreSQL (pg_dump) file, which cannot be loaded directly. Re-export it as CSV, or with "pg_dump --inserts" so it uses plain INSERT statements.',
+    });
+  }
+  const danger =
+    /\b(ATTACH|INSTALL|LOAD|COPY)\b/i.exec(content) ??
+    /\b(read_csv|read_parquet|read_json|read_ndjson|read_text|glob)\s*\(/i.exec(content);
+  if (danger) {
+    throw new AskSqlError('FILE_PARSE', {
+      detail: `disallowed statement in .sql upload: ${danger[0]}`,
+      userMessage:
+        `This SQL file uses "${(danger[1] ?? danger[0]).toUpperCase()}", which is not allowed in an uploaded file - it could read other files or reach the network. Uploaded SQL may only create tables and insert data.`,
+    });
+  }
 }
 
 /** SQL reader expression for a file source (path already registered/available). */
@@ -156,6 +191,9 @@ export function readerFor(file: FileSource, format: Exclude<FileFormat, 'auto'>)
   assertSafeFilePath(file);
   const p = sqlStr(file.path);
   switch (format) {
+    case 'sql':
+      // .sql is executed to build tables, not read via a table function.
+      throw new AskSqlError('FILE_PARSE', { detail: 'readerFor called for sql format' });
     case 'parquet':
       return `read_parquet(${p})`;
     case 'json':
