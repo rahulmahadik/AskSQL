@@ -74,3 +74,47 @@ describe('SQLite query + guard', () => {
     expect(res.truncated).toBe(true);
   });
 });
+
+describe('SQLite value sampling (opt-in)', () => {
+  function makeSampleDb(): DatabaseSync {
+    const db = new DatabaseSync(':memory:');
+    db.exec(`
+      CREATE TABLE tickets (id INTEGER PRIMARY KEY, status TEXT, note TEXT, ref TEXT);
+      INSERT INTO tickets (status, note, ref) VALUES
+        ('open',   'short', 'r1'),
+        ('closed', 'short', 'r2'),
+        ('open',   'short', 'r3'),
+        ('pending','short', 'r4');
+    `);
+    return db;
+  }
+
+  it('does not sample unless enabled', async () => {
+    const c = new SqliteConnector({ id: 's0', name: 'off', database: makeSampleDb() as never });
+    await c.connect();
+    const cat = await c.introspect();
+    const status = cat.tables.find((t) => t.name === 'tickets')!.columns.find((col) => col.name === 'status')!;
+    expect(status.sampledValues).toBeUndefined();
+  });
+
+  it('samples distinct values of a short low-cardinality text column when enabled', async () => {
+    const c = new SqliteConnector({ id: 's1', name: 'on', database: makeSampleDb() as never, sampleColumnValues: true });
+    await c.connect();
+    const cat = await c.introspect();
+    const status = cat.tables.find((t) => t.name === 'tickets')!.columns.find((col) => col.name === 'status')!;
+    expect(status.sampledValues).toBeDefined();
+    expect([...status.sampledValues!].sort()).toEqual(['closed', 'open', 'pending']);
+  });
+
+  it('skips a high-cardinality column (distinct count over the cap)', async () => {
+    const db = new DatabaseSync(':memory:');
+    db.exec('CREATE TABLE big (id INTEGER PRIMARY KEY, code TEXT);');
+    const stmt = db.prepare('INSERT INTO big (code) VALUES (?)');
+    for (let i = 0; i < 40; i++) stmt.run(`code-${i}`);
+    const c = new SqliteConnector({ id: 's2', name: 'big', database: db as never, sampleColumnValues: true });
+    await c.connect();
+    const cat = await c.introspect();
+    const code = cat.tables.find((t) => t.name === 'big')!.columns.find((col) => col.name === 'code')!;
+    expect(code.sampledValues).toBeUndefined();
+  });
+});

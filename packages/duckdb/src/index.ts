@@ -13,6 +13,7 @@
 import {
   AskSqlError,
   DUCKDB_DIALECT,
+  VALUE_SAMPLE_MAX_DISTINCT,
   type Connector,
   type ExecuteOptions,
   type ResultSet,
@@ -46,6 +47,21 @@ export interface DuckDbConnectorConfig {
   readonly path?: string;
   /** Files to register as views on connect. */
   readonly files?: readonly FileSource[];
+  /**
+   * Opt-in: sample distinct values from short text columns, so the model sees the
+   * real codes a `status VARCHAR` holds. This reads actual cell values (not just
+   * schema), so it is off unless the caller sets it.
+   */
+  readonly sampleColumnValues?: boolean;
+}
+
+// Value sampling (opt-in) guards.
+const MAX_SAMPLED_COLUMNS = 300;
+const MAX_SAMPLE_VALUE_LEN = 64;
+
+/** DuckDB text-ish types worth sampling; numeric/temporal/nested are not. */
+function isSampleableDuckType(dbType: string): boolean {
+  return /^(varchar|char|bpchar|text|string)\b/i.test(dbType.trim());
 }
 
 interface DuckPrepared {
@@ -203,7 +219,64 @@ private async ensureExcel(): Promise<void> {
     } catch {
       /* views are optional */
     }
-  return buildDuckCatalog(columnRows, viewNames, this.registered, warnings);
+    const catalog = buildDuckCatalog(columnRows, viewNames, this.registered, warnings);
+    return this.config.sampleColumnValues ? this.attachSampledValues(catalog) : catalog;
+  }
+
+  /**
+   * Opt-in: enrich short non-enum text columns with the distinct codes they hold.
+   * Rebuilds the catalog immutably rather than mutating readonly column arrays.
+   */
+  private async attachSampledValues(catalog: SchemaCatalog): Promise<SchemaCatalog> {
+    const sampled = new Map<string, string[]>();
+    let budget = MAX_SAMPLED_COLUMNS;
+    for (const t of catalog.tables) {
+      for (const c of t.columns) {
+        if (budget <= 0) break;
+        if (!isSampleableDuckType(c.dbType)) continue;
+        budget--;
+        try {
+          const values = await this.sampleColumn(t.schema, t.name, c.name);
+          if (values) sampled.set(`${t.schema ?? 'main'}.${t.name}.${c.name}`, values);
+        } catch {
+          // Best-effort: a bad column just gets no samples.
+        }
+      }
+    }
+    if (sampled.size === 0) return catalog;
+    return {
+      ...catalog,
+      tables: catalog.tables.map((t) => ({
+        ...t,
+        columns: t.columns.map((c) => {
+          const values = sampled.get(`${t.schema ?? 'main'}.${t.name}.${c.name}`);
+          return values ? { ...c, sampledValues: values } : c;
+        }),
+      })),
+    };
+  }
+
+  /**
+   * Distinct values of one short text column, or undefined when it is not
+   * categorical (too many distinct values, or any value is long).
+   */
+  private async sampleColumn(schema: string | undefined, table: string, column: string): Promise<string[] | undefined> {
+    const rel = schema ? `${quoteIdent(schema)}.${quoteIdent(table)}` : quoteIdent(table);
+    const reader = await this.connection().runAndReadUntil(
+      `SELECT DISTINCT ${quoteIdent(column)} AS v FROM ${rel} ` +
+        `WHERE ${quoteIdent(column)} IS NOT NULL LIMIT ${VALUE_SAMPLE_MAX_DISTINCT + 1}`,
+      VALUE_SAMPLE_MAX_DISTINCT + 1,
+    );
+    const rows = reader.getRowObjects();
+    if (rows.length > VALUE_SAMPLE_MAX_DISTINCT) return undefined;
+    const vals: string[] = [];
+    for (const r of rows) {
+      if (r['v'] == null) continue;
+      const s = String(r['v']);
+      if (s.length > MAX_SAMPLE_VALUE_LEN) return undefined;
+      vals.push(s);
+    }
+    return vals.length > 0 ? vals : undefined;
   }
 
   async execute(sql: string, opts?: ExecuteOptions): Promise<ResultSet> {

@@ -14,6 +14,7 @@
 import {
   AskSqlError,
   MYSQL_DIALECT,
+  VALUE_SAMPLE_MAX_DISTINCT,
   type CapabilityFlags,
   type CellValue,
   type ColumnInfo,
@@ -40,6 +41,12 @@ export interface MysqlConnectorConfig {
   readonly uri?: string;
   readonly ssl?: Record<string, unknown>;
   readonly connectionLimit?: number;
+  /**
+   * Opt-in: sample distinct values from short text columns that are NOT declared
+   * enums, so the model sees the real codes a `status VARCHAR` holds. This reads
+   * actual cell values (not just schema), so it is off unless the caller sets it.
+   */
+  readonly sampleColumnValues?: boolean;
 }
 
 interface MysqlPool {
@@ -63,6 +70,21 @@ const CAPABILITIES: CapabilityFlags = {
   supportsTriggers: true,
   supportsRoutines: true,
 };
+
+// Value sampling (opt-in) guards: bound the per-column scan, the total number of
+// columns probed per introspect, and how long a sampled value may be.
+const SAMPLE_QUERY_TIMEOUT_MS = 2000;
+const MAX_SAMPLED_COLUMNS = 300;
+const MAX_SAMPLE_VALUE_LEN = 64;
+
+/** Only fixed-length text is worth sampling; text/blob/json/enum/set are not. */
+function isSampleableMysqlType(dbType: string): boolean {
+  return /^(var)?char\s*\(/i.test(dbType.trim());
+}
+
+function backtick(ident: string): string {
+  return `\`${ident.replace(/`/g, '``')}\``;
+}
 
 export class MysqlConnector implements Connector {
   readonly engine = 'mysql' as const;
@@ -142,6 +164,28 @@ export class MysqlConnector implements Connector {
     return rows as Record<string, unknown>[];
   }
 
+  /**
+   * Distinct values of one short text column, or undefined when the column is
+   * not categorical (too many distinct values, or any value is long). Bounded by
+   * LIMIT + a MAX_EXECUTION_TIME hint so a big table cannot stall introspection.
+   */
+  private async sampleColumn(table: string, column: string): Promise<string[] | undefined> {
+    const rows = await this.q(
+      `SELECT /*+ MAX_EXECUTION_TIME(${SAMPLE_QUERY_TIMEOUT_MS}) */ DISTINCT ${backtick(column)} AS v ` +
+        `FROM ${backtick(this.config.database)}.${backtick(table)} ` +
+        `WHERE ${backtick(column)} IS NOT NULL LIMIT ${VALUE_SAMPLE_MAX_DISTINCT + 1}`,
+    );
+    if (rows.length > VALUE_SAMPLE_MAX_DISTINCT) return undefined;
+    const vals: string[] = [];
+    for (const r of rows) {
+      if (r['v'] == null) continue;
+      const s = String(r['v']);
+      if (s.length > MAX_SAMPLE_VALUE_LEN) return undefined;
+      vals.push(s);
+    }
+    return vals.length > 0 ? vals : undefined;
+  }
+
   async introspect(): Promise<SchemaCatalog> {
     const db = this.config.database;
     const warnings: string[] = [];
@@ -217,6 +261,25 @@ export class MysqlConnector implements Connector {
         comment: c['COLUMN_COMMENT'] ? String(c['COLUMN_COMMENT']) : null,
         ...(enumValues ? { enumValues } : {}),
       });
+    }
+
+    // Opt-in: observe the distinct codes a short non-enum text column holds.
+    if (this.config.sampleColumnValues) {
+      let budget = MAX_SAMPLED_COLUMNS;
+      outer: for (const [table, list] of columnsByTable) {
+        for (let i = 0; i < list.length; i++) {
+          if (budget <= 0) break outer;
+          const col = list[i]!;
+          if (col.enumValues || !isSampleableMysqlType(col.dbType)) continue;
+          budget--;
+          try {
+            const sampled = await this.sampleColumn(table, col.name);
+            if (sampled) list[i] = { ...col, sampledValues: sampled };
+          } catch {
+            // Best-effort: a locked-down, huge, or slow column just gets no samples.
+          }
+        }
+      }
     }
 
     // PK + FK from KEY_COLUMN_USAGE
