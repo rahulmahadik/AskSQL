@@ -9,6 +9,7 @@ import type {
   SchemaCatalog,
   TableInfo,
 } from './types.js';
+import { VALUE_SAMPLE_MAX_DISTINCT } from './types.js';
 
 /** Cheap token estimate (~4 chars per token) for budget decisions only. */
 export function estimateTokens(text: string): number {
@@ -21,7 +22,7 @@ function sanitizeComment(comment: string | null | undefined): string | null {
   if (!comment) return null;
   const flat = comment.replace(/\s+/gu, ' ').trim();
   if (!flat) return null;
-  return flat.length > COMMENT_CAP ? `${flat.slice(0, COMMENT_CAP)}…` : flat;
+  return flat.length > COMMENT_CAP ? `${flat.slice(0, COMMENT_CAP)}...` : flat;
 }
 
 function qualifiedName(t: TableInfo, multiSchema: boolean): string {
@@ -62,7 +63,11 @@ export function formatCatalogForPrompt(catalog: SchemaCatalog): string {
       if (fk) bits.push(`FK->${fk.refSchema ? `${fk.refSchema}.` : ''}${fk.refTable}.${fk.refColumns.join(',')}`);
       if (!c.nullable) bits.push('NOT NULL');
       if (c.enumValues && c.enumValues.length > 0) {
-        bits.push(`values: ${c.enumValues.slice(0, 24).join('|')}`);
+        bits.push(`values: ${c.enumValues.slice(0, VALUE_SAMPLE_MAX_DISTINCT).join('|')}`);
+      } else if (c.sampledValues && c.sampledValues.length > 0) {
+        // Observed values (data, opt-in), not a declared enum - label them so
+        // the model treats them as the known-so-far set, not an exhaustive one.
+        bits.push(`sample values: ${c.sampledValues.slice(0, VALUE_SAMPLE_MAX_DISTINCT).join('|')}`);
       }
       const colComment = sanitizeComment(c.comment);
       if (colComment) bits.push(`-- ${colComment}`);

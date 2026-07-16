@@ -1,6 +1,6 @@
 {
   "name": "@asksql/duckdb",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "DuckDB connector for AskSQL. Local analytical processing of CSV/JSON/Parquet files; the zero-backend file-analytics path.",
   "type": "module",
   "main": "./dist/index.js",

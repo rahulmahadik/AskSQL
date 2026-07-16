@@ -41,6 +41,12 @@ export interface PostgresConnectorConfig {
   readonly connectTimeoutMs?: number;
   /** Include pg_catalog / information_schema in the catalog. Default false. */
   readonly includeSystemSchemas?: boolean;
+  /**
+   * Opt-in: sample distinct values from short text columns that are NOT declared
+   * enums, so the model sees the real codes a `status VARCHAR` holds. This reads
+   * actual cell values (not just schema), so it is off unless the caller sets it.
+   */
+  readonly sampleColumnValues?: boolean;
 }
 
 interface PgPool {
@@ -145,7 +151,10 @@ export class PostgresConnector implements Connector {
   async introspect(): Promise<SchemaCatalog> {
     const pool = await this.ensure();
     try {
-      return await introspectPostgres(pool, { includeSystem: this.config.includeSystemSchemas ?? false });
+      return await introspectPostgres(pool, {
+        includeSystem: this.config.includeSystemSchemas ?? false,
+        sampleColumnValues: this.config.sampleColumnValues ?? false,
+      });
     } catch (err) {
       throw AskSqlError.from(err, 'DB_QUERY_ERROR');
     }

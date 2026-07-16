@@ -1,5 +1,16 @@
 # @asksql/duckdb
 
+## 0.2.0
+
+### Minor Changes
+
+- Opt-in low-cardinality value sampling; DuckDB `.sql` dump upload; MySQL uri/DSN fixes; prompt-quality fix.
+
+### Patch Changes
+
+- Updated dependencies
+  - @asksql/core@0.2.0
+
 ## 0.1.2
 
 ### Patch Changes
@@ -11,7 +22,7 @@
 
 - Fix an install failure: the `@duckdb/node-api` peer range was `>=1.1`, but every published version is a
   prerelease (`1.x.x-r.N`), which a plain `>=` range does not match, so `npm install @asksql/duckdb
-  @duckdb/node-api` failed with ETARGET. The range is now `>=1.4.0-r.1`.
+@duckdb/node-api` failed with ETARGET. The range is now `>=1.4.0-r.1`.
 - Registered file paths reject URL schemes (a network read / SSRF) and glob metacharacters by default;
   set `allowRemote` / `allowGlob` on the source to opt in.
 

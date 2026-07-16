@@ -126,3 +126,39 @@ describe('bad file surfaces FILE_PARSE', () => {
     }
   });
 });
+
+describe('DuckDB value sampling (opt-in)', () => {
+  it('does not sample unless enabled', async () => {
+    if (!available) return;
+    const off = new DuckDbConnector({ id: 'ds0', name: 'off', files: [{ table: 'sales', path: data('sales.csv'), format: 'csv' }] });
+    await off.connect();
+    try {
+      const cat = await off.introspect();
+      const region = cat.tables.find((t) => t.name === 'sales')!.columns.find((c) => c.name === 'region')!;
+      expect(region.sampledValues).toBeUndefined();
+    } finally {
+      await off.close();
+    }
+  });
+
+  it('samples distinct values of low-cardinality text columns when enabled', async () => {
+    if (!available) return;
+    const on = new DuckDbConnector({
+      id: 'ds1', name: 'on', sampleColumnValues: true,
+      files: [
+        { table: 'sales', path: data('sales.csv'), format: 'csv' },
+        { table: 'customers', path: data('customers.json'), format: 'json' },
+      ],
+    });
+    await on.connect();
+    try {
+      const cat = await on.introspect();
+      const region = cat.tables.find((t) => t.name === 'sales')!.columns.find((c) => c.name === 'region')!;
+      const tier = cat.tables.find((t) => t.name === 'customers')!.columns.find((c) => c.name === 'tier')!;
+      expect([...region.sampledValues!].sort()).toEqual(['APAC', 'EU', 'NA']);
+      expect([...tier.sampledValues!].sort()).toEqual(['gold', 'silver']);
+    } finally {
+      await on.close();
+    }
+  });
+});

@@ -14,6 +14,7 @@
 import {
   AskSqlError,
   MYSQL_DIALECT,
+  VALUE_SAMPLE_MAX_DISTINCT,
   type CapabilityFlags,
   type CellValue,
   type ColumnInfo,
@@ -40,6 +41,12 @@ export interface MysqlConnectorConfig {
   readonly uri?: string;
   readonly ssl?: Record<string, unknown>;
   readonly connectionLimit?: number;
+  /**
+   * Opt-in: sample distinct values from short text columns that are NOT declared
+   * enums, so the model sees the real codes a `status VARCHAR` holds. This reads
+   * actual cell values (not just schema), so it is off unless the caller sets it.
+   */
+  readonly sampleColumnValues?: boolean;
 }
 
 interface MysqlPool {
@@ -64,6 +71,21 @@ const CAPABILITIES: CapabilityFlags = {
   supportsRoutines: true,
 };
 
+// Value sampling (opt-in) guards: bound the per-column scan, the total number of
+// columns probed per introspect, and how long a sampled value may be.
+const SAMPLE_QUERY_TIMEOUT_MS = 2000;
+const MAX_SAMPLED_COLUMNS = 300;
+const MAX_SAMPLE_VALUE_LEN = 64;
+
+/** Only fixed-length text is worth sampling; text/blob/json/enum/set are not. */
+function isSampleableMysqlType(dbType: string): boolean {
+  return /^(var)?char\s*\(/i.test(dbType.trim());
+}
+
+function backtick(ident: string): string {
+  return `\`${ident.replace(/`/g, '``')}\``;
+}
+
 export class MysqlConnector implements Connector {
   readonly engine = 'mysql' as const;
   readonly dialect = MYSQL_DIALECT;
@@ -71,10 +93,33 @@ export class MysqlConnector implements Connector {
   readonly id: string;
   readonly name: string;
   private pool: MysqlPool | null = null;
+  private resolvedDb: string | undefined;
 
   constructor(private readonly config: MysqlConnectorConfig) {
     this.id = config.id;
     this.name = config.name;
+  }
+
+  /**
+   * The database to introspect. With discrete config this is config.database;
+   * with a `uri` (DSN) the database is chosen by the connection string, so ask
+   * the server which one is current instead of filtering information_schema on an
+   * empty name (which would silently return zero tables). Cached after first look.
+   */
+  private async databaseName(): Promise<string> {
+    if (this.config.database) return this.config.database;
+    // Only cache a real name - never '' from a failed query or a db-less DSN.
+    if (this.resolvedDb) return this.resolvedDb;
+    const r = await this.q('SELECT DATABASE() AS d');
+    const d = r[0]?.['d'];
+    if (!d) {
+      throw new AskSqlError('CONFIG_ERROR', {
+        detail: 'connection selected no default database',
+        userMessage: 'This connection string does not select a database. Add the database name to the URL, for example .../your_database.',
+      });
+    }
+    this.resolvedDb = String(d);
+    return this.resolvedDb;
   }
 
   private async driver(): Promise<{ createPool(o: object | string): MysqlPool }> {
@@ -113,7 +158,8 @@ export class MysqlConnector implements Connector {
     opts['supportBigNumbers'] = true;
     opts['bigNumberStrings'] = true;
     if (this.config.ssl) opts['ssl'] = this.config.ssl;
-    this.pool = createPool(this.config.uri ? this.config.uri : opts);
+    // opts already carries `uri` in DSN mode; the raw string would drop these flags.
+    this.pool = createPool(opts);
     try {
       const c = await this.pool.getConnection();
       c.release();
@@ -129,6 +175,8 @@ export class MysqlConnector implements Connector {
       await this.pool.end().catch(() => {});
       this.pool = null;
     }
+    // A reconnect (uri swap) may select a different db.
+    this.resolvedDb = undefined;
   }
 
   private ensure(): MysqlPool {
@@ -142,8 +190,30 @@ export class MysqlConnector implements Connector {
     return rows as Record<string, unknown>[];
   }
 
+  /**
+   * Distinct values of one short text column, or undefined when the column is
+   * not categorical (too many distinct values, or any value is long). Bounded by
+   * LIMIT + a MAX_EXECUTION_TIME hint so a big table cannot stall introspection.
+   */
+  private async sampleColumn(db: string, table: string, column: string): Promise<string[] | undefined> {
+    const rows = await this.q(
+      `SELECT /*+ MAX_EXECUTION_TIME(${SAMPLE_QUERY_TIMEOUT_MS}) */ DISTINCT ${backtick(column)} AS v ` +
+        `FROM ${backtick(db)}.${backtick(table)} ` +
+        `WHERE ${backtick(column)} IS NOT NULL LIMIT ${VALUE_SAMPLE_MAX_DISTINCT + 1}`,
+    );
+    if (rows.length > VALUE_SAMPLE_MAX_DISTINCT) return undefined;
+    const vals: string[] = [];
+    for (const r of rows) {
+      if (r['v'] == null) continue;
+      const s = String(r['v']);
+      if (s.length > MAX_SAMPLE_VALUE_LEN) return undefined;
+      vals.push(s);
+    }
+    return vals.length > 0 ? vals : undefined;
+  }
+
   async introspect(): Promise<SchemaCatalog> {
-    const db = this.config.database;
+    const db = await this.databaseName();
     const warnings: string[] = [];
     const safe = async <T>(label: string, fn: () => Promise<T>, fallback: T): Promise<T> => {
       try {
@@ -217,6 +287,27 @@ export class MysqlConnector implements Connector {
         comment: c['COLUMN_COMMENT'] ? String(c['COLUMN_COMMENT']) : null,
         ...(enumValues ? { enumValues } : {}),
       });
+    }
+
+    // Opt-in: observe the distinct codes a short non-enum text column holds.
+    if (this.config.sampleColumnValues) {
+      let budget = MAX_SAMPLED_COLUMNS;
+      outer: for (const [table, list] of columnsByTable) {
+        // Base tables only - sampling a view runs its query (not read-only, slow).
+        if (viewDef.has(table)) continue;
+        for (let i = 0; i < list.length; i++) {
+          if (budget <= 0) break outer;
+          const col = list[i]!;
+          if (col.enumValues || !isSampleableMysqlType(col.dbType)) continue;
+          budget--;
+          try {
+            const sampled = await this.sampleColumn(db, table, col.name);
+            if (sampled) list[i] = { ...col, sampledValues: sampled };
+          } catch {
+            // Best-effort: a locked-down, huge, or slow column just gets no samples.
+          }
+        }
+      }
     }
 
     // PK + FK from KEY_COLUMN_USAGE
@@ -347,7 +438,7 @@ export class MysqlConnector implements Connector {
           void pool.query(`KILL QUERY ${connId}`).catch(() => {});
         };
         opts.signal.addEventListener('abort', onAbort, { once: true });
-        if (opts.signal.aborted) onAbort;
+        if (opts.signal.aborted) onAbort();
       }
 
       const [rows, fields] = await conn.query(sql);

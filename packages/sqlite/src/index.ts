@@ -13,6 +13,7 @@
 import {
   AskSqlError,
   SQLITE_DIALECT,
+  VALUE_SAMPLE_MAX_DISTINCT,
   type CapabilityFlags,
   type CellValue,
   type ColumnInfo,
@@ -44,6 +45,12 @@ export interface SqliteConnectorConfig {
   readonly database?: SqliteDriver;
   /** ...or a file path (lazy-loads better-sqlite3, opened read-only). */
   readonly file?: string;
+  /**
+   * Opt-in: sample distinct values from short text columns, so the model sees the
+   * real codes a `status TEXT` holds. This reads actual cell values (not just
+   * schema), so it is off unless the caller sets it.
+   */
+  readonly sampleColumnValues?: boolean;
 }
 
 const CAPABILITIES: CapabilityFlags = {
@@ -55,6 +62,15 @@ const CAPABILITIES: CapabilityFlags = {
   supportsTriggers: true,
   supportsRoutines: false,
 };
+
+// Value sampling (opt-in) guards.
+const MAX_SAMPLED_COLUMNS = 300;
+const MAX_SAMPLE_VALUE_LEN = 64;
+
+/** SQLite TEXT-affinity types (declared type contains CHAR/CLOB/TEXT). */
+function isSampleableSqliteType(dbType: string): boolean {
+  return /char|clob|text/i.test(dbType);
+}
 
 export class SqliteConnector implements Connector {
   readonly engine = 'sqlite' as const;
@@ -116,6 +132,26 @@ export class SqliteConnector implements Connector {
     }
   }
 
+  /**
+   * Distinct values of one short text column, or undefined when it is not
+   * categorical (too many distinct values, or any value is long).
+   */
+  private sampleColumn(table: string, column: string): string[] | undefined {
+    const rows = this.rows(
+      `SELECT DISTINCT ${quoteIdent(column)} AS v FROM ${quoteIdent(table)} ` +
+        `WHERE ${quoteIdent(column)} IS NOT NULL LIMIT ${VALUE_SAMPLE_MAX_DISTINCT + 1}`,
+    );
+    if (rows.length > VALUE_SAMPLE_MAX_DISTINCT) return undefined;
+    const vals: string[] = [];
+    for (const r of rows) {
+      if (r['v'] == null) continue;
+      const s = String(r['v']);
+      if (s.length > MAX_SAMPLE_VALUE_LEN) return undefined;
+      vals.push(s);
+    }
+    return vals.length > 0 ? vals : undefined;
+  }
+
   async introspect(): Promise<SchemaCatalog> {
     const warnings: string[] = [];
     const objs = this.rows(
@@ -123,6 +159,7 @@ export class SqliteConnector implements Connector {
     );
     const tables: TableInfo[] = [];
     const triggers: TriggerInfo[] = [];
+    let sampleBudget = MAX_SAMPLED_COLUMNS;
 
     for (const o of objs) {
       const name = String(o['name']);
@@ -148,12 +185,27 @@ export class SqliteConnector implements Connector {
         warnings.push(`Could not introspect ${name}: ${err instanceof Error ? err.message : String(err)}`);
         continue;
       }
-      const columns: ColumnInfo[] = cols.map((c) => ({
+      let columns: ColumnInfo[] = cols.map((c) => ({
         name: String(c['name']),
         dbType: String(c['type'] || 'TEXT'),
         nullable: Number(c['notnull']) === 0,
         default: c['dflt_value'] == null ? null : String(c['dflt_value']),
       }));
+      // Opt-in: observe the distinct codes a short text column holds. Base tables
+      // only - sampling a view runs its query.
+      if (this.config.sampleColumnValues && type !== 'view') {
+        columns = columns.map((col) => {
+          if (sampleBudget <= 0 || !isSampleableSqliteType(col.dbType)) return col;
+          sampleBudget--;
+          try {
+            const sampled = this.sampleColumn(name, col.name);
+            return sampled ? { ...col, sampledValues: sampled } : col;
+          } catch {
+            // Best-effort: a bad column just gets no samples.
+            return col;
+          }
+        });
+      }
       const primaryKey = cols.filter((c) => Number(c['pk']) > 0).sort((a, b) => Number(a['pk']) - Number(b['pk'])).map((c) => String(c['name']));
       const foreignKeys: ForeignKeyInfo[] = groupFks(fks);
       const indexes: IndexInfo[] = idxList.map((ix) => {

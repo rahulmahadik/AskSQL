@@ -151,6 +151,20 @@ describe('formatCatalogForPrompt', () => {
     expect(text).toMatch(/orders\.customer_id = customers\.id/);
     expect(text).toMatch(/values: pending\|paid/);
   });
+  it('renders sampled values for a non-enum column, and enum wins when both are present', () => {
+    const c = cat([
+      { ...tbl('tickets', ['status', 'kind']),
+        columns: [
+          { name: 'status', dbType: 'varchar', nullable: false, sampledValues: ['open', 'closed'] },
+          // A column with both should show the declared enum, never the sample.
+          { name: 'kind', dbType: 'kind_enum', nullable: false, enumValues: ['bug'], sampledValues: ['bug', 'stale'] },
+        ] },
+    ]);
+    const text = formatCatalogForPrompt(c);
+    expect(text).toMatch(/sample values: open\|closed/);
+    expect(text).toMatch(/values: bug/);
+    expect(text).not.toMatch(/sample values: bug/);
+  });
   it('estimateTokens is roughly length/4', () => {
     expect(estimateTokens('abcd')).toBe(1);
     expect(estimateTokens('a'.repeat(40))).toBe(10);

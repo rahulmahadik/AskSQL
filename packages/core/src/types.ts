@@ -62,7 +62,22 @@ export interface ColumnInfo {
   readonly comment?: string | null;
   /** Populated for enum-typed columns so WHERE literals use real values. */
   readonly enumValues?: readonly string[];
+  /**
+   * Distinct values observed in a low-cardinality text column that is NOT a
+   * declared enum (e.g. a `status VARCHAR` that only ever holds a handful of
+   * codes). Unlike enumValues these are DATA, not schema, so a connector only
+   * fills them when value sampling is explicitly enabled.
+   */
+  readonly sampledValues?: readonly string[];
 }
+
+/**
+ * A sampled text column is only useful (and only safe to surface) when it holds
+ * a small, fixed set of short codes. Connectors attach `sampledValues` only when
+ * the distinct count is at or below this cap; the catalog renders at most this
+ * many either way.
+ */
+export const VALUE_SAMPLE_MAX_DISTINCT = 24;
 
 export interface ForeignKeyInfo {
   readonly name?: string;

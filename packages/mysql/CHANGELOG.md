@@ -1,5 +1,16 @@
 # @asksql/mysql
 
+## 0.2.0
+
+### Minor Changes
+
+- Opt-in low-cardinality value sampling; DuckDB `.sql` dump upload; MySQL uri/DSN fixes; prompt-quality fix.
+
+### Patch Changes
+
+- Updated dependencies
+  - @asksql/core@0.2.0
+
 ## 0.1.2
 
 ### Patch Changes

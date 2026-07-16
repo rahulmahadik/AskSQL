@@ -52,6 +52,26 @@ describe('MySQL introspection', () => {
     expect(cat.tables.find((t) => t.name === 'in_stock')?.kind).toBe('view');
   });
 
+  maybe('uri/DSN mode resolves the database and still introspects (database not set)', async () => {
+    // With a connection string the database is selected by the DSN, not config.
+    // The connector must resolve it (SELECT DATABASE()) rather than filter
+    // information_schema on an empty name - which would return zero tables.
+    const host = process.env['ASKSQL_MYSQL_HOST'] ?? '127.0.0.1';
+    const port = Number(process.env['ASKSQL_MYSQL_PORT'] ?? 3306);
+    const user = process.env['ASKSQL_MYSQL_USER'] ?? 'root';
+    const password = process.env['ASKSQL_MYSQL_PASSWORD'] ?? '';
+    const db = process.env['ASKSQL_MYSQL_DB'] ?? 'asksql_test';
+    const auth = password ? `${user}:${encodeURIComponent(password)}` : user;
+    const c = new MysqlConnector({ id: 'my-uri', name: 'Shop (uri)', uri: `mysql://${auth}@${host}:${port}/${db}`, database: '' });
+    await c.connect();
+    try {
+      const cat = await c.introspect();
+      expect(cat.tables.some((t) => t.name === 'products')).toBe(true);
+    } finally {
+      await c.close();
+    }
+  });
+
   maybe('triggers captured', async () => {
     const cat = await conn.introspect();
     const trg = cat.triggers.find((t) => t.name === 'trg_products_bi')!;

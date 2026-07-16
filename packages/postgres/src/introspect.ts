@@ -20,12 +20,53 @@ import type {
   TableInfo,
   TriggerInfo,
 } from '@asksql/core';
+import { VALUE_SAMPLE_MAX_DISTINCT } from '@asksql/core';
 
 interface Queryable {
   query(text: string, params?: unknown[]): Promise<{ rows: Record<string, unknown>[] }>;
 }
 
 const SYSTEM_SCHEMAS = ['pg_catalog', 'information_schema', 'pg_toast'];
+
+// Value sampling (opt-in) guards: bound how many columns are probed per
+// introspect and how long a sampled value may be.
+const MAX_SAMPLED_COLUMNS = 300;
+const MAX_SAMPLE_VALUE_LEN = 64;
+
+/** Text-ish types worth sampling; numeric/uuid/json/temporal/name are not. */
+function isSampleablePgType(dbType: string): boolean {
+  return /^(character varying|varchar|character|char|bpchar|text|citext)\b/i.test(dbType.trim());
+}
+
+function quotePg(ident: string): string {
+  return `"${ident.replace(/"/g, '""')}"`;
+}
+
+/**
+ * Distinct values of one short text column, or undefined when it is not
+ * categorical (too many distinct values, or any value is long). LIMIT bounds the
+ * result; the caller bounds how many columns are probed.
+ */
+async function samplePgColumn(
+  db: Queryable,
+  schema: string,
+  table: string,
+  column: string,
+): Promise<string[] | undefined> {
+  const res = await db.query(
+    `SELECT DISTINCT ${quotePg(column)} AS v FROM ${quotePg(schema)}.${quotePg(table)} ` +
+      `WHERE ${quotePg(column)} IS NOT NULL LIMIT ${VALUE_SAMPLE_MAX_DISTINCT + 1}`,
+  );
+  if (res.rows.length > VALUE_SAMPLE_MAX_DISTINCT) return undefined;
+  const vals: string[] = [];
+  for (const r of res.rows) {
+    if (r['v'] == null) continue;
+    const s = String(r['v']);
+    if (s.length > MAX_SAMPLE_VALUE_LEN) return undefined;
+    vals.push(s);
+  }
+  return vals.length > 0 ? vals : undefined;
+}
 
 function str(v: unknown): string {
   return v === null || v === undefined ? '' : String(v);
@@ -36,7 +77,7 @@ function strOrNull(v: unknown): string | null {
 
 export async function introspectPostgres(
   db: Queryable,
-  opts?: { includeSystem?: boolean },
+  opts?: { includeSystem?: boolean; sampleColumnValues?: boolean },
 ): Promise<SchemaCatalog> {
   const warnings: string[] = [];
   const includeSystem = opts?.includeSystem ?? false;
@@ -72,7 +113,7 @@ export async function introspectPostgres(
     'columns',
     () =>
       db.query(
-        `SELECT n.nspname AS schema, c.relname AS table, a.attname AS column,
+        `SELECT n.nspname AS schema, c.relname AS table, a.attname AS column, c.relkind AS relkind,
                 pg_catalog.format_type(a.atttypid, a.atttypmod) AS type,
                 a.attnotnull AS notnull, a.attnum AS ord,
                 a.attidentity <> '' OR a.attgenerated <> '' AS generated,
@@ -248,6 +289,9 @@ export async function introspectPostgres(
   const volMap: Record<string, RoutineInfo['volatility']> = { i: 'immutable', s: 'stable', v: 'volatile' };
   const relKind: Record<string, TableInfo['kind']> = { r: 'table', v: 'view', m: 'materialized_view', p: 'table', f: 'table' };
 
+  const sampleColumnValues = opts?.sampleColumnValues ?? false;
+  const sampleTargets: { schema: string; table: string; column: string; list: ColumnInfo[]; index: number }[] = [];
+
   const columnsByTable = new Map<string, ColumnInfo[]>();
   for (const r of colRows.rows) {
     const key = `${str(r['schema'])}.${str(r['table'])}`;
@@ -255,15 +299,38 @@ export async function introspectPostgres(
     if (!list) columnsByTable.set(key, (list = []));
     const baseType = str(r['base_type']);
     const enumVals = str(r['typtype']) === 'e' ? enumValuesByType.get(baseType) : undefined;
+    const dbType = str(r['type']);
     list.push({
       name: str(r['column']),
-      dbType: str(r['type']),
+      dbType,
       nullable: r['notnull'] !== true,
       default: strOrNull(r['default_expr']),
       generated: r['generated'] === true,
       comment: strOrNull(r['comment']),
       ...(enumVals ? { enumValues: enumVals } : {}),
     });
+    // Sample base tables only (r/p), never views/matviews/foreign tables - their
+    // scan runs the defining query (side effects, cost) - and never system schemas.
+    const relkind = str(r['relkind']);
+    if (
+      sampleColumnValues && !enumVals && isSampleablePgType(dbType) &&
+      (relkind === 'r' || relkind === 'p') && !SYSTEM_SCHEMAS.includes(str(r['schema']))
+    ) {
+      sampleTargets.push({ schema: str(r['schema']), table: str(r['table']), column: str(r['column']), list, index: list.length - 1 });
+    }
+  }
+
+  // Opt-in: observe the distinct codes a short non-enum text column holds.
+  let sampleBudget = MAX_SAMPLED_COLUMNS;
+  for (const t of sampleTargets) {
+    if (sampleBudget <= 0) break;
+    sampleBudget--;
+    try {
+      const sampled = await samplePgColumn(db, t.schema, t.table, t.column);
+      if (sampled) t.list[t.index] = { ...t.list[t.index]!, sampledValues: sampled };
+    } catch {
+      // Best-effort: a locked-down, huge, or slow column just gets no samples.
+    }
   }
 
   const pkByTable = new Map<string, string[]>();

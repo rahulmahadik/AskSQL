@@ -35,6 +35,7 @@ import {
   shapeDuckValue,
   sqlStr,
   uniqueTableName,
+  validateSqlDump,
   withQueryTimeout,
   type FileFormat,
 } from './shared.js';
@@ -127,6 +128,14 @@ type AsyncBatchReader = AsyncIterable<{
 
 function arrowRows(t: { toArray: ArrowToArray }): Record<string, unknown>[] {
   return typeof t.toArray === 'function' ? t.toArray() : t.toArray;
+}
+
+/** Decode uploaded .sql content (File/Blob/buffer/text) to a string. */
+async function readAsText(data: Blob | ArrayBuffer | Uint8Array | string): Promise<string> {
+  if (typeof data === 'string') return data;
+  if (data instanceof Uint8Array) return new TextDecoder().decode(data);
+  if (data instanceof ArrayBuffer) return new TextDecoder().decode(new Uint8Array(data));
+  return data.text();
 }
 
 export class DuckDbWasmConnector implements Connector {
@@ -224,12 +233,14 @@ export class DuckDbWasmConnector implements Connector {
     const conn = this.connection();
     if (!db) throw new AskSqlError('WASM_LOAD', { detail: 'db not initialized' });
 
-    const table = uniqueTableName(sanitizeTableName(file.table), this.registered);
     const format = resolveFormat({
       table: file.table,
       path: file.filename ?? file.table,
       format: file.format,
     });
+    // A .sql file is executed to build its own tables, not read as one table.
+    if (format === 'sql') return this.registerSqlDump(file);
+    const table = uniqueTableName(sanitizeTableName(file.table), this.registered);
     const vfsName = `${table}.${format}`;
 
     try {
@@ -262,10 +273,42 @@ export class DuckDbWasmConnector implements Connector {
     }
   }
 
+  /**
+   * Load a portable .sql dump (CREATE TABLE + INSERT) uploaded from the browser
+   * and expose the tables it creates. Vendor dumps (mysqldump / pg_dump) and
+   * file/network statements are rejected with a clear message before running.
+   */
+  private async registerSqlDump(file: BrowserFileSource): Promise<string> {
+    const conn = this.connection();
+    const content = await readAsText(file.data);
+    validateSqlDump(content);
+    const before = await this.tableNames();
+    try {
+      await conn.query(content);
+    } catch (err) {
+      throw mapFileError({ table: file.table, path: file.filename ?? file.table }, err);
+    }
+    const created = [...(await this.tableNames())].filter((t) => !before.has(t));
+    if (created.length === 0) {
+      throw new AskSqlError('FILE_PARSE', {
+        detail: 'sql upload created no tables',
+        userMessage: `"${file.filename ?? file.table}" ran but created no tables. An uploadable SQL file must CREATE TABLE and INSERT its data.`,
+      });
+    }
+    for (const t of created) this.registered.add(t);
+    return created[0]!;
+  }
+
+  private async tableNames(): Promise<Set<string>> {
+    const rows = arrowRows(await this.connection().query("SELECT table_name FROM information_schema.tables WHERE table_schema = 'main'"));
+    return new Set(rows.map((r) => String(r['table_name'])));
+  }
+
   async unregisterFile(table: string): Promise<void> {
     const name = sanitizeTableName(table);
     if (!this.registered.has(name)) return;
-    await this.connection().query(`DROP VIEW IF EXISTS ${quoteIdent(name)}`);
+    await this.connection().query(`DROP VIEW IF EXISTS ${quoteIdent(name)}`).catch(() => {});
+    await this.connection().query(`DROP TABLE IF EXISTS ${quoteIdent(name)}`).catch(() => {});
     this.registered.delete(name);
   }
 

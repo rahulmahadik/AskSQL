@@ -3,7 +3,7 @@
  * browser. DuckDB-WASM analyzes the file in a Web Worker; the engine + guard
  * run client-side; only the schema-only prompt goes to your chosen LLM.
  *
- * Model: for real use, paste a Groq/OpenAI key (the call goes browser→provider
+ * Model: for real use, paste a Groq/OpenAI key (the call goes browser->provider
  * directly). For automated tests, a CustomModel can be injected as
  * `window.__asksqlModel` before the first upload.
  */
@@ -13,7 +13,7 @@ import { createAskSql, resolveModel, type ModelLike } from '@asksql/core';
 import { DuckDbWasmConnector, type DuckDbBundles } from '@asksql/duckdb/browser';
 import { AskSqlChat, LocalTransport, type Transport } from '@asksql/react';
 
-// Self-hosted DuckDB-WASM bundles (no CDN needed → works offline + strict CSP).
+// Self-hosted DuckDB-WASM bundles (no CDN needed -> works offline + strict CSP).
 import mvpWasm from '@duckdb/duckdb-wasm/dist/duckdb-mvp.wasm?url';
 import mvpWorker from '@duckdb/duckdb-wasm/dist/duckdb-browser-mvp.worker.js?url';
 import ehWasm from '@duckdb/duckdb-wasm/dist/duckdb-eh.wasm?url';
@@ -42,7 +42,7 @@ function App() {
   const [apiKey, setApiKey] = useState('');
 
   const onFile = async (file: File) => {
-    setStatus(`Loading ${file.name} into DuckDB-WASM…`);
+    setStatus(`Loading ${file.name} into DuckDB-WASM...`);
     try {
       const table = file.name.replace(/\.[^.]+$/, '');
       const connector = new DuckDbWasmConnector({
@@ -69,7 +69,7 @@ function App() {
         <input
           data-testid="file"
           type="file"
-          accept=".csv,.json,.ndjson,.parquet,.xlsx"
+          accept=".csv,.json,.ndjson,.parquet,.xlsx,.sql"
           onChange={(e) => e.target.files?.[0] && void onFile(e.target.files[0])}
         />
         {!window.__asksqlModel && (
@@ -87,7 +87,7 @@ function App() {
         {transport ? (
           <AskSqlChat transport={transport} showConnectionPicker={false} suggestions={['How many rows are there?', 'Show the first few rows']} />
         ) : (
-          <div style={{ padding: 40, color: '#6b7280' }}>Upload a CSV / JSON / Parquet file to begin.</div>
+          <div style={{ padding: 40, color: '#6b7280' }}>Upload a CSV / JSON / Parquet / SQL file to begin.</div>
         )}
       </div>
     </div>
