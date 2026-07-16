@@ -108,13 +108,17 @@ export class MysqlConnector implements Connector {
    */
   private async databaseName(): Promise<string> {
     if (this.config.database) return this.config.database;
-    if (this.resolvedDb !== undefined) return this.resolvedDb;
-    try {
-      const r = await this.q('SELECT DATABASE() AS d');
-      this.resolvedDb = r[0]?.['d'] ? String(r[0]['d']) : '';
-    } catch {
-      this.resolvedDb = '';
+    // Only cache a real name - never '' from a failed query or a db-less DSN.
+    if (this.resolvedDb) return this.resolvedDb;
+    const r = await this.q('SELECT DATABASE() AS d');
+    const d = r[0]?.['d'];
+    if (!d) {
+      throw new AskSqlError('CONFIG_ERROR', {
+        detail: 'connection selected no default database',
+        userMessage: 'This connection string does not select a database. Add the database name to the URL, for example .../your_database.',
+      });
     }
+    this.resolvedDb = String(d);
     return this.resolvedDb;
   }
 
@@ -154,7 +158,8 @@ export class MysqlConnector implements Connector {
     opts['supportBigNumbers'] = true;
     opts['bigNumberStrings'] = true;
     if (this.config.ssl) opts['ssl'] = this.config.ssl;
-    this.pool = createPool(this.config.uri ? this.config.uri : opts);
+    // opts already carries `uri` in DSN mode; the raw string would drop these flags.
+    this.pool = createPool(opts);
     try {
       const c = await this.pool.getConnection();
       c.release();
@@ -170,6 +175,8 @@ export class MysqlConnector implements Connector {
       await this.pool.end().catch(() => {});
       this.pool = null;
     }
+    // A reconnect (uri swap) may select a different db.
+    this.resolvedDb = undefined;
   }
 
   private ensure(): MysqlPool {
@@ -286,6 +293,8 @@ export class MysqlConnector implements Connector {
     if (this.config.sampleColumnValues) {
       let budget = MAX_SAMPLED_COLUMNS;
       outer: for (const [table, list] of columnsByTable) {
+        // Base tables only - sampling a view runs its query (not read-only, slow).
+        if (viewDef.has(table)) continue;
         for (let i = 0; i < list.length; i++) {
           if (budget <= 0) break outer;
           const col = list[i]!;
@@ -429,7 +438,7 @@ export class MysqlConnector implements Connector {
           void pool.query(`KILL QUERY ${connId}`).catch(() => {});
         };
         opts.signal.addEventListener('abort', onAbort, { once: true });
-        if (opts.signal.aborted) onAbort;
+        if (opts.signal.aborted) onAbort();
       }
 
       const [rows, fields] = await conn.query(sql);

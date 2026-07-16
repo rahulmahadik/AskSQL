@@ -33,9 +33,9 @@ const SYSTEM_SCHEMAS = ['pg_catalog', 'information_schema', 'pg_toast'];
 const MAX_SAMPLED_COLUMNS = 300;
 const MAX_SAMPLE_VALUE_LEN = 64;
 
-/** Text-ish types worth sampling; numeric/uuid/json/temporal are not. */
+/** Text-ish types worth sampling; numeric/uuid/json/temporal/name are not. */
 function isSampleablePgType(dbType: string): boolean {
-  return /^(character varying|varchar|character|char|bpchar|text|citext|name)\b/i.test(dbType.trim());
+  return /^(character varying|varchar|character|char|bpchar|text|citext)\b/i.test(dbType.trim());
 }
 
 function quotePg(ident: string): string {
@@ -113,7 +113,7 @@ export async function introspectPostgres(
     'columns',
     () =>
       db.query(
-        `SELECT n.nspname AS schema, c.relname AS table, a.attname AS column,
+        `SELECT n.nspname AS schema, c.relname AS table, a.attname AS column, c.relkind AS relkind,
                 pg_catalog.format_type(a.atttypid, a.atttypmod) AS type,
                 a.attnotnull AS notnull, a.attnum AS ord,
                 a.attidentity <> '' OR a.attgenerated <> '' AS generated,
@@ -309,7 +309,13 @@ export async function introspectPostgres(
       comment: strOrNull(r['comment']),
       ...(enumVals ? { enumValues: enumVals } : {}),
     });
-    if (sampleColumnValues && !enumVals && isSampleablePgType(dbType)) {
+    // Sample base tables only (r/p), never views/matviews/foreign tables - their
+    // scan runs the defining query (side effects, cost) - and never system schemas.
+    const relkind = str(r['relkind']);
+    if (
+      sampleColumnValues && !enumVals && isSampleablePgType(dbType) &&
+      (relkind === 'r' || relkind === 'p') && !SYSTEM_SCHEMAS.includes(str(r['schema']))
+    ) {
       sampleTargets.push({ schema: str(r['schema']), table: str(r['table']), column: str(r['column']), list, index: list.length - 1 });
     }
   }

@@ -117,4 +117,15 @@ describe('SQLite value sampling (opt-in)', () => {
     const code = cat.tables.find((t) => t.name === 'big')!.columns.find((col) => col.name === 'code')!;
     expect(code.sampledValues).toBeUndefined();
   });
+
+  it('does not sample a view (only base tables)', async () => {
+    const db = makeSampleDb();
+    db.exec('CREATE VIEW tickets_v AS SELECT * FROM tickets;');
+    const c = new SqliteConnector({ id: 's3', name: 'view', database: db as never, sampleColumnValues: true });
+    await c.connect();
+    const cat = await c.introspect();
+    const view = cat.tables.find((t) => t.name === 'tickets_v')!;
+    expect(view.kind).toBe('view');
+    expect(view.columns.find((col) => col.name === 'status')!.sampledValues).toBeUndefined();
+  });
 });

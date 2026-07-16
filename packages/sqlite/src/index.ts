@@ -191,8 +191,9 @@ export class SqliteConnector implements Connector {
         nullable: Number(c['notnull']) === 0,
         default: c['dflt_value'] == null ? null : String(c['dflt_value']),
       }));
-      // Opt-in: observe the distinct codes a short text column holds.
-      if (this.config.sampleColumnValues) {
+      // Opt-in: observe the distinct codes a short text column holds. Base tables
+      // only - sampling a view runs its query.
+      if (this.config.sampleColumnValues && type !== 'view') {
         columns = columns.map((col) => {
           if (sampleBudget <= 0 || !isSampleableSqliteType(col.dbType)) return col;
           sampleBudget--;
