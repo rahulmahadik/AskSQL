@@ -1,0 +1,399 @@
+{
+  "name": "asksql-vscode",
+  "private": true,
+  "displayName": "AskSQL",
+  "description": "AI database chat in VS Code: ask in plain language, review the SQL, get answers. Read-only by design, bring your own model.",
+  "version": "0.1.1",
+  "publisher": "RahulMahadik",
+  "license": "Apache-2.0",
+  "pricing": "Free",
+  "author": {
+    "name": "Rahul Mahadik",
+    "email": "rahultkiet@gmail.com",
+    "url": "https://www.linkedin.com/in/rahulmahadik/"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rahulmahadik/AskSQL.git",
+    "directory": "packages/vscode"
+  },
+  "homepage": "https://github.com/rahulmahadik/AskSQL#readme",
+  "categories": [
+    "AI",
+    "Chat",
+    "Data Science",
+    "Visualization"
+  ],
+  "keywords": [
+    "sql",
+    "text-to-sql",
+    "nl2sql",
+    "database",
+    "ai",
+    "llm",
+    "postgres",
+    "mysql",
+    "sqlite"
+  ],
+  "engines": {
+    "vscode": "^1.95.0"
+  },
+  "main": "./dist/extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "commands": [
+      {
+        "command": "asksql.addConnection",
+        "title": "Add Database Connection",
+        "category": "AskSQL",
+        "icon": "$(add)"
+      },
+      {
+        "command": "asksql.removeConnection",
+        "title": "Remove Database Connection",
+        "category": "AskSQL"
+      },
+      {
+        "command": "asksql.reset",
+        "title": "Remove All Connections and Keys",
+        "category": "AskSQL"
+      },
+      {
+        "command": "asksql.refreshSchema",
+        "title": "Refresh Schema",
+        "category": "AskSQL",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "asksql.setConnectionPassword",
+        "title": "Set Database Password",
+        "category": "AskSQL",
+        "icon": "$(key)"
+      },
+      {
+        "command": "asksql.setApiKey",
+        "title": "Set AI Provider API Key",
+        "category": "AskSQL"
+      },
+      {
+        "command": "asksql.openSettings",
+        "title": "Open Settings",
+        "category": "AskSQL",
+        "icon": "$(gear)"
+      },
+      {
+        "command": "asksql.askInChat",
+        "title": "Ask a Question",
+        "category": "AskSQL",
+        "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "asksql.selectModel",
+        "title": "Select Model",
+        "category": "AskSQL",
+        "icon": "$(sparkle)"
+      },
+      {
+        "command": "asksql.pickModel",
+        "title": "Choose Answering Model",
+        "category": "AskSQL",
+        "icon": "$(sparkle)"
+      },
+      {
+        "command": "asksql.selectProvider",
+        "title": "Select AI Provider",
+        "category": "AskSQL"
+      },
+      {
+        "command": "asksql.testConnection",
+        "title": "Test Database Connection",
+        "category": "AskSQL",
+        "icon": "$(plug)"
+      },
+      {
+        "command": "asksql.testProvider",
+        "title": "Test AI Provider",
+        "category": "AskSQL",
+        "icon": "$(beaker)"
+      },
+      {
+        "command": "asksql.clearChat",
+        "title": "Clear Chat",
+        "category": "AskSQL",
+        "icon": "$(clear-all)"
+      }
+    ],
+    "configuration": {
+      "title": "AskSQL",
+      "properties": {
+        "asksql.connections": {
+          "type": "array",
+          "default": [],
+          "markdownDescription": "Database connections. Passwords are NOT stored here - run **AskSQL: Set Database Password** to store them securely in the OS keychain.",
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "name",
+              "engine"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "description": "Unique id, used to look up the stored password."
+              },
+              "name": {
+                "type": "string",
+                "description": "Display name shown in the connection picker."
+              },
+              "engine": {
+                "type": "string",
+                "enum": [
+                  "postgres",
+                  "mysql",
+                  "sqlite"
+                ],
+                "description": "Database engine."
+              },
+              "host": {
+                "type": "string"
+              },
+              "port": {
+                "type": "number"
+              },
+              "user": {
+                "type": "string"
+              },
+              "database": {
+                "type": "string"
+              },
+              "file": {
+                "type": "string",
+                "description": "SQLite only: path to the .db file (relative paths resolve against the workspace)."
+              },
+              "ssl": {
+                "type": "string",
+                "enum": [
+                  "verify",
+                  "no-verify"
+                ],
+                "enumDescriptions": [
+                  "Encrypt and verify the server certificate. Use for managed cloud databases.",
+                  "Encrypt but do not verify the certificate. For self-signed or self-hosted servers."
+                ],
+                "description": "Postgres/MySQL SSL/TLS mode. Omit for a plain connection. Ignored for connection-string connections, which carry their own SSL settings."
+              },
+              "usesConnectionString": {
+                "type": "boolean",
+                "description": "This connection is defined by a full connection string (DSN). The string is stored in the OS keychain, not here. Set only by the Add Connection wizard."
+              }
+            }
+          },
+          "scope": "window"
+        },
+        "asksql.provider": {
+          "type": "string",
+          "default": "ollama",
+          "enum": [
+            "ollama",
+            "openai",
+            "anthropic",
+            "google",
+            "groq",
+            "openai-compatible"
+          ],
+          "markdownDescription": "AI provider. `ollama` runs fully local and needs no API key.",
+          "scope": "machine"
+        },
+        "asksql.model": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Model id for `#asksql.provider`. Leave empty and run **AskSQL: Select Model** to pick from the models your endpoint actually has - AskSQL does not guess a model id, because a default you have not pulled fails in a way that looks like a bug.",
+          "scope": "machine"
+        },
+        "asksql.baseURL": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "markdownDescription": "Endpoint override. Required for `openai-compatible`; defaults to Ollama's local endpoint. This is machine-scoped on purpose: it decides where your API key is sent, so a workspace cannot set it."
+        },
+        "asksql.maxRows": {
+          "type": "number",
+          "default": 1000,
+          "description": "Row cap injected into every query.",
+          "scope": "window"
+        },
+        "asksql.requireApproval": {
+          "type": "boolean",
+          "default": false,
+          "description": "Require a Run click before a generated query executes. Off by default (results appear automatically); the SQL is always shown either way.",
+          "scope": "window"
+        },
+        "asksql.sqlDisplay": {
+          "type": "string",
+          "enum": [
+            "after",
+            "before"
+          ],
+          "enumDescriptions": [
+            "Show the results first, with the SQL underneath. Best for day to day questions.",
+            "Show the SQL first and the results below it. Best when you want to read every query before trusting the answer."
+          ],
+          "default": "after",
+          "scope": "window",
+          "markdownDescription": "Where the generated SQL appears relative to the results. The SQL is always shown either way, and it is always generated before anything runs. When `#asksql.requireApproval#` is on, the SQL is shown first regardless, because you cannot approve a query you have not seen."
+        },
+        "asksql.sampleColumnValues": {
+          "type": "boolean",
+          "default": false,
+          "scope": "window",
+          "markdownDescription": "Read a few real values from short text columns that are not declared enums (for example a `status` column that only holds `active`, `closed`, `pending`) and show them to the model, so it filters on codes that actually exist instead of guessing casing and spelling. **This sends those values to the model** - it is the one setting that lets column data, not just schema, leave for the model, so it is off by default and does nothing with a local model beyond your own machine. Only short, low-cardinality columns are sampled; long or high-cardinality columns are skipped."
+        }
+      }
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "asksql",
+          "title": "AskSQL",
+          "icon": "media/asksql-activitybar.svg"
+        }
+      ]
+    },
+    "views": {
+      "asksql": [
+        {
+          "id": "asksql.schema",
+          "name": "Databases"
+        },
+        {
+          "id": "asksql.chat",
+          "name": "Ask",
+          "type": "webview",
+          "visibility": "visible"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "asksql.addConnection",
+          "when": "view == asksql.schema",
+          "group": "navigation@2"
+        },
+        {
+          "command": "asksql.refreshSchema",
+          "when": "view == asksql.schema",
+          "group": "navigation@3"
+        },
+        {
+          "command": "asksql.openSettings",
+          "when": "view == asksql.schema",
+          "group": "navigation@4"
+        },
+        {
+          "command": "asksql.pickModel",
+          "when": "view == asksql.chat",
+          "group": "navigation@1"
+        },
+        {
+          "command": "asksql.testProvider",
+          "when": "view == asksql.chat",
+          "group": "navigation@2"
+        },
+        {
+          "command": "asksql.clearChat",
+          "when": "view == asksql.chat",
+          "group": "navigation@3"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "asksql.testConnection",
+          "when": "view == asksql.schema && viewItem == asksql.connection",
+          "group": "inline@0"
+        },
+        {
+          "command": "asksql.setConnectionPassword",
+          "when": "view == asksql.schema && viewItem == asksql.connection",
+          "group": "inline@1"
+        },
+        {
+          "command": "asksql.removeConnection",
+          "when": "view == asksql.schema && viewItem == asksql.connection",
+          "group": "1_modify"
+        },
+        {
+          "command": "asksql.refreshSchema",
+          "when": "view == asksql.schema && viewItem == asksql.connection",
+          "group": "1_modify"
+        },
+        {
+          "command": "asksql.testConnection",
+          "when": "view == asksql.schema && viewItem == asksql.connection",
+          "group": "1_modify@0"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "asksql.schema",
+        "contents": "Connect a database to start asking questions in plain language.\n[Add Database Connection](command:asksql.addConnection)\nYour password is stored in the OS keychain, never in settings.\n[Open Settings](command:asksql.openSettings)"
+      }
+    ]
+  },
+  "scripts": {
+    "build": "node esbuild.mjs",
+    "watch": "node esbuild.mjs --watch",
+    "lint": "eslint src",
+    "package": "npx --yes @vscode/vsce@^3 package --no-dependencies",
+    "typecheck": "tsc --noEmit",
+    "vscode:prepublish": "npm run bundle",
+    "bundle": "npm run typecheck && node esbuild.mjs --production"
+  },
+  "dependencies": {
+    "@ai-sdk/anthropic": "^4.0.14",
+    "@ai-sdk/google": "^4.0.14",
+    "@ai-sdk/groq": "^4.0.10",
+    "@ai-sdk/openai": "^4.0.13",
+    "@ai-sdk/openai-compatible": "^3.0.9",
+    "@asksql/core": "workspace:*",
+    "@asksql/mysql": "workspace:*",
+    "@asksql/postgres": "workspace:*",
+    "@asksql/sqlite": "workspace:*",
+    "mysql2": "^3.22.6",
+    "pg": "^8.22.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.20.0",
+    "@types/node": "^22.0.0",
+    "@types/vscode": "1.95.0",
+    "esbuild": "^0.28.1",
+    "eslint": "^9.20.0",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.24.0"
+  },
+  "bugs": {
+    "url": "https://github.com/rahulmahadik/AskSQL/issues"
+  },
+  "qna": "https://github.com/rahulmahadik/AskSQL/issues",
+  "icon": "icon.png",
+  "galleryBanner": {
+    "color": "#1e1e1e",
+    "theme": "dark"
+  },
+  "extensionKind": [
+    "workspace",
+    "ui"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "AskSQL reads database connections from workspace settings and opens connections to them, so it only runs in trusted workspaces."
+    },
+    "virtualWorkspaces": {
+      "supported": "limited",
+      "description": "Postgres and MySQL work in virtual workspaces. SQLite needs a real file system."
+    }
+  }
+}

@@ -17,3 +17,6 @@ internal/
 
 # npm auth (never commit tokens)
 .npmrc
+
+# Claude Code local settings (personal, never commit)
+.claude/settings.local.json

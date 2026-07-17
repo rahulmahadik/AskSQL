@@ -1,0 +1,27 @@
+name: CI
+
+# Companion to ci.yml. ci.yml uses paths-ignore for the extension and the
+# JetBrains plugin, so an extension-only or plugin-only change does not run it.
+# If `check` is a required status check on a protected branch, that would leave
+# those PRs "Expected - waiting for status to be reported" forever.
+#
+# This reports the SAME check name (job `check`) as an instant success for
+# exactly those paths, so a required `check` always resolves - real npm work runs
+# via ci.yml when npm code changes, and this no-op stands in otherwise. Keep the
+# workflow name and the job id identical to ci.yml so both produce the same check.
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'packages/vscode/**'
+      - 'packages/jetbrains/**'
+  pull_request:
+    paths:
+      - 'packages/vscode/**'
+      - 'packages/jetbrains/**'
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "No npm-affecting changes; npm CI (ci.yml) is not required for this change."

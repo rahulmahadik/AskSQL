@@ -3,7 +3,11 @@ name: Release
 on:
   push:
     tags:
+      # `v*` also matches `vscode-v*` (both start with `v`), so exclude the other
+      # surfaces' tag prefixes or an extension release would also publish npm.
       - 'v*'
+      - '!vscode-v*'
+      - '!jetbrains-v*'
   workflow_dispatch:
 
 jobs:

@@ -1,0 +1,54 @@
+name: VS Code Extension CI
+
+# Runs only when the extension - or a package it bundles - changes, so an
+# npm-only or JetBrains-only change never triggers it (and vice versa). The
+# extension bundles @asksql/core + the three connectors, so a change to any of
+# those must re-validate the extension too.
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'packages/vscode/**'
+      - 'packages/core/**'
+      - 'packages/postgres/**'
+      - 'packages/mysql/**'
+      - 'packages/sqlite/**'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - '.github/workflows/vscode-ci.yml'
+  pull_request:
+    paths:
+      - 'packages/vscode/**'
+      - 'packages/core/**'
+      - 'packages/postgres/**'
+      - 'packages/mysql/**'
+      - 'packages/sqlite/**'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - '.github/workflows/vscode-ci.yml'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # Build the @asksql/* dist the extension bundles, then the extension itself.
+      - run: pnpm build
+      - run: pnpm --filter asksql-vscode run typecheck
+      - run: pnpm --filter asksql-vscode run lint
+      - run: pnpm --filter asksql-vscode run build
+      - name: Package VSIX
+        working-directory: packages/vscode
+        run: npx --yes @vscode/vsce@^3 package --no-dependencies
+      - name: Upload VSIX artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: asksql-vscode-vsix
+          path: packages/vscode/*.vsix
+          if-no-files-found: error

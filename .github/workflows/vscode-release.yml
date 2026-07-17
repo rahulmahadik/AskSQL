@@ -1,0 +1,63 @@
+name: VS Code Extension Release
+
+# Publish to the VS Code Marketplace on a vscode-v* tag, mirroring how release.yml
+# publishes npm on v* and jetbrains-release.yml publishes on jetbrains-v*. One
+# surface, one tag prefix - a tag never publishes more than the surface it names.
+#
+# Requires a VSCE_PAT secret (a Marketplace Personal Access Token) on the
+# `vscode-publish` environment. vsce reads the version to publish from
+# packages/vscode/package.json, so bump that, tag vscode-v<version>, and push.
+on:
+  push:
+    tags:
+      - 'vscode-v*'
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: vscode-publish
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Verify release tag is on main
+        run: |
+          git fetch origin main --quiet
+          if ! git merge-base --is-ancestor "${{ github.sha }}" origin/main; then
+            echo "::error::Tag ${{ github.ref_name }} (${{ github.sha }}) is not on main; refusing to publish."
+            exit 1
+          fi
+          echo "Release tag ${{ github.ref_name }} is on main; proceeding."
+      - name: Verify tag matches extension version
+        if: github.event_name != 'workflow_dispatch'
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          TAG_VERSION="${REF_NAME#vscode-v}"
+          PKG_VERSION="$(node -p "require('./packages/vscode/package.json').version")"
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "::error::Tag ${REF_NAME} does not match packages/vscode/package.json version ${PKG_VERSION}."
+            exit 1
+          fi
+          echo "Tag matches extension version ${PKG_VERSION}."
+      - uses: pnpm/action-setup@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: pnpm --filter asksql-vscode run build
+      - name: Publish to VS Code Marketplace
+        working-directory: packages/vscode
+        run: npx --yes @vscode/vsce@^3 publish --no-dependencies
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+      # Optional: also publish to Open VSX (for VSCodium / Cursor / etc.).
+      # Uncomment and add an OVSX_PAT secret to enable.
+      # - name: Publish to Open VSX
+      #   working-directory: packages/vscode
+      #   run: npx --yes ovsx publish --no-dependencies -p ${{ secrets.OVSX_PAT }}

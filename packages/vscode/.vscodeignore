@@ -1,0 +1,21 @@
+# Everything is bundled into dist/extension.js by esbuild, so the .vsix only
+# needs that bundle plus the storefront files. Shipping source, node_modules or
+# maps would bloat the download for no benefit.
+.vscode/**
+node_modules/**
+src/**
+webview/**
+esbuild.mjs
+eslint.config.mjs
+tsconfig.json
+**/*.ts
+**/*.tsx
+**/*.map
+**/tsconfig.tsbuildinfo
+.gitignore
+.eslintrc*
+internal/**
+
+# Keep: dist/extension.js, package.json, README.md, CHANGELOG.md, LICENSE, icon.png
+!dist/extension.js
+!media/**
