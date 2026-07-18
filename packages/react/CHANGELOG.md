@@ -1,5 +1,13 @@
 # @asksql/react
 
+## 0.1.4
+
+### Patch Changes
+
+- f92c594: Show the connected database name in the connection picker. Inject styles once per target root — and into a shadow root when one is passed — instead of a single process-wide flag, so a second document or shadow tree is still styled. Record a real `savedAt` timestamp on saved queries.
+- Updated dependencies [f92c594]
+  - @asksql/core@0.2.1
+
 ## 0.1.3
 
 ### Patch Changes

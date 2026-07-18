@@ -1,5 +1,13 @@
 # @asksql/mcp
 
+## 0.1.4
+
+### Patch Changes
+
+- f92c594: Report the connected database name in `list_connections`.
+- Updated dependencies [f92c594]
+  - @asksql/core@0.2.1
+
 ## 0.1.3
 
 ### Patch Changes
