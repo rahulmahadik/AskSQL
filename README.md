@@ -26,6 +26,27 @@ const transport = new HttpTransport({ baseUrl: '/asksql' });
   <em>Ask in plain language, review the generated SQL, get results. (<a href="docs/screenshots/README.md">more screenshots</a>)</em>
 </p>
 
+## Use it in VS Code
+
+Prefer a ready-made tool over the libraries? The **AskSQL** VS Code extension puts the same engine
+and read-only guard in a sidebar panel: connect Postgres, MySQL / MariaDB or SQLite, ask in plain
+language, and get answers without leaving your editor. Bring your own model - a chat model already in
+VS Code, a local Ollama model, or your own OpenAI / Anthropic / Google / Groq key.
+
+<p align="center">
+  <img src="packages/vscode/images/extension-overview.png" width="820"
+       alt="AskSQL in VS Code: the Databases explorer and the Ask panel side by side in the editor." />
+</p>
+<p align="center">
+  <img src="packages/vscode/images/sidebar-chat.png" width="410"
+       alt="Ask a question in the AskSQL sidebar and get the answer as a table." />
+  <img src="packages/vscode/images/nl-to-sql-result.png" width="410"
+       alt="A plain-language question turned into SQL, with the results below it." />
+</p>
+
+Install **AskSQL** from the VS Code Marketplace (or build the `.vsix` from `packages/vscode`). See the
+[extension README](packages/vscode/README.md) for details.
+
 ## Why AskSQL
 
 Most open-source text-to-SQL tools are Python libraries, hosted platforms, or standalone

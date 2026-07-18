@@ -10,6 +10,10 @@ MariaDB, and SQLite, using whichever AI model you choose.
 how many appointments were booked last week?
 ```
 
+## Screenshot
+
+![A plain-language question turned into SQL, with the results below it](https://github.com/rahulmahadik/AskSQL/raw/HEAD/packages/vscode/images/nl-to-sql-result.png)
+
 ## Features
 
 - **Plain-language questions, real SQL.** Every answer shows the exact query it ran, with a short
@@ -22,15 +26,26 @@ how many appointments were booked last week?
   `asksql.sampleColumnValues`, will additionally show the model the handful of codes a short
   non-enum text column holds - it is off by default and clearly the only thing that sends column
   values.)
+- **Conversational follow-ups.** "now only the west region", "and order by revenue" - each question
+  builds on the last, scoped to the database you are asking, so a follow-up never drags in another
+  connection's tables.
 - **Results you can use.** An inline table, plus one click to **Copy** (with headers), open the full
   result set or the SQL in an editor, or ask the database for its **query plan**.
 - **Schema explorer.** Browse tables, views, columns, and keys in the sidebar - the same schema the
-  model is given. Ask "describe the customers table" and it answers instantly from the schema, no
-  query and no model call.
-- **Self-correcting.** If the model invents a column or misspells a table, AskSQL catches it against
-  your real schema and fixes the query before it runs.
+  model is given. "What tables are here?" and "describe the customers table" are answered instantly
+  from the schema, with no query and no model call.
+- **Self-correcting and forgiving.** If the model invents a column or misspells a table, AskSQL
+  catches it against your real schema and fixes the query before it runs - and a typo in your own
+  question ("appoinments") resolves to the real table instead of a refusal.
+- **You are in control.** The SQL is always shown first. Optionally require a click before anything
+  runs (`asksql.requireApproval`), choose whether SQL appears above or below the results
+  (`asksql.sqlDisplay`), cap rows (`asksql.maxRows`), and **Stop** a running query at any time.
+- **Many databases, one panel.** Keep several connections and switch between them from the panel;
+  each answer is labelled with the database it ran against.
 - **Bring your own model.** A chat model you already have in VS Code (no API key), a fully local
-  Ollama model, or your own OpenAI / Anthropic / Google / Groq key.
+  Ollama model, or your own OpenAI / Anthropic / Google / Groq / OpenAI-compatible key.
+- **Native to your editor.** A themed sidebar panel that follows your VS Code theme (light or dark),
+  with no web page bolted on.
 - **Credentials in your OS keychain**, never in settings files.
 
 ## Databases
