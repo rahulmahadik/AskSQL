@@ -17,7 +17,7 @@
 
 import pkg from 'node-sql-parser';
 import { AskSqlError } from './errors.js';
-import { hasMultipleStatements, stripCommentsAndStrings } from './strip.js';
+import { hasMultipleStatements, stripCommentsAndStrings, trimTrailingNoise } from './strip.js';
 import type { DialectInfo, GuardPolicy, GuardVerdict } from './types.js';
 
 const { Parser } = pkg;
@@ -514,7 +514,11 @@ export function guardSql(input: GuardInput): GuardVerdict {
     return blocked(original, 'multi_statement', 'Only a single statement is allowed.');
   }
   const strippedTrim = stripped.trim().replace(/;\s*$/u, '');
-  const body = trimmed.replace(/;\s*$/u, '');
+  // Strip trailing `;`, whitespace AND comments: a trailing comment after a `;`
+  // (`SELECT 1; --`) hides the `;` from a naive end-anchored replace, and the
+  // later textual auto-LIMIT append would then land after the `;` as a dangling
+  // fragment while the row cap is silently commented/severed off.
+  const body = trimTrailingNoise(trimmed);
 
   // ---- Dialect-specific allowlisted read commands (checked pre-parser) ----
   if (dialect.engine === 'sqlite' && /^\s*pragma\b/iu.test(strippedTrim)) {
@@ -635,10 +639,9 @@ export function guardSql(input: GuardInput): GuardVerdict {
     if (status.kind === 'none') {
       // Textual append preserves the model's exact formatting (the "show
       // query" surface stays faithful) - the guard already proved this is a
-      // single SELECT, so a trailing LIMIT binds correctly (incl. set-ops).
-      // The LIMIT goes on its OWN line so a trailing `--`/`#` line comment in
-      // `body` can't comment it out (which would leave an unbounded scan while
-      // still reporting autoLimited=true).
+      // single SELECT and `body` is trimmed of trailing `;`/comments, so the
+      // appended LIMIT binds to the final SELECT (incl. set-ops). The own-line
+      // placement is defence-in-depth against any trailing line comment.
       finalSql = `${body}\nLIMIT ${policy.maxRows}`;
       autoLimited = true;
     } else if (status.kind === 'high') {
