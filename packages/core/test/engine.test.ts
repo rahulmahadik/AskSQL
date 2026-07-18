@@ -269,6 +269,40 @@ describe('connector recovers after a query error', () => {
   });
 });
 
+describe('introspection masking', () => {
+  class MaskingConnector extends FakeConnector {
+    constructor(private readonly catalog: () => Awaited<ReturnType<FakeConnector['introspect']>>) { super(); }
+    override async introspect() { return this.catalog(); }
+  }
+
+  it('empty catalog WITH warnings is surfaced, not treated as an empty database', async () => {
+    const conn = new MaskingConnector(() => ({
+      ...CATALOG, tables: [], warnings: ['Could not read tables: permission denied'],
+    }));
+    const engine = createAskSql({ connectors: [conn], model: model(['x']) });
+    await expect(engine.catalog()).rejects.toMatchObject({ code: 'DB_QUERY_ERROR' });
+  });
+
+  it('a poisoned empty catalog is never cached - a recovered introspect is seen', async () => {
+    let first = true;
+    const conn = new MaskingConnector(() => {
+      if (first) { first = false; return { ...CATALOG, tables: [], warnings: ['transient failure'] }; }
+      return CATALOG;
+    });
+    const engine = createAskSql({ connectors: [conn], model: model(['x']) });
+    await expect(engine.catalog()).rejects.toMatchObject({ code: 'DB_QUERY_ERROR' });
+    const cat = await engine.catalog();
+    expect(cat.tables.length).toBeGreaterThan(0);
+  });
+
+  it('a genuinely empty database (no warnings) is fine', async () => {
+    const conn = new MaskingConnector(() => ({ ...CATALOG, tables: [], warnings: [] }));
+    const engine = createAskSql({ connectors: [conn], model: model(['x']) });
+    const cat = await engine.catalog();
+    expect(cat.tables).toEqual([]);
+  });
+});
+
 describe('event stream', () => {
   it('emits stage events through the pipeline', async () => {
     const stages: string[] = [];

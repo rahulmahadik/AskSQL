@@ -44,12 +44,17 @@ import type {
 
 const MAX_REPAIRS = 2;
 const CATALOG_TTL_MS = 300_000;
+// A partially-failed introspection (warnings present) is cached only briefly so a
+// transient permission/network fault self-heals instead of sticking for 5 minutes.
+const WARNED_CATALOG_TTL_MS = 30_000;
 const DEFAULT_QUERY_TIMEOUT_MS = 30_000;
 
 export interface ExecuteEngineOptions extends ExecuteOptions {
   readonly connectionId?: string;
   /** Recorded into history alongside the SQL. */
   readonly question?: string;
+  /** Owning user, recorded on the history row (server mode). */
+  readonly userId?: string;
 }
 
 export interface ExplainOptions {
@@ -64,7 +69,7 @@ export interface CatalogOptions {
 export interface AskSqlEngine {
   readonly policy: GuardPolicy;
   readonly history: HistoryStore;
-  connectors: readonly Pick<Connector, 'id' | 'name' | 'engine'>[];
+  connectors: readonly Pick<Connector, 'id' | 'name' | 'engine' | 'database'>[];
   catalog(connectionId?: string, opts?: CatalogOptions): Promise<SchemaCatalog>;
   ask(question: string, opts?: AskOptions): Promise<AskResult>;
   execute(sql: string, opts?: ExecuteEngineOptions): Promise<ResultSet>;
@@ -123,7 +128,7 @@ export function createAskSql(config: AskSqlConfig): AskSqlEngine {
 
   const policy = resolveGuardPolicy(config.policy);
   const history = config.history ?? new MemoryHistoryStore;
-  const catalogCache = new Map<string, { catalog: SchemaCatalog; at: number }>();
+  const catalogCache = new Map<string, { catalog: SchemaCatalog; at: number; ttl: number }>();
   const inflight = new Map<string, Promise<SchemaCatalog>>();
 
   const connectorById = (connectionId?: string): Connector => {
@@ -164,13 +169,24 @@ export function createAskSql(config: AskSqlConfig): AskSqlEngine {
   const getCatalog = async (conn: Connector, refresh = false): Promise<SchemaCatalog> => {
     await ensureConnected(conn);
     const cached = catalogCache.get(conn.id);
-    if (!refresh && cached && Date.now() - cached.at < CATALOG_TTL_MS) return cached.catalog;
+    if (!refresh && cached && Date.now() - cached.at < cached.ttl) return cached.catalog;
     const running = inflight.get(conn.id);
     if (!refresh && running) return running;
     const p = (async () => {
       try {
         const catalog = await conn.introspect();
-        catalogCache.set(conn.id, { catalog, at: Date.now() });
+        // A failed sub-query returns [] and pushes a warning; an empty table set
+        // WITH warnings is a permission/network failure masquerading as an empty
+        // database. Surface it and never cache the poisoned result.
+        if (catalog.tables.length === 0 && catalog.warnings.length > 0) {
+          throw new AskSqlError('DB_QUERY_ERROR', {
+            userMessage: "Could not read this database's schema. Check the connection's permissions, then try again.",
+            detail: `introspection returned no tables with warnings: ${catalog.warnings.join('; ').slice(0, 500)}`,
+            retryable: true,
+          });
+        }
+        const ttl = catalog.warnings.length > 0 ? WARNED_CATALOG_TTL_MS : CATALOG_TTL_MS;
+        catalogCache.set(conn.id, { catalog, at: Date.now(), ttl });
         return catalog;
       } finally {
         inflight.delete(conn.id);
@@ -192,6 +208,7 @@ export function createAskSql(config: AskSqlConfig): AskSqlEngine {
         id: historyId(),
         at: new Date().toISOString(),
         connectionId: conn.id,
+        userId: opts.userId,
         question: opts.question,
         sql,
         status: 'blocked',
@@ -213,6 +230,7 @@ export function createAskSql(config: AskSqlConfig): AskSqlEngine {
         id: historyId(),
         at: new Date().toISOString(),
         connectionId: conn.id,
+        userId: opts.userId,
         question: opts.question,
         sql: verdict.sql,
         status: 'ok',
@@ -233,6 +251,7 @@ export function createAskSql(config: AskSqlConfig): AskSqlEngine {
         id: historyId(),
         at: new Date().toISOString(),
         connectionId: conn.id,
+        userId: opts.userId,
         question: opts.question,
         sql: verdict.sql,
         status: 'error',
@@ -366,6 +385,7 @@ const system = buildSqlSystem(conn.dialect, policy.maxRows, config.prompts);
             id: historyId(),
             at: new Date().toISOString(),
             connectionId: conn.id,
+            userId: opts.userId,
             question: q,
             sql: extraction.sql,
             status: 'blocked',
@@ -449,7 +469,7 @@ const unknownTable = firstUnknownTable(verdict.sql, fullCatalog, conn.dialect.gr
         run: async (execOpts?: ExecuteOptions): Promise<ResultSet> => {
           emit({ type: 'stage', stage: 'execute' }, opts);
           try {
-            return await engineExecute(finalSql, conn, {...execOpts, question: q });
+            return await engineExecute(finalSql, conn, {...execOpts, question: q, userId: opts.userId });
           } catch (err) {
           // on a runtime DB error, ask for a corrected query but
             // NEVER run it silently - attach it for re-approval.
@@ -492,7 +512,7 @@ const unknownTable = firstUnknownTable(verdict.sql, fullCatalog, conn.dialect.gr
   return {
     policy,
     history,
-    connectors: config.connectors.map((c) => ({ id: c.id, name: c.name, engine: c.engine })),
+    connectors: config.connectors.map((c) => ({ id: c.id, name: c.name, engine: c.engine, database: c.database })),
     catalog: (connectionId, opts) => getCatalog(connectorById(connectionId), opts?.refresh ?? false),
     ask: askImpl,
     execute: (sql, opts = {}) => executeGuarded(sql, connectorById(opts.connectionId), opts),
@@ -500,6 +520,16 @@ const unknownTable = firstUnknownTable(verdict.sql, fullCatalog, conn.dialect.gr
       const conn = connectorById(opts.connectionId);
       const s = (sql ?? '').trim();
       if (!s) throw new AskSqlError('INVALID_INPUT', { userMessage: 'Provide a SQL statement to explain.' });
+      // Guard first: `sql` is caller-supplied, so without this /explain is a free
+      // text channel to the model on the host's API key. It must be explainable
+      // read-only SQL to be worth explaining.
+      const verdict = guardSql({ sql: s, dialect: conn.dialect, policy });
+      if (!verdict.allowed) {
+        throw new AskSqlError('GUARD_BLOCKED', {
+          detail: `explain blocked: ${verdict.reason ?? 'not a read-only statement'}`,
+          userMessage: 'Only a read-only SQL query can be explained.',
+        });
+      }
       const catalog = await getCatalog(conn).catch(() => null);
       const result = await callModel({
         model: config.model,

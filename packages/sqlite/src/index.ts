@@ -28,12 +28,20 @@ import {
   type TriggerInfo,
 } from '@asksql/core';
 
+/** A prepared statement. `raw`/`columns` (better-sqlite3, newer node:sqlite) let
+ * us read rows positionally so duplicate result-column names stay distinct. */
+export interface SqliteStatement {
+  all(...params: unknown[]): unknown[];
+  get?(...params: unknown[]): unknown;
+  /** better-sqlite3: switch this statement to positional array rows. */
+  raw?(toggle?: boolean): SqliteStatement;
+  /** Result-column metadata in order; `.name` is the (alias-aware) output name. */
+  columns?(): { name: string }[];
+}
+
 /** Minimal driver surface satisfied by better-sqlite3 and node:sqlite. */
 export interface SqliteDriver {
-  prepare(sql: string): {
-    all(...params: unknown[]): unknown[];
-    get?(...params: unknown[]): unknown;
-  };
+  prepare(sql: string): SqliteStatement;
   exec?(sql: string): void;
   close?(): void;
 }
@@ -78,11 +86,14 @@ export class SqliteConnector implements Connector {
   readonly capabilities = CAPABILITIES;
   readonly id: string;
   readonly name: string;
+  readonly database?: string;
   private db: SqliteDriver | null = null;
 
   constructor(private readonly config: SqliteConnectorConfig) {
     this.id = config.id;
     this.name = config.name;
+    // Display hint: the file's base name (a passed-in handle has no name).
+    this.database = config.file ? (config.file.split(/[\\/]/).pop() || undefined) : undefined;
     this.db = config.database ?? null;
   }
 
@@ -249,9 +260,26 @@ export class SqliteConnector implements Connector {
     if (opts?.signal?.aborted) throw new AskSqlError('CANCELLED');
     const maxRows = opts?.maxRows ?? 1000;
     const started = Date.now();
-    let rawRows: Record<string, unknown>[];
+    const warnings: string[] = [];
+
+    let colNames: string[] = [];
+    let valueRows: unknown[][];
     try {
-      rawRows = this.handle().prepare(sql).all() as Record<string, unknown>[];
+      const stmt = this.handle().prepare(sql);
+      const meta = typeof stmt.columns === 'function' ? stmt.columns() : null;
+      if (meta && typeof stmt.raw === 'function') {
+        // Positional rows keep duplicate column names distinct (object rows collapse them).
+        stmt.raw(true);
+        colNames = meta.map((c) => String(c.name));
+        valueRows = stmt.all() as unknown[][];
+      } else {
+        const objRows = stmt.all() as Record<string, unknown>[];
+        colNames = meta ? meta.map((c) => String(c.name)) : objRows.length > 0 ? Object.keys(objRows[0]!) : [];
+        valueRows = objRows.map((r) => colNames.map((name) => r[name]));
+        if (meta && new Set(colNames).size !== colNames.length) {
+          warnings.push('Two result columns share a name, so only one value is shown for them. Add column aliases (AS) to tell them apart.');
+        }
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (/readonly|attempt to write a readonly database/i.test(msg)) {
@@ -263,23 +291,23 @@ export class SqliteConnector implements Connector {
       }
       throw new AskSqlError('DB_QUERY_ERROR', { userMessage: `The query failed: ${msg.slice(0, 200)}`, detail: msg, cause: err });
     }
-    const truncated = rawRows.length > maxRows;
-    const clipped = truncated ? rawRows.slice(0, maxRows) : rawRows;
-    const colNames = clipped.length > 0 ? Object.keys(clipped[0]!) : [];
+
+    const truncated = valueRows.length > maxRows;
+    const clipped = truncated ? valueRows.slice(0, maxRows) : valueRows;
     // SQLite exposes no result-column types, so infer each kind from the first
     // non-null value in the column.
-    const columns: ResultColumn[] = colNames.map((name) => ({
+    const columns: ResultColumn[] = colNames.map((name, i) => ({
       name,
-      kind: inferKind(clipped.find((r) => r[name] != null)?.[name]),
+      kind: inferKind(clipped.find((r) => r[i] != null)?.[i]),
     }));
-    const rows = clipped.map((r) => colNames.map((name) => shapeSqliteValue(r[name])));
+    const rows = clipped.map((r) => colNames.map((_, i) => shapeSqliteValue(r[i])));
     return {
       columns,
       rows,
       rowCount: rows.length,
       truncated,
       durationMs: Date.now() - started,
-      warnings: [],
+      warnings,
     };
   }
 

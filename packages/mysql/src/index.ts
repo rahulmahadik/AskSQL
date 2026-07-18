@@ -56,6 +56,7 @@ interface MysqlPool {
 }
 interface MysqlConn {
   query(sql: string, params?: unknown[]): Promise<[unknown, unknown]>;
+  query(options: { sql: string; rowsAsArray?: boolean }): Promise<[unknown, unknown]>;
   release(): void;
   threadId?: number;
   connection?: { connectionId?: number };
@@ -92,12 +93,14 @@ export class MysqlConnector implements Connector {
   readonly capabilities = CAPABILITIES;
   readonly id: string;
   readonly name: string;
+  readonly database?: string;
   private pool: MysqlPool | null = null;
   private resolvedDb: string | undefined;
 
   constructor(private readonly config: MysqlConnectorConfig) {
     this.id = config.id;
     this.name = config.name;
+    this.database = config.database || undefined;
   }
 
   /**
@@ -418,13 +421,18 @@ export class MysqlConnector implements Connector {
     }
     let onAbort: (() => void) | null = null;
     let cancelled = false;
+    let timedOut = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       await conn.query('START TRANSACTION READ ONLY');
       const maxMs = Math.max(1, Math.floor(timeoutMs));
-      // MAX_EXECUTION_TIME optimizer hint (SELECT only) + session var belt.
+      // Server-side deadline: MySQL honors MAX_EXECUTION_TIME (ms); MariaDB ignores
+      // it and uses max_statement_time (seconds). Set both; each is a no-op belt
+      // where unsupported. The client-side race below is the real guarantee.
       await conn.query(`SET SESSION MAX_EXECUTION_TIME = ${maxMs}`).catch(() => {});
+      await conn.query(`SET SESSION max_statement_time = ${(maxMs / 1000).toFixed(3)}`).catch(() => {});
 
-// Reliable backend id for KILL QUERY (thread-id wrappers vary).
+      // Reliable backend id for KILL QUERY (thread-id wrappers vary).
       let connId: number | undefined;
       try {
         const [idRows] = await conn.query('SELECT CONNECTION_ID() AS id');
@@ -441,7 +449,25 @@ export class MysqlConnector implements Connector {
         if (opts.signal.aborted) onAbort();
       }
 
-      const [rows, fields] = await conn.query(sql);
+      // Client-side deadline so a MariaDB (or any server that ignored the hint)
+      // cannot run past timeoutMs: on expiry, KILL the backend and reject the race.
+      // The query keeps its own catch so its later rejection isn't unhandled.
+      const runQuery = (async (): Promise<[unknown, unknown]> => {
+        try {
+          return await conn.query({ sql, rowsAsArray: true });
+        } catch (err) {
+          if (timedOut) return [[], []];
+          throw err;
+        }
+      })();
+      const deadline = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          timedOut = true;
+          if (connId) void pool.query(`KILL QUERY ${connId}`).catch(() => {});
+          reject(new AskSqlError('DB_TIMEOUT', { detail: `query exceeded ${maxMs}ms` }));
+        }, maxMs);
+      });
+      const [rows, fields] = await Promise.race([runQuery, deadline]);
       // A killed query can RETURN (e.g. MySQL SLEEP yields 1 when
       // interrupted) rather than throw - never surface a cancelled query's
       // results.
@@ -449,21 +475,19 @@ export class MysqlConnector implements Connector {
       await conn.query('COMMIT').catch(() => {});
 
       const fieldArr = (fields as { name: string; columnType?: number; type?: number }[] | undefined) ?? [];
-      const rowArr = (rows as Record<string, unknown>[]) ?? [];
+      const rowArr = (rows as unknown[][]) ?? [];
       // Classify from the driver's column type metadata (robust; digit-count
       // sampling misreads short BIGINTs as text).
-      const colNames = fieldArr.length > 0 ? fieldArr.map((f) => f.name) : rowArr[0] ? Object.keys(rowArr[0]) : [];
-      const finalCols: ResultColumn[] = colNames.map((name, i) => {
-        const f = fieldArr[i];
+      const finalCols: ResultColumn[] = fieldArr.map((f, i) => {
         // Prefer the driver's column-type metadata; only scan rows for a
         // sample value in the rare case the type code is missing/unknown.
-        const kind = mysqlKindFromType(f?.columnType ?? f?.type)
-        ?? inferMysqlKind(rowArr.find((r) => r[name] != null)?.[name]);
-        return { name, kind };
+        const kind = mysqlKindFromType(f.columnType ?? f.type)
+        ?? inferMysqlKind(rowArr.find((r) => r[i] != null)?.[i]);
+        return { name: f.name, kind };
       });
       const truncated = rowArr.length > maxRows;
       const clipped = truncated ? rowArr.slice(0, maxRows) : rowArr;
-      const outRows = clipped.map((r) => colNames.map((name) => shapeMysqlValue(r[name])));
+      const outRows = clipped.map((r) => finalCols.map((_, i) => shapeMysqlValue(r[i])));
       return {
         columns: finalCols,
         rows: outRows,
@@ -475,8 +499,13 @@ export class MysqlConnector implements Connector {
     } catch (err) {
       await conn.query('ROLLBACK').catch(() => {});
       if (cancelled || opts?.signal?.aborted) throw new AskSqlError('CANCELLED');
+      if (timedOut) throw new AskSqlError('DB_TIMEOUT', {
+        userMessage: 'The query took too long and was stopped.',
+        detail: `query exceeded ${Math.max(1, Math.floor(timeoutMs))}ms`,
+      });
       throw mapQueryError(err);
     } finally {
+      if (timer) clearTimeout(timer);
       if (onAbort && opts?.signal) opts.signal.removeEventListener('abort', onAbort);
       conn.release();
     }

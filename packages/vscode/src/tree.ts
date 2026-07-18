@@ -65,12 +65,19 @@ export class SchemaTreeProvider implements vscode.TreeDataProvider<Node>, vscode
       // Ids must be stable and unique: VS Code falls back to the LABEL, and two
       // connections can share one (the wizard defaults the name to the engine).
       item.id = `conn:${node.conn.id}`;
-      item.description = `${node.conn.engine} · ${node.conn.scope}`;
+      // Show the actual database/file being queried, not the settings scope - that
+      // is what tells two same-engine connections apart. Engine leads, scope is in
+      // the tooltip.
+      const target =
+        node.conn.engine === 'sqlite'
+          ? ((node.conn.file ?? '').split(/[\\/]/).pop() ?? '')
+          : (node.conn.database ?? '');
+      item.description = [node.conn.engine, target].filter(Boolean).join(' · ');
       item.iconPath = new vscode.ThemeIcon('database');
       item.contextValue = 'asksql.connection';
       item.tooltip =
         `${node.conn.name} (${node.conn.engine})\n` +
-        `id: ${node.conn.id}  ->  use #${node.conn.id} in chat\n` +
+        `${target ? `database: ${target}\n` : ''}` +
         `defined in: ${node.conn.scope} settings`;
       return item;
     }
@@ -91,10 +98,12 @@ export class SchemaTreeProvider implements vscode.TreeDataProvider<Node>, vscode
       item.description = `${t.schema ? `${t.schema} · ` : ''}${t.columns.length} col${t.columns.length === 1 ? '' : 's'}`;
       item.iconPath = new vscode.ThemeIcon(ICON[t.kind] ?? 'table');
       item.contextValue = 'asksql.table';
-      item.tooltip = new vscode.MarkdownString(
-        `**${t.schema ? `${t.schema}.` : ''}${t.name}** (${t.kind.replace('_', ' ')})\n\n` +
-          t.columns.map((c) => `- \`${c.name}\` ${c.dbType}${c.nullable ? '' : ' not null'}`).join('\n'),
-      );
+      // Names come from the connected database (untrusted); appendText escapes
+      // markdown so a crafted table/column name cannot inject a link or an image beacon.
+      const tip = new vscode.MarkdownString();
+      tip.appendText(`${t.schema ? `${t.schema}.` : ''}${t.name} (${t.kind.replace('_', ' ')})`);
+      for (const c of t.columns) tip.appendText(`\n• ${c.name}  ${c.dbType}${c.nullable ? '' : ' not null'}`);
+      item.tooltip = tip;
       return item;
     }
     if (node.kind === 'column') {

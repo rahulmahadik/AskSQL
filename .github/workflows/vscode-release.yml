@@ -53,7 +53,7 @@ jobs:
       - run: pnpm --filter asksql-vscode run build
       - name: Publish to VS Code Marketplace
         working-directory: packages/vscode
-        run: npx --yes @vscode/vsce@^3 publish --no-dependencies
+        run: npx --yes @vscode/vsce@3.9.2 publish --no-dependencies
         env:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
       # Optional: also publish to Open VSX (for VSCodium / Cursor / etc.).

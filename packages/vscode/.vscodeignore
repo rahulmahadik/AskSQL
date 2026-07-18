@@ -4,7 +4,6 @@
 .vscode/**
 node_modules/**
 src/**
-webview/**
 esbuild.mjs
 eslint.config.mjs
 tsconfig.json
@@ -14,7 +13,9 @@ tsconfig.json
 **/tsconfig.tsbuildinfo
 .gitignore
 .eslintrc*
-internal/**
+# README screenshots load from GitHub over https (see README), so shipping them in
+# the vsix is dead weight - VS Code never renders the bundled copies.
+images/**
 
 # Keep: dist/extension.js, package.json, README.md, CHANGELOG.md, LICENSE, icon.png
 !dist/extension.js

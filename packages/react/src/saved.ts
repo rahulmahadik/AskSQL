@@ -62,7 +62,7 @@ export class SavedQueryStore {
       question: q.question,
       sql: q.sql,
       connectionId: q.connectionId,
-      savedAt: q.at ?? '',
+      savedAt: q.at ?? new Date().toISOString(),
     };
     const next = [entry, ...list].slice(0, 200);
     this.kv.setItem(KEY, JSON.stringify(next));

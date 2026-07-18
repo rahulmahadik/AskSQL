@@ -35,6 +35,7 @@
     "directory": "packages/server"
   },
   "homepage": "https://github.com/rahulmahadik/AskSQL#readme",
+  "bugs": "https://github.com/rahulmahadik/AskSQL/issues",
   "publishConfig": {
     "access": "public"
   },

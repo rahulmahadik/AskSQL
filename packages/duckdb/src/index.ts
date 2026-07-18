@@ -94,6 +94,7 @@ export class DuckDbConnector implements Connector {
   readonly capabilities = DUCK_CAPABILITIES;
   readonly id: string;
   readonly name: string;
+  readonly database?: string;
   private instance: DuckInstance | null = null;
   private conn: DuckConnection | null = null;
   private excelLoaded = false;
@@ -102,6 +103,8 @@ export class DuckDbConnector implements Connector {
   constructor(private readonly config: DuckDbConnectorConfig) {
     this.id = config.id;
     this.name = config.name;
+    // Display hint: the database file's base name, or in-memory when none.
+    this.database = config.path ? (config.path.split(/[\\/]/).pop() || undefined) : 'in-memory';
   }
 
   private async api(): Promise<{ DuckDBInstance: { create(path?: string): Promise<DuckInstance> } }> {

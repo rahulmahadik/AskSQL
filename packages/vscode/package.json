@@ -2,8 +2,8 @@
   "name": "asksql-vscode",
   "private": true,
   "displayName": "AskSQL",
-  "description": "AI database chat in VS Code: ask in plain language, review the SQL, get answers. Read-only by design, bring your own model.",
-  "version": "0.1.1",
+  "description": "AI database chat for Postgres, MySQL and SQLite: ask in plain language, review the SQL, get answers. Read-only by design, bring your own model.",
+  "version": "0.1.0",
   "publisher": "RahulMahadik",
   "license": "Apache-2.0",
   "pricing": "Free",
@@ -14,7 +14,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/rahulmahadik/AskSQL.git",
+    "url": "https://github.com/rahulmahadik/AskSQL.git",
     "directory": "packages/vscode"
   },
   "homepage": "https://github.com/rahulmahadik/AskSQL#readme",
@@ -22,17 +22,23 @@
     "AI",
     "Chat",
     "Data Science",
-    "Visualization"
+    "Machine Learning"
   ],
   "keywords": [
     "sql",
     "text-to-sql",
     "nl2sql",
+    "natural language",
+    "database chat",
+    "database client",
+    "sql assistant",
+    "query",
     "database",
     "ai",
     "llm",
     "postgres",
     "mysql",
+    "mariadb",
     "sqlite"
   ],
   "engines": {
@@ -86,12 +92,6 @@
         "title": "Ask a Question",
         "category": "AskSQL",
         "icon": "$(comment-discussion)"
-      },
-      {
-        "command": "asksql.selectModel",
-        "title": "Select Model",
-        "category": "AskSQL",
-        "icon": "$(sparkle)"
       },
       {
         "command": "asksql.pickModel",
@@ -208,7 +208,7 @@
         "asksql.model": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Model id for `#asksql.provider`. Leave empty and run **AskSQL: Select Model** to pick from the models your endpoint actually has - AskSQL does not guess a model id, because a default you have not pulled fails in a way that looks like a bug.",
+          "markdownDescription": "Model id for `#asksql.provider#`. Leave empty and run **AskSQL: Select Model** to pick from the models your endpoint actually has - AskSQL does not guess a model id, because a default you have not pulled fails in a way that looks like a bug.",
           "scope": "machine"
         },
         "asksql.baseURL": {
@@ -220,8 +220,10 @@
         "asksql.maxRows": {
           "type": "number",
           "default": 1000,
+          "minimum": 1,
+          "maximum": 100000,
           "description": "Row cap injected into every query.",
-          "scope": "window"
+          "scope": "machine"
         },
         "asksql.requireApproval": {
           "type": "boolean",
@@ -246,7 +248,7 @@
         "asksql.sampleColumnValues": {
           "type": "boolean",
           "default": false,
-          "scope": "window",
+          "scope": "machine",
           "markdownDescription": "Read a few real values from short text columns that are not declared enums (for example a `status` column that only holds `active`, `closed`, `pending`) and show them to the model, so it filters on codes that actually exist instead of guessing casing and spelling. **This sends those values to the model** - it is the one setting that lets column data, not just schema, leave for the model, so it is off by default and does nothing with a local model beyond your own machine. Only short, low-cardinality columns are sampled; long or high-cardinality columns are skipped."
         }
       }
@@ -346,7 +348,7 @@
     "build": "node esbuild.mjs",
     "watch": "node esbuild.mjs --watch",
     "lint": "eslint src",
-    "package": "npx --yes @vscode/vsce@^3 package --no-dependencies",
+    "package": "npx --yes @vscode/vsce@3.9.2 package --no-dependencies",
     "typecheck": "tsc --noEmit",
     "vscode:prepublish": "npm run bundle",
     "bundle": "npm run typecheck && node esbuild.mjs --production"

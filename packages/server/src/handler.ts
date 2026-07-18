@@ -75,7 +75,7 @@ export class AskSqlServer {
       // by this try/catch and mapped to an error response, never escaping.
       if (req.method === 'GET' && path === '/connections') return this.listConnections(auth);
       if (req.method === 'GET' && path === '/schema') return await this.getSchema(req, auth);
-      if (req.method === 'GET' && path === '/health') return this.health();
+      if (req.method === 'GET' && path === '/health') return this.health(auth);
       if (req.method === 'GET' && path === '/history') return await this.getHistory(req, auth);
       if (req.method === 'POST' && path === '/chat') return await this.chat(req, auth);
       if (req.method === 'POST' && path === '/execute') return await this.execute(req, auth);
@@ -130,7 +130,7 @@ export class AskSqlServer {
     // Credentials NEVER appear here - id/name/engine only.
     const items = this.config.connectors
       .filter((c) => auth.allowedConnectionIds.includes(c.id))
-      .map((c) => ({ id: c.id, name: c.name, engine: c.engine, capabilities: c.capabilities }));
+      .map((c) => ({ id: c.id, name: c.name, engine: c.engine, database: c.database, capabilities: c.capabilities }));
     return json(200, { connections: items });
   }
 
@@ -146,7 +146,7 @@ export class AskSqlServer {
     const limit = clampInt(req.query['per_page'], 50, 1, 200);
     const page = clampInt(req.query['page'], 1, 1, 1_000_000);
     const offset = (page - 1) * limit;
-    const result = await this.history.list(connectionId, { limit, offset });
+    const result = await this.history.list(connectionId, { limit, offset, userId: auth.userId });
     return json(200, { items: result.items, total: result.total, page, per_page: limit });
   }
 
@@ -173,7 +173,7 @@ export class AskSqlServer {
 
       let settled: Settled | undefined;
       void engine
-        .ask(question, { connectionId, context: body.context, onEvent })
+        .ask(question, { connectionId, context: body.context, onEvent, userId: auth.userId })
         .then(
           (result: AskResult) => { settled = { ok: true, result }; wake(); },
           (error: unknown) => { settled = { ok: false, error }; wake(); },
@@ -213,7 +213,7 @@ export class AskSqlServer {
     if (!sql.trim()) throw new AskSqlError('INVALID_INPUT', { userMessage: 'Provide a SQL statement to run.' });
 
     try {
-      const result = await this.engine.execute(sql, { connectionId, question: body.question, maxRows: body.maxRows });
+      const result = await this.engine.execute(sql, { connectionId, question: body.question, maxRows: body.maxRows, userId: auth.userId });
       await this.audit(connectionId, auth, sql, 'allowed', 'ok', result.rowCount);
       return json(200, { result });
     } catch (err) {
@@ -238,15 +238,23 @@ export class AskSqlServer {
     return json(200, { explanation });
   }
 
-  private health(): JsonResponse {
+  private health(auth: AuthContext): JsonResponse {
+    // Scope this like every other endpoint. Listing every connector let a caller
+    // enumerate ids they have no access to - and those ids are exactly what
+    // /schema and /execute take, so it was a targeting primitive.
     return json(200, {
       status: 'ok',
-      connections: this.config.connectors.map((c) => ({ id: c.id, engine: c.engine })),
+      connections: this.config.connectors
+        .filter((c) => auth.allowedConnectionIds.includes(c.id))
+        .map((c) => ({ id: c.id, engine: c.engine })),
     });
   }
 
   private async readBody(req: ServerRequest): Promise<Record<string, unknown>> {
-    const raw = await req.json().catch(() => {
+    const raw = await req.json().catch((err: unknown) => {
+      // The adapter may reject with a real reason (e.g. body too large); keep it
+      // instead of mislabeling every failure as invalid JSON.
+      if (AskSqlError.is(err)) throw err;
       throw new AskSqlError('INVALID_INPUT', { userMessage: 'Request body must be valid JSON.' });
     });
     if (raw && typeof raw === 'object') return raw as Record<string, unknown>;

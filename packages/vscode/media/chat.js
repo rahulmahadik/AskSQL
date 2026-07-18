@@ -72,13 +72,13 @@
    * question that would silently cancel the first.
    */
   /**
-   * Lock the inputs that must not change mid-turn. Switching the database or the
-   * model while a question is running would answer against something the user is
-   * no longer looking at, so both pickers are frozen until the turn ends. The
-   * database picker also stays disabled when there is only one database to pick.
+   * The textarea stays editable during a turn so you can compose the next question
+   * while this one runs; only SUBMITTING is blocked until the turn finishes or is
+   * cancelled (see ask() and the Enter handler). The database picker still freezes -
+   * switching it mid-turn would answer against a database you are no longer looking
+   * at - and stays disabled when there is only one database to pick.
    */
   function applyLock() {
-    $q.disabled = busy;
     $conn.disabled = busy || connCount <= 1;
   }
 
@@ -103,7 +103,11 @@
     const table = el('table');
     const thead = el('thead');
     const hrow = el('tr');
-    for (const c of columns) hrow.appendChild(el('th', null, c));
+    for (const c of columns) {
+      const th = el('th', null, c);
+      th.setAttribute('scope', 'col');
+      hrow.appendChild(th);
+    }
     thead.appendChild(hrow);
     table.appendChild(thead);
     const tbody = el('tbody');
@@ -190,15 +194,16 @@
   }
 
   // Enter sends, Shift+Enter is a newline. isComposing guards IME input (a Japanese
-  // or Chinese composition ends on Enter and must not fire the question).
+  // or Chinese composition ends on Enter and must not fire the question). While a
+  // turn is running Enter is swallowed - it neither submits (you can only submit
+  // once the turn ends or is cancelled) nor drops a stray newline into your draft.
   $q.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
       e.preventDefault();
-      ask();
+      if (!busy) ask();
     }
   });
-  // Escape cancels; on window because the textarea is disabled while busy and
-  // disabled controls receive no key events.
+  // Escape cancels a running turn from anywhere in the panel.
   window.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && busy) {
       e.preventDefault();
@@ -319,6 +324,7 @@
         turn.appendChild(el('div', 'note', 'No rows matched.'));
       } else {
         turn.appendChild(renderTable(m.columns, m.rows));
+        if (m.warnings) for (const w of m.warnings) turn.appendChild(el('div', 'warn', w));
         if (m.note) {
           // A catalog answer: say so, and do not offer CSV of a schema listing.
           turn.appendChild(el('div', 'note', m.note));

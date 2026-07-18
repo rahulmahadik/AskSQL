@@ -73,6 +73,14 @@ describe('SQLite query + guard', () => {
     expect(res.rowCount).toBe(1);
     expect(res.truncated).toBe(true);
   });
+
+  it('duplicate result-column names keep both columns and warn', async () => {
+    // node:sqlite has columns() but no raw(): the object row collapses the two
+    // `id`s, so we keep the real column count from metadata and warn the user.
+    const res = await conn.execute('SELECT b.id, a.id FROM books b JOIN authors a ON a.id = b.author_id LIMIT 1');
+    expect(res.columns.map((c) => c.name)).toEqual(['id', 'id']);
+    expect(res.warnings.some((w) => /share a name/i.test(w))).toBe(true);
+  });
 });
 
 describe('SQLite value sampling (opt-in)', () => {

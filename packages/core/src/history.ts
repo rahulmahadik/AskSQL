@@ -17,11 +17,15 @@ export class MemoryHistoryStore implements HistoryStore {
 
   async list(
     connectionId: string,
-    opts?: { limit?: number; offset?: number },
+    opts?: { limit?: number; offset?: number; userId?: string },
   ): Promise<HistoryPage> {
     const limit = Math.max(1, Math.min(opts?.limit ?? 50, 200));
     const offset = Math.max(0, opts?.offset ?? 0);
-    const filtered = this.entries.filter((e) => e.connectionId === connectionId);
+    // When a userId is supplied (server mode) rows are scoped to that user, so
+    // one caller never reads another's questions and SQL.
+    const filtered = this.entries.filter(
+      (e) => e.connectionId === connectionId && (opts?.userId === undefined || e.userId === opts.userId),
+    );
     return {
       items: filtered.slice(offset, offset + limit),
       total: filtered.length,

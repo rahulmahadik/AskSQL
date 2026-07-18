@@ -260,6 +260,24 @@ function hasMysqlExecutableComment(sql: string): boolean {
   return false;
 }
 
+/**
+ * True for a SQLite recursive CTE that a caller forces to full materialization
+ * (an aggregate, DISTINCT or GROUP BY) with no LIMIT to bound it. `node:sqlite`
+ * runs synchronously on the extension-host thread, so such a query - e.g.
+ * `WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM r) SELECT count(*) FROM r`
+ * - never returns and freezes the whole window (Stop is inert). A plain
+ * `SELECT ... FROM r` streams lazily and is bounded by the auto-LIMIT, so it is safe.
+ */
+function sqliteRecursiveWedge(strippedInner: string): boolean {
+  if (!/\bwith\s+recursive\b/iu.test(strippedInner)) return false;
+  if (/\blimit\b/iu.test(strippedInner)) return false;
+  return (
+    /\b(count|sum|avg|min|max|total|group_concat)\s*\(/iu.test(strippedInner) ||
+    /\bgroup\s+by\b/iu.test(strippedInner) ||
+    /\bselect\s+distinct\b/iu.test(strippedInner)
+  );
+}
+
 function blocked(sql: string, ruleId: string, reason: string): GuardVerdict {
   return {
     allowed: false,
@@ -543,6 +561,9 @@ export function guardSql(input: GuardInput): GuardVerdict {
   }
   if (/\binto\s+(outfile|dumpfile)\b/iu.test(strippedInner)) {
     return blocked(original, 'into_outfile', 'Writing query output to files is not allowed.');
+  }
+  if (dialect.engine === 'sqlite' && sqliteRecursiveWedge(strippedInner)) {
+    return blocked(original, 'recursive_no_limit', 'This recursive query could run without stopping. Add a LIMIT so it stays bounded.');
   }
 
 // ---- Parse ONCE (fail-closed). `parse` yields the AST and the table

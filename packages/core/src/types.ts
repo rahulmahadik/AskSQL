@@ -229,6 +229,8 @@ export interface Connector {
   readonly id: string;
   readonly name: string;
   readonly engine: EngineKind;
+  /** The connected database / file name, for display (disambiguates same-engine connections). */
+  readonly database?: string;
   readonly dialect: DialectInfo;
   readonly capabilities: CapabilityFlags;
   connect(): Promise<void>;
@@ -285,6 +287,8 @@ export interface HistoryEntry {
   readonly id: string;
   readonly at: string;
   readonly connectionId: string;
+  /** Owning user in multi-user (server) mode. Absent for single-user surfaces. */
+  readonly userId?: string;
   readonly question?: string;
   readonly sql: string;
   readonly status: 'ok' | 'blocked' | 'error';
@@ -303,7 +307,7 @@ export interface HistoryStore {
   add(entry: HistoryEntry): Promise<void>;
   list(
     connectionId: string,
-    opts?: { limit?: number; offset?: number },
+    opts?: { limit?: number; offset?: number; userId?: string },
   ): Promise<HistoryPage>;
 }
 
@@ -453,6 +457,8 @@ export interface AskOptions {
   readonly signal?: AbortSignal;
   /** Prior turns for follow-up questions. */
   readonly context?: readonly { question: string; sql: string }[];
+  /** Owning user, recorded on every history row this ask writes (server mode). */
+  readonly userId?: string;
   readonly onEvent?: (event: EngineEvent) => void;
 }
 

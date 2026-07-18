@@ -29,6 +29,23 @@ import { userMessage, UserFacingError } from './errors.js';
 
 /** Rows rendered inline before we stop and point at the editor instead. */
 const INLINE_ROWS = 50;
+/** Per-cell preview cap. A single huge TEXT/JSON value must not cross to the webview whole. */
+const MAX_CELL_CHARS = 4000;
+/** Result store bounds: kept for export/copy, evicted by count AND approx bytes. */
+const MAX_RESULTS = 80;
+const MAX_RESULT_BYTES = 24 * 1024 * 1024;
+
+/** Cheap byte estimate for a result (samples a few rows) - a wide 100k-row result must not pin memory. */
+function estimateResultBytes(res: ResultSet): number {
+  const rows = res.rows;
+  if (rows.length === 0) return 256;
+  const sample = Math.min(rows.length, 5);
+  let per = 0;
+  for (let i = 0; i < sample; i++) {
+    for (const v of rows[i]!) per += v == null ? 4 : typeof v === 'object' ? 32 : String(v).length + 2;
+  }
+  return Math.ceil((per / sample) * rows.length) + 256;
+}
 
 /** Which model answers. Chosen in OUR picker, not VS Code's. */
 type ModelChoice = { readonly kind: 'vscode'; readonly id: string } | { readonly kind: 'configured' };
@@ -58,8 +75,11 @@ interface ModelOption {
  */
 const cell = (v: unknown): string | null => {
   if (v === null || v === undefined) return null;
-  if (typeof v === 'object') return JSON.stringify(v);
-  return String(v);
+  const s = typeof v === 'object' ? JSON.stringify(v) : String(v);
+  // One big TEXT/JSON cell used to cross postMessage and land in the DOM whole -
+  // a multi-MB payload froze the panel. The grid is a preview; the full value is
+  // still one click away via "Open results in editor" / Export CSV.
+  return s.length > MAX_CELL_CHARS ? `${s.slice(0, MAX_CELL_CHARS)}... (${s.length - MAX_CELL_CHARS} more characters)` : s;
 };
 
 /** Where the model choice is remembered across reloads. */
@@ -85,6 +105,15 @@ const DESCRIBE_PATTERNS: readonly RegExp[] = [
   /^\s*structure\s+of\s+(?:the\s+)?["'`]?([\w.]+)["'`]?/i,
 ];
 
+/** "List the tables" questions answered from the catalog, not the model. */
+const LIST_TABLES_PATTERNS: readonly RegExp[] = [
+  /^\s*(?:show|list)\s+(?:me\s+)?(?:all\s+)?(?:the\s+)?(?:tables|views)(?:\s+(?:in|of|for)\s+(?:this|the|my)?\s*(?:database|schema|db|connection))?\s*[?.!]?\s*$/i,
+  /^\s*(?:what|which)\s+tables\s+(?:are\s+(?:there|in\s+(?:this|the|my)?\s*(?:database|schema|db|connection))|do\s+(?:i|we)\s+have|exist)\s*[?.!]?\s*$/i,
+  /^\s*(?:what|which)\s+(?:are\s+)?(?:the\s+)?tables(?:\s+(?:in|of)\s+(?:this|the|my)?\s*(?:database|schema|db|connection))?\s*[?.!]?\s*$/i,
+  /^\s*(?:list|show)\s+(?:me\s+)?(?:the\s+)?(?:database\s+)?schema\s*[?.!]?\s*$/i,
+  /^\s*tables\s*[?.!]?\s*$/i,
+];
+
 export class ChatViewProvider implements vscode.WebviewViewProvider {
   private view: vscode.WebviewView | undefined;
   /**
@@ -103,6 +132,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
    * a long session does not pin every result set in memory.
    */
   private readonly results = new Map<string, ResultSet>();
+  private readonly resultBytes = new Map<string, number>();
+  private totalResultBytes = 0;
   private resultSeq = 0;
   /**
    * Prior turns this session, passed to the engine as context so a follow-up
@@ -208,6 +239,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     // silently be a follow-up to a conversation the user can no longer see.
     this.history.length = 0;
     this.results.clear();
+    this.resultBytes.clear();
+    this.totalResultBytes = 0;
     this.post({ type: 'clear' });
   }
 
@@ -461,7 +494,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const question = text.trim();
     if (!question) return;
     const conns = connectionConfigs();
-    const conn = conns.find((c) => c.id === connectionId) ?? conns[0];
+    // A provided id that no longer resolves is stale (settings changed under the
+    // webview); fall back to the first connection ONLY when none was provided, so
+    // a question is never silently run against the wrong database.
+    const conn = connectionId ? conns.find((c) => c.id === connectionId) : conns[0];
     // Open the turn FIRST, so even the no-connection case renders the question
     // and an actionable error instead of the question silently vanishing.
     this.post({ type: 'turnStart', question, connection: conn ? (this.connLabels().get(conn.id) ?? conn.name) : '' });
@@ -470,15 +506,47 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       this.post({ type: 'turnEnd' });
       return;
     }
+    if (!conn) {
+      this.post({ type: 'error', message: 'That database is no longer available. Pick one from the Database menu and ask again.' });
+      this.post({ type: 'turnEnd' });
+      return;
+    }
     this.running?.abort();
     const ac = new AbortController();
     this.running = ac;
+    // Non-fatal notices the engine emits mid-turn (schema narrowed, row limit
+    // lowered) - shown with the result rather than lost as transient progress.
+    const turnWarnings: string[] = [];
 
     try {
+      // "What tables are here?" is answered from the catalog, not the model - the
+      // schema block IS the table list, but the model refuses it as unanswerable.
+      if (LIST_TABLES_PATTERNS.some((re) => re.test(question))) {
+        this.post({ type: 'progress', label: 'Reading schema' });
+        const cat = await this.engines.catalogFor(conn.id);
+        if (ac.signal.aborted) return;
+        if (cat.tables.length === 0) {
+          const label = this.connLabels().get(conn.id) ?? conn.name;
+          this.post({ type: 'error', message: `No tables the current user can read in ${label}.` });
+          return;
+        }
+        this.post({
+          type: 'result',
+          columns: ['table', 'type', 'columns'],
+          rows: cat.tables.map((t) => [`${t.schema ? `${t.schema}.` : ''}${t.name}`, t.kind.replace('_', ' '), String(t.columns.length)]),
+          rowCount: cat.tables.length,
+          shown: cat.tables.length,
+          durationMs: 0,
+          truncated: false,
+          note: `${cat.tables.length} table${cat.tables.length === 1 ? '' : 's'}, read from the schema - no query was run.`,
+        });
+        return;
+      }
+
       // Structure questions are answered from the catalog, not the model. Only
       // fetch the catalog when the question looks like one, so an ordinary question
       // does not pay for an introspect the engine will do anyway.
-      if (conn && DESCRIBE_PATTERNS.some((re) => re.test(question))) {
+      if (DESCRIBE_PATTERNS.some((re) => re.test(question))) {
         this.post({ type: 'progress', label: 'Reading schema' });
         const cat = await this.engines.catalogFor(conn.id);
         if (ac.signal.aborted) return;
@@ -519,20 +587,21 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       const answer = await engine.ask(question, {
         // The resolved connection, matching the turn's displayed attribution - not
         // the raw webview id, which can be stale before its state refresh arrives.
-        connectionId: conn?.id,
+        connectionId: conn.id,
         // Follow-up context, but ONLY for the connection being asked now - a prior
         // query against another database references tables this one does not have.
-        context: this.history.filter((h) => h.connectionId === (conn?.id ?? '')).slice(-6).map((h) => ({ question: h.question, sql: h.sql })),
+        context: this.history.filter((h) => h.connectionId === conn.id).slice(-6).map((h) => ({ question: h.question, sql: h.sql })),
         signal: ac.signal,
         onEvent: (e) => {
           if (e.type === 'stage') this.post({ type: 'progress', label: STAGE_LABEL[e.stage] ?? e.stage });
+          else if (e.type === 'warning') turnWarnings.push(e.message);
         },
       });
       if (ac.signal.aborted) return;
 
       // Remember this turn as context for the next follow-up (bounded), tagged with
       // its connection so a later switch does not carry the wrong schema's queries.
-      this.history.push({ question, sql: answer.sql, connectionId: conn?.id ?? '' });
+      this.history.push({ question, sql: answer.sql, connectionId: conn.id });
       if (this.history.length > 20) this.history.shift();
 
       // Approval requires reading the query, so that setting forces SQL first.
@@ -544,7 +613,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         type: 'sql',
         sql: answer.sql,
         // The turn's connection, so Explain plan targets it instead of the live dropdown.
-        connectionId: conn?.id,
+        connectionId: conn.id,
         explanation: answer.explanation ?? '',
         autoLimited: answer.guard.autoLimited,
         placement: approval ? 'before' : (cfg.get<string>('sqlDisplay') ?? 'after'),
@@ -585,9 +654,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         shown: Math.min(res.rowCount, INLINE_ROWS),
         durationMs: res.durationMs,
         truncated: res.truncated,
+        warnings: [...new Set([...turnWarnings, ...res.warnings])],
       });
     } catch (err) {
       if (ac.signal.aborted) return;
+      // A connection that failed to BUILD (bad file path, missing database name)
+      // is absent from the engine, so it surfaces as a generic "unknown
+      // connection". Show the real reason the tree already records.
+      const failure = this.engines.failureFor(conn.id);
+      if (failure) {
+        this.post({ type: 'error', message: userMessage(failure) });
+        return;
+      }
       if (AskSqlError.is(err)) {
         const suggested = (err as { suggestedSql?: string }).suggestedSql;
         this.post({
@@ -611,13 +689,20 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  /** Keep a turn's result, bounded but above the webview's turn cap so a visible turn's result is never evicted. */
+  /** Keep a turn's result, bounded by count AND approx bytes so a few huge results cannot pin memory. */
   private storeResult(id: string, res: ResultSet): void {
+    const bytes = estimateResultBytes(res);
     this.results.set(id, res);
-    while (this.results.size > 80) {
+    this.resultBytes.set(id, bytes);
+    this.totalResultBytes += bytes;
+    // Evict oldest first, but never the just-stored result (a visible turn's
+    // export/copy must keep working).
+    while (this.results.size > 1 && (this.results.size > MAX_RESULTS || this.totalResultBytes > MAX_RESULT_BYTES)) {
       const oldest = this.results.keys().next().value;
-      if (oldest === undefined) break;
+      if (oldest === undefined || oldest === id) break;
       this.results.delete(oldest);
+      this.totalResultBytes -= this.resultBytes.get(oldest) ?? 0;
+      this.resultBytes.delete(oldest);
     }
   }
 
@@ -663,6 +748,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       this.post({ type: 'copied', resultId });
     } catch (err) {
       log.error('copy to clipboard failed', err);
+      this.post({ type: 'error', message: 'Could not copy the result to the clipboard.' });
     }
   }
 
@@ -699,7 +785,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     <p class="empty-sub">The SQL is always shown before anything runs, and only read-only queries are allowed.</p>
     <ul class="samples">
       <li><button class="sample" type="button">What tables are in this database?</button></li>
-      <li><button class="sample" type="button">How many rows are in each table?</button></li>
+      <li><button class="sample" type="button">Show me 10 rows from one of the tables</button></li>
     </ul>
   </div>
   <footer class="composer">

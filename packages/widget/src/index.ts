@@ -50,8 +50,15 @@ export function mount(options: MountOptions): WidgetHandle {
   if (typeof document === 'undefined') {
     throw new Error('AskSQL.mount must run in a browser.');
   }
+  // Attach the shadow to an element WE create, never to the caller's. Attaching a
+  // shadow root to an existing element stops its light-DOM children rendering -
+  // and since `target` defaults to document.body, the documented zero-config call
+  // blanked the entire host page. Own the mount point instead.
   const host = resolveTarget(options.target);
-  const shadow = host.shadowRoot ?? host.attachShadow({ mode: 'open' });
+  const mountPoint = document.createElement('div');
+  mountPoint.setAttribute('data-asksql-widget', '');
+  host.appendChild(mountPoint);
+  const shadow = mountPoint.attachShadow({ mode: 'closed' });
 
 // Inject styles INTO the shadow root only, so nothing leaks either
 // direction. We do NOT call ensureStyles(document) here - that would append
@@ -92,6 +99,7 @@ export function mount(options: MountOptions): WidgetHandle {
     unmount() {
       root.unmount();
       container.remove();
+      mountPoint.remove();
       style.remove();
     },
   };

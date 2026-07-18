@@ -161,6 +161,11 @@ pre.sql {
   font-size: 0.9em;
 }
 
+.warn {
+  color: var(--vscode-editorWarning-foreground, var(--vscode-descriptionForeground));
+  font-size: 0.9em;
+}
+
 /* Results ----------------------------------------------------------------- */
 
 .tablewrap {
