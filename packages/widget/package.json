@@ -4,18 +4,25 @@
   "description": "Vanilla-JS AskSQL embed for non-React pages. Mounts the bubble/chat into a shadow root so host CSS never bleeds in or out.",
   "type": "module",
   "main": "./dist/index.js",
+  "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "unpkg": "./dist/asksql-widget.js",
+  "jsdelivr": "./dist/asksql-widget.js",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./browser": {
+      "types": "./dist/browser.d.ts",
+      "default": "./dist/browser.js"
     }
   },
   "files": [
     "dist"
   ],
   "scripts": {
-    "build": "tsc -b"
+    "build": "tsc -b && node esbuild.mjs"
   },
   "dependencies": {
     "@asksql/react": "workspace:^"
@@ -27,6 +34,7 @@
   "devDependencies": {
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
+    "esbuild": "^0.28.1",
     "react": "^19.2.7",
     "react-dom": "^19.2.7"
   },

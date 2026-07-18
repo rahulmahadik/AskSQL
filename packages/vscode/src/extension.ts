@@ -21,7 +21,7 @@ import { EngineManager, apiKeyKey, storePassword, passwordKey, connectionStringK
 import { ChatViewProvider } from './chatView.js';
 import { SchemaTreeProvider, type Node } from './tree.js';
 import { addConnection, removeConnection } from './wizard.js';
-import { selectProvider } from './models.js';
+import { selectProvider, selectApiKey } from './models.js';
 import { initLog, log } from './log.js';
 import { userMessage } from './errors.js';
 
@@ -267,21 +267,9 @@ export function activate(ctx: vscode.ExtensionContext): void {
       await vscode.window.showTextDocument(doc, { preview: false });
     }),
 
-    vscode.commands.registerCommand('asksql.setApiKey', guard(async () => {
-      const provider = vscode.workspace.getConfiguration('asksql').get<string>('provider') ?? 'ollama';
-      const key = await vscode.window.showInputBox({
-        prompt: `API key for ${provider} (stored in your OS keychain, never in settings)`,
-        password: true,
-        ignoreFocusOut: true,
-      });
-      if (key === undefined) return;
-      // secrets.onDidChange resets the engines.
-      if (key) await ctx.secrets.store(apiKeyKey(provider), key);
-      else await ctx.secrets.delete(apiKeyKey(provider));
-      void vscode.window.showInformationMessage(
-        key ? `AskSQL: API key saved for ${provider}.` : `AskSQL: API key cleared for ${provider}.`,
-      );
-    })),
+    // Pick the provider the key is for (never assume the current one - that put
+    // keys in the wrong slot), then store it. secrets.onDidChange resets engines.
+    vscode.commands.registerCommand('asksql.setApiKey', guard(() => selectApiKey(ctx.secrets))),
 
     /**
      * Takes the clicked node when invoked from the tree's key icon. Asking

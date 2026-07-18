@@ -10,6 +10,7 @@ export { AskSqlServer, isStream, errorResponse } from './handler.js';
 export type { JsonResponse, StreamResponse, HandlerResponse } from './handler.js';
 export type {
   AskSqlServerConfig,
+  ErrorContext,
   AuthHook,
   AuthContext,
   ServerRequest,
