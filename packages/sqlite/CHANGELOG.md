@@ -1,5 +1,12 @@
 # @asksql/sqlite
 
+## 0.2.2
+
+### Patch Changes
+
+- Updated dependencies
+  - @asksql/core@0.3.0
+
 ## 0.2.1
 
 ### Patch Changes

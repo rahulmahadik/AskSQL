@@ -4,6 +4,24 @@ All notable changes to the AskSQL VS Code extension are documented here. The for
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-07-19
+
+### Added
+
+- NVIDIA as a built-in AI provider (OpenAI-compatible, with a free tier). Select it from
+  **AskSQL: Select AI Provider** like any other provider.
+- Guided provider setup: choosing a provider now prompts for its API key (stored in the OS
+  keychain) and, for providers that publish a model list, lets you pick the model instead of typing
+  its id. Official API endpoints are pre-filled per provider, so `asksql.baseURL` is only needed to
+  point at a custom endpoint.
+
+### Fixed
+
+- A wrong or unavailable model id now reports a clear "model not found - check the id" message
+  instead of looking like a temporary outage.
+- Setup guidance and menu labels now point at commands that exist (**AskSQL: Select AI Provider** /
+  **Choose Answering Model**).
+
 ## [0.1.0] - 2026-07-17
 
 First release.
