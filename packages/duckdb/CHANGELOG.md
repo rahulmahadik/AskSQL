@@ -1,5 +1,13 @@
 # @asksql/duckdb
 
+## 0.2.3
+
+### Patch Changes
+
+- Document the DuckDB-WASM browser build's Web Worker + WebAssembly CSP requirements (and the self-hosted-bundle option) so the browser connector works under a strict Content-Security-Policy.
+- Updated dependencies
+  - @asksql/core@0.3.1
+
 ## 0.2.2
 
 ### Patch Changes

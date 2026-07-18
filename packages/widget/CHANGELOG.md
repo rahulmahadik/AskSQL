@@ -1,5 +1,16 @@
 # @asksql/widget
 
+## 0.2.0
+
+### Minor Changes
+
+- Ship a self-contained IIFE browser build (`dist/asksql-widget.js`, with React and react-dom bundled in) that exposes `window.AskSQL`, plus `unpkg`/`jsdelivr` fields and a `./browser` export — so a plain HTML page can mount the widget from a single `<script>` tag, as the README already advertised.
+
+### Patch Changes
+
+- Updated dependencies
+  - @asksql/react@0.1.6
+
 ## 0.1.3
 
 ### Patch Changes

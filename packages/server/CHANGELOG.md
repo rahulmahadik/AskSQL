@@ -1,5 +1,16 @@
 # @asksql/server
 
+## 0.2.0
+
+### Minor Changes
+
+- Add an optional `onError` hook to the server config, called for every error the server turns into a response so a host can log or report it (the wire response still never includes internal detail). Best-effort — a throwing hook can't break the response — and it fires for both request and streaming (`/chat`) failures.
+
+### Patch Changes
+
+- Updated dependencies
+  - @asksql/core@0.3.1
+
 ## 0.1.5
 
 ### Patch Changes

@@ -1,5 +1,13 @@
 # @asksql/react
 
+## 0.1.6
+
+### Patch Changes
+
+- Surface transport-level failures (server unreachable, wrong `baseUrl`, or a CORS rejection) as a typed `NETWORK_ERROR` with an actionable message, distinct from an HTTP error the server returned. A user abort is passed through unchanged.
+- Updated dependencies
+  - @asksql/core@0.3.1
+
 ## 0.1.5
 
 ### Patch Changes
