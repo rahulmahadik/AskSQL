@@ -117,6 +117,20 @@ export function createAskSql(config: AskSqlConfig): AskSqlEngine {
   }
   const ids = new Set<string>();
   for (const c of config.connectors) {
+    // An empty id makes every lookup ambiguous; an empty name shows a blank
+    // entry in every picker. Both are silent config mistakes worth catching here.
+    if (typeof c.id !== 'string' || c.id.trim() === '') {
+      throw new AskSqlError('CONFIG_ERROR', {
+        detail: 'a connector has an empty id',
+        userMessage: 'AskSQL is misconfigured: a database connection is missing an id.',
+      });
+    }
+    if (typeof c.name !== 'string' || c.name.trim() === '') {
+      throw new AskSqlError('CONFIG_ERROR', {
+        detail: `connector "${c.id}" has an empty name`,
+        userMessage: 'AskSQL is misconfigured: a database connection is missing a name.',
+      });
+    }
     if (ids.has(c.id)) {
       throw new AskSqlError('CONFIG_ERROR', {
         detail: `duplicate connector id: ${c.id}`,

@@ -21,6 +21,7 @@ const GROUPS: readonly { readonly kind: TableInfo['kind']; readonly label: strin
 ];
 
 export type Node =
+  | { readonly kind: 'ai' }
   | { readonly kind: 'connection'; readonly conn: ConnectionConfig & { readonly scope: ConnectionScope } }
   | { readonly kind: 'group'; readonly connId: string; readonly group: (typeof GROUPS)[number]; readonly tables: readonly TableInfo[] }
   | { readonly kind: 'table'; readonly connId: string; readonly table: TableInfo }
@@ -60,6 +61,23 @@ export class SchemaTreeProvider implements vscode.TreeDataProvider<Node>, vscode
   }
 
   getTreeItem(node: Node): vscode.TreeItem {
+    if (node.kind === 'ai') {
+      // The active AI at a glance, so "which model is answering?" is never a mystery.
+      const cfg = vscode.workspace.getConfiguration('asksql');
+      const provider = cfg.get<string>('provider') || 'ollama';
+      const model = (cfg.get<string>('model') || '').trim();
+      const item = new vscode.TreeItem('AI model', vscode.TreeItemCollapsibleState.None);
+      item.id = 'asksql.ai';
+      item.description = model ? `${provider} · ${model}` : `${provider} · no model selected`;
+      item.iconPath = new vscode.ThemeIcon('sparkle');
+      item.contextValue = 'asksql.ai';
+      item.tooltip = model
+        ? `Answering with ${provider} (${model}). Click to change the model.`
+        : `No model selected for ${provider}. Click to choose one.`;
+      // Clicking picks the answering model (VS Code chat model or your provider's).
+      item.command = { command: 'asksql.pickModel', title: 'Choose Answering Model' };
+      return item;
+    }
     if (node.kind === 'connection') {
       const item = new vscode.TreeItem(node.conn.name, vscode.TreeItemCollapsibleState.Collapsed);
       // Ids must be stable and unique: VS Code falls back to the LABEL, and two
@@ -124,7 +142,11 @@ export class SchemaTreeProvider implements vscode.TreeDataProvider<Node>, vscode
       // Return nothing when unconfigured: an empty view lets VS Code render the
       // `viewsWelcome` contribution, which gives the user real buttons instead
       // of a dead-end "nothing here" row.
-      return connectionConfigs().map((conn) => ({ kind: 'connection', conn }));
+      const conns = connectionConfigs();
+      if (conns.length === 0) return [];
+      // Lead with the active AI so it is visible above the databases; the welcome
+      // still handles the first-run (no-connection) case above.
+      return [{ kind: 'ai' }, ...conns.map((conn) => ({ kind: 'connection' as const, conn }))];
     }
 
     if (node.kind === 'connection') {

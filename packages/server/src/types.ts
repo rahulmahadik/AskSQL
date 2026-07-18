@@ -59,6 +59,18 @@ export interface AskSqlServerConfig {
    * Set false to disable.
    */
   readonly suggestFixOnError?: boolean;
+  /**
+   * Called for every error the server turns into a response, so a host can log
+   * or report it (the wire response never includes internal detail). Best-effort:
+   * a throw from the hook is swallowed so it can never break the response.
+   */
+  readonly onError?: (err: unknown, context: ErrorContext) => void;
+}
+
+/** Where an error surfaced, passed to `onError`. */
+export interface ErrorContext {
+  readonly method: string;
+  readonly path: string;
 }
 
 /** Streaming event emitted by POST /chat (SSE). */

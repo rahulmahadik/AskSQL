@@ -1,5 +1,11 @@
 # @asksql/core
 
+## 0.3.1
+
+### Patch Changes
+
+- Fail fast on misconfiguration instead of much later with a confusing error: reject a connector with an empty id or name, reject a PostgreSQL connector that has neither a connection string nor a host, and report a missing SQLite database file separately from a missing driver (previously both cases said "install better-sqlite3").
+
 ## 0.3.0
 
 ### Minor Changes

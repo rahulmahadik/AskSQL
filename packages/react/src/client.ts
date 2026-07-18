@@ -117,6 +117,29 @@ export class HttpTransport implements Transport {
     return {...(json ? { 'Content-Type': 'application/json' } : {}),...(this.opts.headers ?? {}) };
   }
 
+  /**
+   * fetch rejects (rather than returning a non-ok Response) only for
+   * transport-level failures: the server is unreachable, the baseUrl is wrong,
+   * or CORS blocked the request before any response existed. Left raw, those
+   * surface as a bare `TypeError: Failed to fetch` that looks identical to a
+   * 5xx. Turn them into a typed NETWORK_ERROR with an actionable message; a user
+   * abort is passed through untouched.
+   */
+  private async doFetch(url: string, init?: RequestInit): Promise<Response> {
+    try {
+      return await this.f(url, init);
+    } catch (err) {
+      if ((err as { name?: string } | null)?.name === 'AbortError') throw err;
+      throw new TransportError(
+        'NETWORK_ERROR',
+        'Could not reach the AskSQL server. Check that it is running and that its address allows requests from this page (CORS/baseUrl).',
+        undefined,
+        undefined,
+        true,
+      );
+    }
+  }
+
   private async unwrap<T>(res: Response): Promise<T> {
     const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
     if (!res.ok) {
@@ -128,19 +151,19 @@ export class HttpTransport implements Transport {
   }
 
   async listConnections(): Promise<ConnectionSummary[]> {
-    const res = await this.f(this.url('/connections'), { headers: this.headers(false) });
+    const res = await this.doFetch(this.url('/connections'), { headers: this.headers(false) });
     const body = await this.unwrap<{ connections: ConnectionSummary[] }>(res);
     return body.connections;
   }
 
   async schema(connectionId?: string, refresh?: boolean): Promise<SchemaCatalog> {
-    const res = await this.f(this.url('/schema', { connectionId, refresh: refresh ? '1' : undefined }), { headers: this.headers(false) });
+    const res = await this.doFetch(this.url('/schema', { connectionId, refresh: refresh ? '1' : undefined }), { headers: this.headers(false) });
     const body = await this.unwrap<{ catalog: SchemaCatalog }>(res);
     return body.catalog;
   }
 
   async *chat(params: AskParams): AsyncIterable<ChatEvent> {
-    const res = await this.f(this.url('/chat'), {
+    const res = await this.doFetch(this.url('/chat'), {
       method: 'POST',
       headers: this.headers(),
       body: JSON.stringify({ question: params.question, connectionId: params.connectionId, context: params.context }),
@@ -164,7 +187,7 @@ export class HttpTransport implements Transport {
   }
 
   async execute(sql: string, opts?: ExecuteOptions & { connectionId?: string; question?: string }): Promise<ResultSet> {
-    const res = await this.f(this.url('/execute'), {
+    const res = await this.doFetch(this.url('/execute'), {
       method: 'POST',
       headers: this.headers(),
       body: JSON.stringify({ sql, connectionId: opts?.connectionId, question: opts?.question, maxRows: opts?.maxRows }),
@@ -175,7 +198,7 @@ export class HttpTransport implements Transport {
   }
 
   async explain(sql: string, connectionId?: string): Promise<string> {
-    const res = await this.f(this.url('/explain'), {
+    const res = await this.doFetch(this.url('/explain'), {
       method: 'POST',
       headers: this.headers(),
       body: JSON.stringify({ sql, connectionId }),

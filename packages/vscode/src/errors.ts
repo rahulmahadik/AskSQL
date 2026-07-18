@@ -14,12 +14,47 @@
 
 import { AskSqlError } from '@asksql/core';
 
-/** An error whose message was written FOR the user and may be shown as-is. */
+/** A command the chat can offer as a one-click fix next to an error. */
+export interface SetupAction {
+  /** A command id present in WEBVIEW_COMMANDS (chatView.ts). */
+  readonly action: string;
+  readonly actionLabel: string;
+}
+
+/**
+ * An error whose message was written FOR the user and may be shown as-is.
+ * Setup failures (no model, no key) carry a `setup` action so the chat can
+ * render a button that jumps straight to the fix.
+ */
 export class UserFacingError extends Error {
-  constructor(message: string) {
+  readonly setup?: SetupAction;
+  constructor(message: string, setup?: SetupAction) {
     super(message);
     this.name = 'UserFacingError';
+    this.setup = setup;
   }
+}
+
+/**
+ * Default fix-it action for the AskSqlError codes that mean "the AI provider is
+ * not set up right", so a chat failure offers the relevant setup command
+ * instead of a dead-end message. UserFacingError carries its own action; this
+ * fills in for the typed engine errors.
+ */
+// Only codes that UNAMBIGUOUSLY mean "the AI provider is not set up right".
+// CONFIG_ERROR is deliberately excluded: it is also the code for a sqlite
+// file-open failure, guard misconfig and connector validation, so mapping it to
+// a model picker would show "Choose model" on a broken database path.
+const SETUP_ACTION_BY_CODE: Readonly<Record<string, SetupAction>> = {
+  LLM_AUTH: { action: 'asksql.setApiKey', actionLabel: 'Update API key' },
+  LLM_UNREACHABLE: { action: 'asksql.selectProvider', actionLabel: 'Set up provider' },
+};
+
+/** The setup command to offer next to this error, if any. */
+export function setupAction(err: unknown): SetupAction | undefined {
+  if (err instanceof UserFacingError) return err.setup;
+  if (AskSqlError.is(err)) return SETUP_ACTION_BY_CODE[err.code];
+  return undefined;
 }
 
 /**
@@ -43,9 +78,21 @@ const BY_CODE: Readonly<Record<string, string>> = {
   ER_DBACCESS_DENIED_ERROR: 'This user is not allowed to read that database.',
 };
 
+/**
+ * The first string `code` on the error or anywhere in its `cause` chain. A
+ * refused connection surfaces as a fetch error whose `cause` (not the top
+ * error) carries `ECONNREFUSED`, so without walking the chain a
+ * "start the server" failure falls through to the generic line. Bounded so a
+ * self-referential cause cannot loop.
+ */
 const codeOf = (err: unknown): string | undefined => {
-  const c = (err as { code?: unknown } | null)?.code;
-  return typeof c === 'string' ? c : undefined;
+  let cur: unknown = err;
+  for (let depth = 0; depth < 8 && cur && typeof cur === 'object'; depth++) {
+    const c = (cur as { code?: unknown }).code;
+    if (typeof c === 'string') return c;
+    cur = (cur as { cause?: unknown }).cause;
+  }
+  return undefined;
 };
 
 /** A sentence safe to show in the tree, a notification, or chat. */

@@ -4,6 +4,30 @@ All notable changes to the AskSQL VS Code extension are documented here. The for
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2026-07-19
+
+### Added
+
+- The active AI provider and model are shown at the top of the **Databases** view; click it to change
+  the model.
+- A **Set up AskSQL** walkthrough (connect a database → choose a provider → ask) in Get Started, and the
+  sidebar welcome now links AI setup too.
+
+### Changed
+
+- Setup errors in the chat (no model selected, no API key, provider unreachable) now show a one-click
+  fix button — Set up provider / Set API key / Choose model — instead of only telling you which command
+  to run.
+- **Set AI Provider API Key** now asks which provider the key is for, so a key can no longer land in the
+  wrong provider's slot; it also no longer clears the stored key if you cancel.
+- A rejected API key while listing models now says the key was not accepted (401) and offers to
+  re-enter it, instead of a bare "endpoint replied 401".
+
+### Fixed
+
+- "Ollama is not running" and similar connection errors now show their friendly, actionable message
+  even when the underlying error is wrapped.
+
 ## [0.2.0] - 2026-07-19
 
 ### Added

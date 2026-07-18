@@ -83,7 +83,21 @@ export class AskSqlServer {
 
       return json(404, { error: { code: 'INVALID_INPUT', userMessage: 'Unknown endpoint.', retryable: false } });
     } catch (err) {
+      this.reportError(err, req);
       return errorResponse(err);
+    }
+  }
+
+  /** Best-effort host error hook. Neither a sync throw NOR a rejected async hook may turn one error into two. */
+  private reportError(err: unknown, req: ServerRequest): void {
+    if (!this.config.onError) return;
+    try {
+      const r = this.config.onError(err, { method: req.method, path: normalizePath(req.path) }) as unknown;
+      // An async hook returns a promise; swallow its rejection too, or it would
+      // become an unhandled rejection (which crashes Node by default).
+      void Promise.resolve(r).catch(() => {});
+    } catch {
+      // Swallowed on purpose: the response must go out regardless of the hook.
     }
   }
 
@@ -158,6 +172,9 @@ export class AskSqlServer {
 
     type Settled = { ok: true; result: AskResult } | { ok: false; error: unknown };
 
+    // Captured because the generator below is a plain function* with no `this`.
+    const report = (err: unknown): void => this.reportError(err, req);
+
     const stream = (async function* (): AsyncIterable<ChatStreamEvent> {
       const queue: EngineEvent[] = [];
       let notify: (() => void) | null = null;
@@ -198,6 +215,7 @@ export class AskSqlServer {
         const r = settled.result;
         yield { type: 'sql', sql: r.sql, explanation: r.explanation, autoLimited: r.guard.autoLimited };
       } else {
+      report(settled.error);
       yield { type: 'error',...AskSqlError.from(settled.error, 'LLM_UNAVAILABLE').toJSON() };
       }
       yield { type: 'done' };

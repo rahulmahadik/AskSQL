@@ -414,12 +414,18 @@ export class EngineManager {
     // as a confusing provider error. Say what to do instead.
     const model = cfg().get<string>('model')?.trim();
     if (!model) {
-      throw new UserFacingError('No AI model is selected. Run "AskSQL: Select AI Provider" to set one up.');
+      throw new UserFacingError('No AI model is selected yet.', {
+        action: 'asksql.selectProvider',
+        actionLabel: 'Set up provider',
+      });
     }
     const baseURL = cfg().get<string>('baseURL') || undefined;
     const apiKey = (await this.secrets.get(apiKeyKey(provider))) ?? undefined;
     if (provider !== 'ollama' && !apiKey) {
-      throw new UserFacingError(`The "${provider}" provider needs an API key. Run "AskSQL: Set AI Provider API Key".`);
+      throw new UserFacingError(`The "${provider}" provider needs an API key.`, {
+        action: 'asksql.setApiKey',
+        actionLabel: 'Set API key',
+      });
     }
     // Built from statically-imported factories (see providers.ts) so the bundled
     // extension works without node_modules.

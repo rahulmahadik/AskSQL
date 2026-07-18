@@ -25,7 +25,7 @@ import { type ConnectionConfig, type EngineManager, connectionConfigs } from './
 import { providerModels } from './models.js';
 import { LM_LIST_TIMEOUT_MS, MODEL_LOOKUP_TIMEOUT_MS } from './constants.js';
 import { log } from './log.js';
-import { userMessage, UserFacingError } from './errors.js';
+import { userMessage, UserFacingError, setupAction } from './errors.js';
 
 /** Rows rendered inline before we stop and point at the editor instead. */
 const INLINE_ROWS = 50;
@@ -95,7 +95,13 @@ const RESULT_GONE = 'This result is no longer kept in memory - run the query aga
  * banners attach as an action button today. Add a command here only when a new
  * banner offers it.
  */
-const WEBVIEW_COMMANDS: ReadonlySet<string> = new Set(['asksql.addConnection']);
+const WEBVIEW_COMMANDS: ReadonlySet<string> = new Set([
+  'asksql.addConnection',
+  // AI-setup fix-it buttons on provider/key/model errors (see errors.ts setupAction).
+  'asksql.selectProvider',
+  'asksql.setApiKey',
+  'asksql.pickModel',
+]);
 
 /** "Describe this table" questions answered from the catalog, not the model. */
 const DESCRIBE_PATTERNS: readonly RegExp[] = [
@@ -666,6 +672,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         this.post({ type: 'error', message: userMessage(failure) });
         return;
       }
+      // A provider/key/model failure carries a one-click fix so the user is not
+      // dead-ended in the chat with instructions to hunt for a command.
+      const setup = setupAction(err);
       if (AskSqlError.is(err)) {
         const suggested = (err as { suggestedSql?: string }).suggestedSql;
         this.post({
@@ -673,11 +682,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           message: err.userMessage,
           guard: err.code === 'GUARD_BLOCKED',
           suggestedSql: suggested ?? '',
+          ...(setup ?? {}),
         });
         return;
       }
-      log.error('chat turn failed', err);
-      this.post({ type: 'error', message: userMessage(err) });
+      // UserFacingError (e.g. no model / no key selected) is expected, not a crash.
+      if (err instanceof UserFacingError) log.info('chat turn stopped', err.message);
+      else log.error('chat turn failed', err);
+      this.post({ type: 'error', message: userMessage(err), ...(setup ?? {}) });
     } finally {
       // Only the CURRENT turn unlocks the UI. A superseded turn (aborted because a
       // new question started) must not post turnEnd - that would unlock the panel

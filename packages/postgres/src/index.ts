@@ -82,6 +82,19 @@ export class PostgresConnector implements Connector {
   private typeNameCache: Map<number, string> | null = null;
 
   constructor(private readonly config: PostgresConnectorConfig) {
+    // Catch a genuinely empty config up front (it would otherwise build a Pool of
+    // all-undefined options and fail much later at the first connect, as a
+    // confusing auth/unreachable error). But honour pg's libpq env vars: an
+    // env-driven config (DATABASE_URL / PGHOST / PGSERVICE / ...) legitimately
+    // passes neither a host nor a connection string here, so don't reject it.
+    const env = typeof process !== 'undefined' ? process.env : undefined;
+    const envConfigured = !!(env && (env['PGHOST'] || env['PGHOSTADDR'] || env['PGSERVICE'] || env['PGURL'] || env['DATABASE_URL'] || env['PGUSER']));
+    if (!config.connectionString && !config.host && !envConfigured) {
+      throw new AskSqlError('CONFIG_ERROR', {
+        detail: `postgres connector "${config.id ?? '(no id)'}" has neither connectionString nor host, and no PG* env vars are set`,
+        userMessage: 'This PostgreSQL connection is missing its host or connection string.',
+      });
+    }
     this.id = config.id;
     this.name = config.name;
     this.database = config.database || undefined;

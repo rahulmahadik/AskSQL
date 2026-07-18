@@ -3,7 +3,7 @@
   "private": true,
   "displayName": "AskSQL",
   "description": "AI database chat for Postgres, MySQL and SQLite: ask in plain language, review the SQL, get answers. Read-only by design, bring your own model.",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "publisher": "RahulMahadik",
   "license": "Apache-2.0",
   "pricing": "Free",
@@ -341,7 +341,49 @@
     "viewsWelcome": [
       {
         "view": "asksql.schema",
-        "contents": "Connect a database to start asking questions in plain language.\n[Add Database Connection](command:asksql.addConnection)\nYour password is stored in the OS keychain, never in settings.\n[Open Settings](command:asksql.openSettings)"
+        "contents": "Connect a database to start asking questions in plain language.\n[Add Database Connection](command:asksql.addConnection)\nThen choose an AI model - Ollama runs locally with no key; Groq and NVIDIA have free tiers.\n[Select AI Provider](command:asksql.selectProvider)\nYour password and API keys are stored in the OS keychain, never in settings.\n[Open Settings](command:asksql.openSettings)"
+      }
+    ],
+    "walkthroughs": [
+      {
+        "id": "asksql.setup",
+        "title": "Set up AskSQL",
+        "description": "Connect a database and choose an AI model to start asking questions in plain language.",
+        "steps": [
+          {
+            "id": "connect",
+            "title": "Connect a database",
+            "description": "Add a Postgres, MySQL or SQLite connection. Passwords are stored in your OS keychain, never in settings.\n[Add Database Connection](command:asksql.addConnection)",
+            "media": {
+              "markdown": "media/walkthrough/connect.md"
+            },
+            "completionEvents": [
+              "onCommand:asksql.addConnection"
+            ]
+          },
+          {
+            "id": "provider",
+            "title": "Choose an AI provider",
+            "description": "Pick a provider, key and model together. Ollama runs fully local with no API key; Groq and NVIDIA offer free tiers.\n[Select AI Provider](command:asksql.selectProvider)",
+            "media": {
+              "markdown": "media/walkthrough/provider.md"
+            },
+            "completionEvents": [
+              "onCommand:asksql.selectProvider"
+            ]
+          },
+          {
+            "id": "ask",
+            "title": "Ask a question",
+            "description": "Open the AskSQL panel and ask in plain language. Every answer shows the exact SQL it ran, read-only by design.\n[Ask a Question](command:asksql.askInChat)",
+            "media": {
+              "markdown": "media/walkthrough/ask.md"
+            },
+            "completionEvents": [
+              "onCommand:asksql.askInChat"
+            ]
+          }
+        ]
       }
     ]
   },
