@@ -105,20 +105,33 @@ export class SqliteConnector implements Connector {
         userMessage: 'No SQLite database was configured.',
       });
     }
+    // Load the driver and open the file in SEPARATE steps: "driver not installed"
+    // and "file cannot be opened" are different problems with different fixes, and
+    // one shared catch reported both as a missing driver even when the file was at
+    // fault.
+    let Ctor: new (f: string, o?: object) => SqliteDriver;
     try {
       // Indirect specifier: better-sqlite3 is an optional peer with no
       // bundled types; the indirection keeps the type-checker from trying
       // to resolve its declarations at build time.
       const specifier = 'better-sqlite3';
       const mod = (await import(specifier)) as unknown as { default: new (f: string, o?: object) => SqliteDriver };
-      const Ctor = mod.default;
+      Ctor = mod.default;
+    } catch (err) {
+      throw new AskSqlError('CONFIG_ERROR', {
+        detail: `sqlite driver not available: ${err instanceof Error ? err.message : String(err)}`,
+        userMessage:
+          "No SQLite driver is installed. Pass a database handle from Node's built-in sqlite " +
+          '(Node 22.5+), or run: npm install better-sqlite3',
+        cause: err,
+      });
+    }
+    try {
       this.db = new Ctor(this.config.file, { readonly: true, fileMustExist: true });
     } catch (err) {
       throw new AskSqlError('CONFIG_ERROR', {
-        detail: `cannot open sqlite file: ${err instanceof Error ? err.message : String(err)}`,
-        userMessage:
-          "No SQLite driver available. Pass a database handle from Node's built-in sqlite " +
-          '(Node 22.5+), or run: npm install better-sqlite3',
+        detail: `cannot open sqlite file "${this.config.file}": ${err instanceof Error ? err.message : String(err)}`,
+        userMessage: `Could not open the SQLite database file "${this.config.file}". Check that the path is correct and the file exists.`,
         cause: err,
       });
     }
