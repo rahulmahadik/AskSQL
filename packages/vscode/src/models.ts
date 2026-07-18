@@ -17,10 +17,14 @@
  */
 
 import * as vscode from 'vscode';
+import { PROVIDER_API_HOST } from '@asksql/core';
 import { assertBaseUrl, type ProviderName } from './providers.js';
 import { OLLAMA_DEFAULT_BASE_URL, MODEL_LOOKUP_TIMEOUT_MS } from './constants.js';
 import { apiKeyKey } from './engine.js';
 import { UserFacingError, userMessage } from './errors.js';
+
+/** Hosted providers that expose an OpenAI-style /models list we can offer as a picker. */
+const LISTABLE_HOSTED: ReadonlySet<ProviderName> = new Set(['openai', 'groq', 'nvidia']);
 
 /**
  * Embedding models are listed next to chat models but cannot write SQL, and
@@ -57,7 +61,10 @@ async function listOpenAICompatible(baseURL: string, apiKey: string | undefined,
 function listableBaseUrl(provider: ProviderName, configured: string): string | undefined {
   if (provider === 'ollama') return configured || OLLAMA_DEFAULT_BASE_URL;
   if (provider === 'openai-compatible') return configured || undefined;
-  return undefined; // hosted SDKs own their endpoint
+  // openai / groq / nvidia expose an OpenAI-style /models list at their official host,
+  // so we can offer a real model picker instead of making the user type an id.
+  if (LISTABLE_HOSTED.has(provider)) return configured || PROVIDER_API_HOST[provider];
+  return undefined; // anthropic / google have no OpenAI-style listing
 }
 
 /**
@@ -149,32 +156,80 @@ export async function selectModel(secrets: vscode.SecretStorage): Promise<string
   return model;
 }
 
-/** Switch provider, then offer its models - the two always change together. */
+/** Every provider except Ollama needs an API key. */
+const NEEDS_API_KEY = (p: ProviderName): boolean => p !== 'ollama';
+
+/**
+ * Prompt for and store a provider's API key. Blank input keeps an existing key
+ * (so re-running the flow doesn't force re-entry); a value replaces it. No host
+ * strings in the prompt - the webview autolinker would turn them into a live link.
+ */
+async function promptForApiKey(secrets: vscode.SecretStorage, provider: ProviderName): Promise<void> {
+  const existing = await secrets.get(apiKeyKey(provider));
+  const key = await vscode.window.showInputBox({
+    prompt: existing
+      ? `Update the ${provider} API key (leave blank to keep the current one)`
+      : `Paste your ${provider} API key - stored in your OS keychain, never in settings`,
+    placeHolder: existing ? '' : 'Get it from your provider dashboard',
+    password: true,
+    ignoreFocusOut: true,
+  });
+  if (key && key.trim()) await secrets.store(apiKeyKey(provider), key.trim());
+}
+
+/**
+ * Switch provider, collect what it needs, then offer its models. Answers are
+ * gathered BEFORE anything is committed so cancelling never strands a half
+ * configuration (e.g. openai-compatible with no base URL). Switching to a hosted
+ * provider clears a stale baseURL so its key is never sent to a dead endpoint.
+ */
 export async function selectProvider(secrets: vscode.SecretStorage): Promise<boolean> {
   const cfg = vscode.workspace.getConfiguration('asksql');
   const picked = await vscode.window.showQuickPick(
     [
-      { label: 'ollama', description: 'local, no API key needed' },
-      { label: 'openai', description: 'needs an API key' },
-      { label: 'anthropic', description: 'needs an API key' },
-      { label: 'google', description: 'needs an API key' },
-      { label: 'groq', description: 'needs an API key' },
-      { label: 'openai-compatible', description: 'any other LLM: LM Studio, vLLM, OpenRouter, Together, a gateway...' },
+      { label: 'ollama', description: 'Local models, no API key needed' },
+      { label: 'openai', description: 'Needs an API key' },
+      { label: 'anthropic', description: 'Needs an API key' },
+      { label: 'google', description: 'Needs an API key' },
+      { label: 'groq', description: 'Fast, generous free tier - needs an API key' },
+      { label: 'nvidia', description: 'Free tier with many open models - needs an API key' },
+      { label: 'openai-compatible', description: 'Any other LLM: LM Studio, vLLM, OpenRouter, Together, a gateway...' },
     ],
     { placeHolder: `AI provider (current: ${cfg.get<string>('provider') ?? 'ollama'})`, ignoreFocusOut: true },
   );
   if (!picked) return false;
-  await cfg.update('provider', picked.label, vscode.ConfigurationTarget.Global);
+  const provider = picked.label as ProviderName;
 
-  // openai-compatible is useless without an endpoint, so ask right away.
-  if (picked.label === 'openai-compatible' && !cfg.get<string>('baseURL')) {
-    const url = await vscode.window.showInputBox({
-      prompt: 'Base URL of your OpenAI-compatible endpoint',
-      placeHolder: 'https://your-endpoint/v1',
-      ignoreFocusOut: true,
-    });
-    if (url) await cfg.update('baseURL', url, vscode.ConfigurationTarget.Global);
+  // openai-compatible has no pre-seeded endpoint; collect it before committing so a
+  // cancel here doesn't leave the provider set with nowhere to send requests.
+  let baseURL: string | undefined;
+  if (provider === 'openai-compatible') {
+    baseURL = cfg.get<string>('baseURL') || undefined;
+    if (!baseURL) {
+      const url = await vscode.window.showInputBox({
+        prompt: 'Base URL of your OpenAI-compatible endpoint',
+        placeHolder: 'https://your-endpoint/v1',
+        ignoreFocusOut: true,
+      });
+      if (!url) return false; // cancelled - don't commit a provider it can't reach
+      baseURL = url;
+    }
   }
+
+  await cfg.update('provider', provider, vscode.ConfigurationTarget.Global);
+  if (provider === 'openai-compatible') {
+    if (baseURL && baseURL !== cfg.get<string>('baseURL')) {
+      await cfg.update('baseURL', baseURL, vscode.ConfigurationTarget.Global);
+    }
+  } else if (provider !== 'ollama' && cfg.get<string>('baseURL')) {
+    // Hosted providers use their official host; drop a leftover override so the key
+    // isn't sent to whatever endpoint the previous provider pointed at.
+    await cfg.update('baseURL', undefined, vscode.ConfigurationTarget.Global);
+  }
+
+  // The step that was missing: actually ask for the key when the provider needs one.
+  if (NEEDS_API_KEY(provider)) await promptForApiKey(secrets, provider);
+
   await selectModel(secrets);
   return true;
 }

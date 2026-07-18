@@ -238,6 +238,24 @@ describe('auto-LIMIT', () => {
     const v = pg('EXPLAIN SELECT * FROM users', { maxRows: 100 });
     expect(v.autoLimited).toBe(false);
   });
+  // A trailing `;` FOLLOWED by a line comment hid the `;` from the end-anchored
+  // strip, so the appended LIMIT landed after the `;` as a dangling fragment and
+  // the row cap was silently severed. The emitted SQL must stay one capped SELECT.
+  it('caps a SELECT with a trailing semicolon before a comment', () => {
+    const v = pg('SELECT * FROM users; -- note', { maxRows: 100 });
+    expect(v.allowed).toBe(true);
+    expect(v.autoLimited).toBe(true);
+    expect(v.sql).not.toContain(';');
+    expect(v.sql.toLowerCase()).toContain('limit 100');
+    // Reparses as exactly one SELECT (the LIMIT is not commented/severed off).
+    expect(guardSql({ sql: v.sql, dialect: POSTGRES_DIALECT }).allowed).toBe(true);
+  });
+  it('keeps a semicolon that lives inside a string literal', () => {
+    const v = pg("SELECT id FROM t WHERE note = 'a; b'", { maxRows: 100 });
+    expect(v.allowed).toBe(true);
+    expect(v.sql).toContain("'a; b'");
+    expect(v.sql.toLowerCase()).toContain('limit 100');
+  });
 });
 
 describe('template smuggling is literal', () => {

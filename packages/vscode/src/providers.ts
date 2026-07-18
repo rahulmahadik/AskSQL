@@ -18,11 +18,10 @@ import { createAnthropic } from '@ai-sdk/anthropic';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { createGroq } from '@ai-sdk/groq';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
-import type { ModelLike } from '@asksql/core';
-import { OLLAMA_DEFAULT_BASE_URL } from './constants.js';
+import { PROVIDER_API_HOST, type ModelLike } from '@asksql/core';
 import { UserFacingError } from './errors.js';
 
-export type ProviderName = 'ollama' | 'openai' | 'anthropic' | 'google' | 'groq' | 'openai-compatible';
+export type ProviderName = 'ollama' | 'openai' | 'anthropic' | 'google' | 'groq' | 'nvidia' | 'openai-compatible';
 
 
 export interface ProviderOptions {
@@ -99,9 +98,12 @@ export function buildModel(opts: ProviderOptions): ModelLike {
       return createGoogleGenerativeAI({ apiKey, ...(baseURL ? { baseURL } : {}) })(model) as ModelLike;
     case 'groq':
       return createGroq({ apiKey, ...(baseURL ? { baseURL } : {}) })(model) as ModelLike;
+    case 'nvidia':
     case 'ollama':
     case 'openai-compatible': {
-      const url = baseURL || (provider === 'ollama' ? OLLAMA_DEFAULT_BASE_URL : undefined);
+      // NVIDIA and Ollama are OpenAI-compatible with a pre-seeded official host;
+      // a user-set asksql.baseURL overrides it. openai-compatible has no default.
+      const url = baseURL || PROVIDER_API_HOST[provider];
       if (!url) throw new UserFacingError('The OpenAI-compatible provider needs a base URL (set asksql.baseURL).');
       assertBaseUrl(url, { carriesSecret: Boolean(apiKey) });
       return createOpenAICompatible({

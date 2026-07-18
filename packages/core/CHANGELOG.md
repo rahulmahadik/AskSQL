@@ -1,5 +1,11 @@
 # @asksql/core
 
+## 0.3.0
+
+### Minor Changes
+
+- Add NVIDIA as a first-class provider and pre-seed the official API host for every provider (OpenAI, Anthropic, Google, Groq, NVIDIA, Ollama) via the exported `PROVIDER_API_HOST` registry, so a `baseURL` is only needed to override a default. Classify a wrong or unavailable model id (HTTP 404 / "model not found") as a configuration error with an actionable message instead of a transient "try again". Keep the auto-`LIMIT` bound to the final SELECT when a statement ends with a semicolon followed by a comment — previously the row cap could be severed off, leaving an unbounded scan.
+
 ## 0.2.1
 
 ### Patch Changes

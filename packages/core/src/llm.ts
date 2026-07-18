@@ -160,6 +160,15 @@ export function classifyLlmError(err: unknown, callerAborted: boolean): AskSqlEr
   if (status === 429) {
     return new AskSqlError('LLM_RATE_LIMIT', { detail: `provider returned 429`, cause: err });
   }
+  // A wrong/unpulled model id is the most common first-setup mistake. Without this it
+  // fell through to the generic status arm and read as a transient "try again" outage.
+  if (status === 404 || /\bmodel\b[^.]*(?:not found|does ?n[o']?t exist|unknown|unavailable)|no such model|try pulling/iu.test(msg)) {
+    return new AskSqlError('CONFIG_ERROR', {
+      detail: `model not found: ${msg.slice(0, 300)}`,
+      userMessage: 'That AI model was not found at this provider. Check the model name in your AskSQL configuration - the id must match exactly (for a local model, pull it first).',
+      cause: err,
+    });
+  }
   if ((status === 400 || status === 413) && /context|token|length|maximum|too long|exceeds/iu.test(msg)) {
     return new AskSqlError('LLM_CONTEXT_OVERFLOW', { detail: msg.slice(0, 300), cause: err });
   }
