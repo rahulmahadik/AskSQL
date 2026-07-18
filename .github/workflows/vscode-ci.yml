@@ -47,7 +47,7 @@ jobs:
         working-directory: packages/vscode
         run: npx --yes @vscode/vsce@3.9.2 package --no-dependencies
       - name: Upload VSIX artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: asksql-vscode-vsix
           path: packages/vscode/*.vsix
