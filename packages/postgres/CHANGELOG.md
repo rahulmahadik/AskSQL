@@ -1,5 +1,13 @@
 # @asksql/postgres
 
+## 0.2.1
+
+### Patch Changes
+
+- f92c594: Bound opt-in value sampling with a `SET LOCAL statement_timeout` on a dedicated client, so an unindexed column can no longer full-scan during introspection. Expose the connected database name for display.
+- Updated dependencies [f92c594]
+  - @asksql/core@0.2.1
+
 ## 0.2.0
 
 ### Minor Changes

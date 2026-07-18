@@ -1,6 +1,6 @@
 {
   "name": "@asksql/server",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "AskSQL server sidecar: credential-holding HTTP handler with auth hook, server-side SQL guard, audit log. Framework-agnostic + Express/Next adapters.",
   "type": "module",
   "main": "./dist/index.js",

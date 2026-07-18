@@ -1,5 +1,13 @@
 # @asksql/widget
 
+## 0.1.3
+
+### Patch Changes
+
+- f92c594: Mount into an owned element with a closed shadow root so the embed no longer blanks or restyles the host page, and remove that element on unmount.
+- Updated dependencies [f92c594]
+  - @asksql/react@0.1.4
+
 ## 0.1.2
 
 ### Patch Changes

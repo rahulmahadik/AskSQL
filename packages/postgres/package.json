@@ -1,6 +1,6 @@
 {
   "name": "@asksql/postgres",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "PostgreSQL connector for AskSQL. Full schema introspection (tables, views, indexes, triggers, functions, enums, FKs) + read-only session enforcement.",
   "type": "module",
   "main": "./dist/index.js",

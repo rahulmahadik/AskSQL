@@ -1,5 +1,13 @@
 # @asksql/duckdb
 
+## 0.2.1
+
+### Patch Changes
+
+- f92c594: Expose the connected database name (the file, or in-memory) for display.
+- Updated dependencies [f92c594]
+  - @asksql/core@0.2.1
+
 ## 0.2.0
 
 ### Minor Changes

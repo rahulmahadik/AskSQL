@@ -1,5 +1,13 @@
 # @asksql/mysql
 
+## 0.2.1
+
+### Patch Changes
+
+- f92c594: Enforce a real query deadline that also works on MariaDB: set both `MAX_EXECUTION_TIME` and `max_statement_time`, plus a client-side deadline that `KILL`s the backend when a query overruns. Keep duplicate result-column names distinct by reading rows positionally. Expose the connected database name for display.
+- Updated dependencies [f92c594]
+  - @asksql/core@0.2.1
+
 ## 0.2.0
 
 ### Minor Changes

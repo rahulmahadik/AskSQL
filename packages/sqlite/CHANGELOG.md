@@ -1,5 +1,13 @@
 # @asksql/sqlite
 
+## 0.2.1
+
+### Patch Changes
+
+- f92c594: Keep duplicate result-column names distinct: read rows positionally when the driver supports it (better-sqlite3), and otherwise warn that a shared column name collapses to a single value. Expose the connected database (file) name for display.
+- Updated dependencies [f92c594]
+  - @asksql/core@0.2.1
+
 ## 0.2.0
 
 ### Minor Changes

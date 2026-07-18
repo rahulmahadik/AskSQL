@@ -1,6 +1,6 @@
 {
   "name": "@asksql/core",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "AskSQL engine: schema catalog, AST SQL guard, prompt pipeline, LLM orchestration. Zero database drivers.",
   "type": "module",
   "main": "./dist/index.js",
