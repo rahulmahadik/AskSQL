@@ -263,3 +263,22 @@ describe('empty / whitespace', () => {
   it('empty blocked', () => expect(pg('').allowed).toBe(false));
   it('whitespace blocked', () => expect(pg('   \n  ').allowed).toBe(false));
 });
+
+describe('sqlite unbounded recursive CTE (sync-thread wedge)', () => {
+  const wedge = 'WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM r) SELECT count(*) FROM r';
+  it('aggregate over unbounded recursion blocked', () => {
+    const v = lite(wedge);
+    expect(v.allowed).toBe(false);
+    expect(v.ruleId).toBe('recursive_no_limit');
+  });
+  it('GROUP BY over unbounded recursion blocked', () =>
+    expect(lite('WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM r) SELECT n, count(*) FROM r GROUP BY n').allowed).toBe(false));
+  it('same query with a LIMIT is allowed', () =>
+    expect(lite('WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM r LIMIT 100) SELECT count(*) FROM r').allowed).toBe(true));
+  it('plain streaming select over recursion is allowed (auto-LIMIT bounds it)', () =>
+    expect(lite('WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM r) SELECT n FROM r').allowed).toBe(true));
+  it('non-recursive aggregate CTE is allowed', () =>
+    expect(lite('WITH t AS (SELECT 1 AS n) SELECT count(*) FROM t').allowed).toBe(true));
+  it('the wedge is sqlite-only (pg has statement_timeout)', () =>
+    expect(pg(wedge).allowed).toBe(true));
+});

@@ -117,22 +117,26 @@ export const ASKSQL_CSS = `
 .asksql-chart-legend i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
 `;
 
-let injected = false;
+const injectedInto = new WeakSet<Document | ShadowRoot>();
 
 /**
- * Inject the stylesheet once. SSR-safe: a no-op when `document` is absent
- * (server render), so importing/rendering components in Next.js never
- * crashes. Pass a `nonce` for strict-CSP pages (`style-src 'self' 'nonce-...'`)
+ * Inject the stylesheet once per target root. Pass a `ShadowRoot` to style
+ * shadow-DOM content (the styles land inside the shadow tree, not the host
+ * `<head>`); omit it to style the main document. Tracked per root, so a second
+ * document/shadow root still gets styled. SSR-safe: a no-op when `document` is
+ * absent. Pass a `nonce` for strict-CSP pages (`style-src 'self' 'nonce-...'`)
  * so the injected `<style>` is whitelisted; alternatively skip injection
  * entirely and ship {@link ASKSQL_CSS} in your own stylesheet.
  */
-export function ensureStyles(doc?: Document, nonce?: string): void {
-  const d = doc ?? (typeof document !== 'undefined' ? document : undefined);
-  if (!d || injected) return;
-  const style = d.createElement('style');
+export function ensureStyles(target?: Document | ShadowRoot, nonce?: string): void {
+  const root = target ?? (typeof document !== 'undefined' ? document : undefined);
+  if (!root || injectedInto.has(root)) return;
+  const doc = 'head' in root ? root : root.ownerDocument;
+  if (!doc) return;
+  const style = doc.createElement('style');
   style.setAttribute('data-asksql', '');
   if (nonce) style.setAttribute('nonce', nonce);
   style.textContent = ASKSQL_CSS;
-  d.head.appendChild(style);
-  injected = true;
+  ('head' in root ? root.head : root).appendChild(style);
+  injectedInto.add(root);
 }

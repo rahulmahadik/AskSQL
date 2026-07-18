@@ -42,7 +42,7 @@ export function createAskSqlMcpTools(engine: AskSqlEngine): McpToolDef[] {
   return [
     {
       name: 'asksql_list_connections',
-      description: 'List the databases AskSQL can query (id, name, engine).',
+      description: 'List the databases AskSQL can query (id, name, engine, database).',
       inputSchema: { type: 'object', properties: {}, additionalProperties: false },
       async handle() {
         return ok(engine.connectors);

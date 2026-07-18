@@ -82,6 +82,31 @@ describe('/ connection scope', () => {
   });
 });
 
+describe('/history is per-user', () => {
+  const byUser = (r: ServerRequest) => ({
+    userId: r.headers['x-user'] === 'bob' ? 'bob' : 'alice',
+    allowedConnectionIds: ['db_a'],
+  });
+  const withUser = (u: string, m: string, p: string, b?: unknown, q: Record<string, string> = {}): ServerRequest => ({
+    ...req(m, p, b, q),
+    headers: { 'x-user': u },
+  });
+
+  it("one user cannot read another user's history on a shared connection", async () => {
+    const s = makeServer(byUser);
+    // Alice runs a query -> a history row is recorded as alice.
+    await s.handle(withUser('alice', 'POST', '/execute', { sql: 'SELECT id FROM users', connectionId: 'db_a' }));
+
+    const aliceHist = await s.handle(withUser('alice', 'GET', '/history', undefined, { connectionId: 'db_a' }));
+    const bobHist = await s.handle(withUser('bob', 'GET', '/history', undefined, { connectionId: 'db_a' }));
+    if (!isStream(aliceHist) && !isStream(bobHist)) {
+      expect((aliceHist.body as { total: number }).total).toBe(1);
+      expect((bobHist.body as { total: number }).total).toBe(0);
+      expect((bobHist.body as { items: unknown[] }).items).toEqual([]);
+    }
+  });
+});
+
 describe('credential leak sweep', () => {
   it('no response body contains a connector secret', async () => {
     const s = makeServer(allowAll);

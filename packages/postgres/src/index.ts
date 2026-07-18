@@ -76,6 +76,7 @@ export class PostgresConnector implements Connector {
   readonly capabilities = CAPABILITIES;
   readonly id: string;
   readonly name: string;
+  readonly database?: string;
 
   private pool: PgPool | null = null;
   private typeNameCache: Map<number, string> | null = null;
@@ -83,6 +84,7 @@ export class PostgresConnector implements Connector {
   constructor(private readonly config: PostgresConnectorConfig) {
     this.id = config.id;
     this.name = config.name;
+    this.database = config.database || undefined;
   }
 
   private async pg(): Promise<{ Pool: new (o: object) => PgPool }> {

@@ -22,6 +22,8 @@ export interface ConnectionSummary {
   readonly id: string;
   readonly name: string;
   readonly engine: string;
+  /** The connected database / file name, for display. */
+  readonly database?: string;
 }
 
 export interface ChatEvent {
@@ -205,7 +207,7 @@ export class LocalTransport implements Transport {
   constructor(private readonly engine: AskSqlEngine) {}
 
   async listConnections(): Promise<ConnectionSummary[]> {
-    return this.engine.connectors.map((c) => ({ id: c.id, name: c.name, engine: c.engine }));
+    return this.engine.connectors.map((c) => ({ id: c.id, name: c.name, engine: c.engine, database: c.database }));
   }
   schema(connectionId?: string, refresh?: boolean): Promise<SchemaCatalog> {
     return this.engine.catalog(connectionId, { refresh: refresh ?? false });

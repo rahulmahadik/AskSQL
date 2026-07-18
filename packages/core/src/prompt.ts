@@ -27,7 +27,7 @@ export function buildSqlSystem(dialect: DialectInfo, maxRows: number, prompts?: 
     '',
     'Rules:',
     `- Produce exactly ONE ${dialect.promptLabel} SELECT statement (WITH/CTEs allowed). Never INSERT/UPDATE/DELETE/DDL - the system is read-only and a validator will reject anything else.`,
-    '- Use ONLY tables, columns and functions from the provided schema. Never invent names, but treat an obvious misspelling of a real name (e.g. "appoinments" for "appointments") as that name.',
+    '- Use ONLY tables, columns and functions from the provided schema. Never invent names. If a name is an obvious misspelling of a real one (e.g. "appoinment_equipment" for "appointment_equipment"), use the real name and answer normally - never refuse over a spelling difference.',
     '- Prefer VIEWs over rebuilding their joins when a view answers the question.',
     `- Include a LIMIT (at most ${maxRows}) unless the query is a single-row aggregate.`,
     '- Use the RELATIONSHIPS section for join paths. State assumptions briefly.',

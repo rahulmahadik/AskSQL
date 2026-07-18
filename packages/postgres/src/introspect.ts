@@ -24,14 +24,25 @@ import { VALUE_SAMPLE_MAX_DISTINCT } from '@asksql/core';
 
 interface Queryable {
   query(text: string, params?: unknown[]): Promise<{ rows: Record<string, unknown>[] }>;
+  /** Pools expose this; used to bound value sampling on a dedicated client. */
+  connect?(): Promise<QueryableClient>;
 }
+
+interface QueryableClient {
+  query(text: string, params?: unknown[]): Promise<{ rows: Record<string, unknown>[] | unknown[][] }>;
+  release(): void;
+}
+
+/** Object-mode reader for a single sample SELECT (pool or dedicated client). */
+type SampleRunner = { query(text: string, params?: unknown[]): Promise<{ rows: Record<string, unknown>[] | unknown[][] }> };
 
 const SYSTEM_SCHEMAS = ['pg_catalog', 'information_schema', 'pg_toast'];
 
 // Value sampling (opt-in) guards: bound how many columns are probed per
-// introspect and how long a sampled value may be.
+// introspect, how long a sampled value may be, and how long each scan may run.
 const MAX_SAMPLED_COLUMNS = 300;
 const MAX_SAMPLE_VALUE_LEN = 64;
+const SAMPLE_STATEMENT_TIMEOUT_MS = 2000;
 
 /** Text-ish types worth sampling; numeric/uuid/json/temporal/name are not. */
 function isSampleablePgType(dbType: string): boolean {
@@ -48,7 +59,7 @@ function quotePg(ident: string): string {
  * result; the caller bounds how many columns are probed.
  */
 async function samplePgColumn(
-  db: Queryable,
+  db: SampleRunner,
   schema: string,
   table: string,
   column: string,
@@ -57,9 +68,10 @@ async function samplePgColumn(
     `SELECT DISTINCT ${quotePg(column)} AS v FROM ${quotePg(schema)}.${quotePg(table)} ` +
       `WHERE ${quotePg(column)} IS NOT NULL LIMIT ${VALUE_SAMPLE_MAX_DISTINCT + 1}`,
   );
-  if (res.rows.length > VALUE_SAMPLE_MAX_DISTINCT) return undefined;
+  const rows = res.rows as Record<string, unknown>[];
+  if (rows.length > VALUE_SAMPLE_MAX_DISTINCT) return undefined;
   const vals: string[] = [];
-  for (const r of res.rows) {
+  for (const r of rows) {
     if (r['v'] == null) continue;
     const s = String(r['v']);
     if (s.length > MAX_SAMPLE_VALUE_LEN) return undefined;
@@ -320,16 +332,33 @@ export async function introspectPostgres(
     }
   }
 
-  // Opt-in: observe the distinct codes a short non-enum text column holds.
-  let sampleBudget = MAX_SAMPLED_COLUMNS;
-  for (const t of sampleTargets) {
-    if (sampleBudget <= 0) break;
-    sampleBudget--;
+  // Opt-in: observe the distinct codes a short non-enum text column holds. Sampling
+  // scans user tables, so run it on a dedicated client with a SET LOCAL
+  // statement_timeout - an unindexed column can otherwise full-scan unbounded.
+  if (sampleTargets.length > 0) {
+    const client = db.connect ? await db.connect().catch(() => null) : null;
+    const runner: SampleRunner = client ?? db;
     try {
-      const sampled = await samplePgColumn(db, t.schema, t.table, t.column);
-      if (sampled) t.list[t.index] = { ...t.list[t.index]!, sampledValues: sampled };
-    } catch {
-      // Best-effort: a locked-down, huge, or slow column just gets no samples.
+      if (client) {
+        await client.query('BEGIN READ ONLY').catch(() => {});
+        await client.query(`SET LOCAL statement_timeout = ${SAMPLE_STATEMENT_TIMEOUT_MS}`).catch(() => {});
+      }
+      let sampleBudget = MAX_SAMPLED_COLUMNS;
+      for (const t of sampleTargets) {
+        if (sampleBudget <= 0) break;
+        sampleBudget--;
+        try {
+          const sampled = await samplePgColumn(runner, t.schema, t.table, t.column);
+          if (sampled) t.list[t.index] = { ...t.list[t.index]!, sampledValues: sampled };
+        } catch {
+          // Best-effort: a locked-down, huge, or slow column just gets no samples.
+        }
+      }
+    } finally {
+      if (client) {
+        await client.query('COMMIT').catch(() => {});
+        client.release();
+      }
     }
   }
 

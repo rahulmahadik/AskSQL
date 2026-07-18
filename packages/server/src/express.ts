@@ -85,7 +85,20 @@ export function asksqlMiddleware(
         res.end();
         return;
       }
-    const sreq = toServerRequest(req, server.maxBodyBytes);
+      // CSRF: a cross-origin POST with text/plain (or no type) is a CORS "simple
+      // request" - no preflight - so it would reach /chat, /execute and /explain
+      // and run, using the caller's cookies. Requiring application/json forces a
+      // preflight, which our CORS policy then decides on.
+      if (req.method === 'POST') {
+        const ct = String(req.headers['content-type'] ?? '').split(';')[0]!.trim().toLowerCase();
+        if (ct !== 'application/json') {
+          res.statusCode = 415;
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify({ error: { code: 'INVALID_INPUT', userMessage: 'Send this request as application/json.' } }));
+          return;
+        }
+      }
+      const sreq = toServerRequest(req, server.maxBodyBytes);
       let response: HandlerResponse;
       try {
         response = await server.handle(sreq);

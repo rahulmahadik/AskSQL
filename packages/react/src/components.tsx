@@ -81,7 +81,7 @@ const { save } = useSavedQueries();
         Database{' '}
         <select value={activeConn} onChange={(e) => setActiveConn(e.target.value)} aria-label="Choose database connection">
         {connections.map((c) => (
-              <option key={c.id} value={c.id}>{c.name} ({c.engine})</option>
+              <option key={c.id} value={c.id}>{c.name} ({[c.engine, c.database].filter(Boolean).join(' · ')})</option>
     ))}
 </select>
 </label>
