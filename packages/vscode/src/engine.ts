@@ -414,7 +414,7 @@ export class EngineManager {
     // as a confusing provider error. Say what to do instead.
     const model = cfg().get<string>('model')?.trim();
     if (!model) {
-      throw new UserFacingError('No AI model is selected. Run "AskSQL: Select Model" to pick one.');
+      throw new UserFacingError('No AI model is selected. Run "AskSQL: Select AI Provider" to set one up.');
     }
     const baseURL = cfg().get<string>('baseURL') || undefined;
     const apiKey = (await this.secrets.get(apiKeyKey(provider))) ?? undefined;

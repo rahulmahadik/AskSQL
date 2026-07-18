@@ -16,6 +16,7 @@ export type ProviderName =
   | 'google'
   | 'azure'
   | 'groq'
+  | 'nvidia'
   | 'ollama'
   | 'openai-compatible';
 
@@ -37,9 +38,29 @@ const CLOUD_PROVIDERS: ReadonlySet<ProviderName> = new Set([
   'google',
   'azure',
   'groq',
+  'nvidia',
 ]);
 
 const OLLAMA_DEFAULT_BASE_URL = 'http://localhost:11434/v1';
+
+/**
+ * Pre-seeded official API host for every provider (user `baseURL` always overrides).
+ * `nvidia`/`ollama` are built with createOpenAICompatible, so their host is used for
+ * construction too; the dedicated SDK providers (openai/anthropic/google/groq) carry
+ * their own URL, so their host here is used only for model listing, display, and as
+ * the value a user overrides. `azure` (resource-specific) and `openai-compatible`
+ * (fully user-supplied) have no fixed host.
+ */
+export const PROVIDER_API_HOST: Readonly<Record<ProviderName, string | undefined>> = {
+  openai: 'https://api.openai.com/v1',
+  anthropic: 'https://api.anthropic.com/v1',
+  google: 'https://generativelanguage.googleapis.com/v1beta',
+  azure: undefined,
+  groq: 'https://api.groq.com/openai/v1',
+  nvidia: 'https://integrate.api.nvidia.com/v1',
+  ollama: OLLAMA_DEFAULT_BASE_URL,
+  'openai-compatible': undefined,
+};
 
 const isLoopback = (h: string): boolean =>
   h === 'localhost' || h === '127.0.0.1' || h === '::1' || h === '[::1]' || h.endsWith('.localhost');
@@ -165,11 +186,14 @@ export async function resolveModel(config: ProviderConfig): Promise<ModelLike> {
       const create = mod['createGroq'] as (o: object) => (id: string) => ModelLike;
       return create({ apiKey: config.apiKey })(config.model);
     }
+    case 'nvidia':
     case 'ollama':
     case 'openai-compatible': {
+      // NVIDIA and Ollama are OpenAI-compatible with a known endpoint we pre-seed;
+      // a user-supplied baseURL overrides it. openai-compatible has no default.
       const mod = await importProvider('@ai-sdk/openai-compatible');
       const create = mod['createOpenAICompatible'] as (o: object) => (id: string) => ModelLike;
-      const baseURL = config.baseURL ?? (config.provider === 'ollama' ? OLLAMA_DEFAULT_BASE_URL : undefined);
+      const baseURL = config.baseURL ?? PROVIDER_API_HOST[config.provider];
       if (!baseURL) {
         throw new AskSqlError('CONFIG_ERROR', {
           detail: 'openai-compatible requires baseURL',

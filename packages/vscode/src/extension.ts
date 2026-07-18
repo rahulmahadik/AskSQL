@@ -161,10 +161,12 @@ export function activate(ctx: vscode.ExtensionContext): void {
       } else {
         const pick = await vscode.window.showErrorMessage(
           `AskSQL: ${provider} did not answer. ${result.message}`,
-          'Select Model',
+          'Set up provider',
           'Open Settings',
         );
-        if (pick === 'Select Model') await vscode.commands.executeCommand('asksql.pickModel');
+        // Re-run the guided setup (provider + API key + model) - the usual cause is a
+        // missing key or an unpicked model, and this fixes both in one flow.
+        if (pick === 'Set up provider') await vscode.commands.executeCommand('asksql.selectProvider');
         if (pick === 'Open Settings') await vscode.commands.executeCommand('asksql.openSettings');
       }
     }),

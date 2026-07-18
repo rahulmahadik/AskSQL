@@ -3,7 +3,7 @@
   "private": true,
   "displayName": "AskSQL",
   "description": "AI database chat for Postgres, MySQL and SQLite: ask in plain language, review the SQL, get answers. Read-only by design, bring your own model.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "RahulMahadik",
   "license": "Apache-2.0",
   "pricing": "Free",
@@ -200,15 +200,16 @@
             "anthropic",
             "google",
             "groq",
+            "nvidia",
             "openai-compatible"
           ],
-          "markdownDescription": "AI provider. `ollama` runs fully local and needs no API key.",
+          "markdownDescription": "AI provider. `ollama` runs fully local and needs no API key; `groq` and `nvidia` offer free tiers. Run **AskSQL: Select AI Provider** to set the provider, key, and model together.",
           "scope": "machine"
         },
         "asksql.model": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Model id for `#asksql.provider#`. Leave empty and run **AskSQL: Select Model** to pick from the models your endpoint actually has - AskSQL does not guess a model id, because a default you have not pulled fails in a way that looks like a bug.",
+          "markdownDescription": "Model id for `#asksql.provider#`. Leave empty and run **AskSQL: Select AI Provider** (or **Choose Answering Model** in the panel) to pick from the models your endpoint actually has - AskSQL does not guess a model id, because a default you have not pulled fails in a way that looks like a bug.",
           "scope": "machine"
         },
         "asksql.baseURL": {
