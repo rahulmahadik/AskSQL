@@ -16,7 +16,7 @@
 
 import * as vscode from 'vscode';
 import * as path from 'node:path';
-import { createAskSql, callModel, type AskSqlEngine, type Connector, type ModelLike, type ResultSet, type SchemaCatalog } from '@asksql/core';
+import { createAskSql, callModel, guardSql, type AskSqlEngine, type Connector, type ModelLike, type ResultSet, type SchemaCatalog } from '@asksql/core';
 import { PostgresConnector } from '@asksql/postgres';
 import { MysqlConnector } from '@asksql/mysql';
 import { SqliteConnector } from '@asksql/sqlite';
@@ -65,9 +65,17 @@ export const passwordKey = (id: string): string => `asksql.conn.${id}.password`;
 /** API keys are stored per provider, so one provider's key is never sent to another's endpoint. */
 export const apiKeyKey = (provider: string): string => `asksql.apiKey.${provider}`;
 
-/** The endpoint a password was saved against. */
-const endpointOf = (c: Pick<ConnectionConfig, 'host' | 'port' | 'database' | 'file'>): string =>
-  `${c.host ?? ''}:${c.port ?? ''}/${c.database ?? c.file ?? ''}`;
+/**
+ * The endpoint a password was saved against.
+ *
+ * This binds every field that decides WHERE the password goes and HOW it crosses
+ * the wire - `ssl` included. Binding host/port/database alone let a workspace
+ * clone a user's connection with the same endpoint but `ssl: 'no-verify'`: the
+ * binding still matched, the keychain handed the real password over, and it went
+ * out over unverified TLS for an on-path attacker to take.
+ */
+const endpointOf = (c: Pick<ConnectionConfig, 'engine' | 'host' | 'port' | 'user' | 'database' | 'file' | 'ssl'>): string =>
+  `${c.engine}|${c.host ?? ''}:${c.port ?? ''}/${c.database ?? c.file ?? ''}|${c.user ?? ''}|${c.ssl ?? 'none'}`;
 
 interface StoredPassword {
   readonly endpoint: string;
@@ -223,14 +231,24 @@ interface SqliteHandle {
 
 /** Open SQLite through Node's built-in driver - no native module, no ABI risk. */
 async function openSqlite(file: string): Promise<SqliteHandle> {
+  // resolveFile may throw its own UserFacingError (virtual workspace) - let it
+  // propagate; only the driver import is the "no node:sqlite" case.
+  const resolved = resolveFile(file);
+  let mod: { DatabaseSync: new (p: string, o?: object) => SqliteHandle };
   try {
-    const mod = (await import('node:sqlite')) as { DatabaseSync: new (p: string, o?: object) => SqliteHandle };
-    return new mod.DatabaseSync(resolveFile(file), { readOnly: true });
+    mod = (await import('node:sqlite')) as { DatabaseSync: new (p: string, o?: object) => SqliteHandle };
   } catch (err) {
     throw new UserFacingError(
       `SQLite needs Node's built-in sqlite module, which this VS Code build does not provide (${
         err instanceof Error ? err.message : String(err)
       }). Use a Postgres or MySQL connection instead.`,
+    );
+  }
+  try {
+    return new mod.DatabaseSync(resolved, { readOnly: true });
+  } catch (err) {
+    throw new UserFacingError(
+      `Could not open the SQLite file "${file}": ${err instanceof Error ? err.message : String(err)}. Check that the path exists and is readable.`,
     );
   }
 }
@@ -263,6 +281,8 @@ export class EngineManager {
   private readonly engines = new Map<string, AskSqlEngine>();
   /** connectionId -> catalog. Introspection is expensive; the tree expands often. */
   private readonly catalogs = new Map<string, SchemaCatalog>();
+  /** In-flight introspects, so concurrent tree expansions share one, not N. */
+  private readonly catalogInflight = new Map<string, Promise<SchemaCatalog>>();
   /** Per-connection build failures, so one bad config does not kill every database. */
   private failures = new Map<string, Error>();
   /**
@@ -416,6 +436,18 @@ export class EngineManager {
   async catalogFor(connectionId: string): Promise<SchemaCatalog> {
     const cached = this.catalogs.get(connectionId);
     if (cached) return cached;
+    // Share one introspect across concurrent callers (caching the value, not the
+    // promise, let two tree nodes each open a connection and introspect in full).
+    const running = this.catalogInflight.get(connectionId);
+    if (running) return running;
+    const p = this.introspectFresh(connectionId).finally(() => {
+      this.catalogInflight.delete(connectionId);
+    });
+    this.catalogInflight.set(connectionId, p);
+    return p;
+  }
+
+  private async introspectFresh(connectionId: string): Promise<SchemaCatalog> {
     const gen = this.generation;
     const conns = await this.sharedConnectors();
     const conn = conns.find((c) => c.id === connectionId);
@@ -465,6 +497,15 @@ export class EngineManager {
     throw new UserFacingError('Settings changed while the query was being prepared. Ask again.');
   }
 
+  /**
+   * The recorded build failure for a connection, if any. A connection that failed
+   * to build (bad file path, missing database name) is absent from the engine, so
+   * a query against it otherwise surfaces as a generic "unknown connection".
+   */
+  failureFor(connectionId: string): Error | undefined {
+    return this.failures.get(connectionId);
+  }
+
   /** Engine backed by the model the user picked in the chat dropdown. */
   forChatModel(lm: vscode.LanguageModelChat): Promise<AskSqlEngine> {
     return this.engineFor(`lm:${lm.id}`, () => lmCustomModel(lm));
@@ -489,17 +530,34 @@ export class EngineManager {
     if (!conn.explain) {
       throw new UserFacingError('This database cannot show a query plan.');
     }
+    // The SQL arrives over the webview channel, so it is untrusted like any other
+    // input: guard it here too. This is the engine's invariant - every string
+    // reaching a database passes the guard first - and this was the one path
+    // that skipped it, leaning on the connector's read-only session instead.
+    const maxRows = cfg().get<number>('maxRows') ?? 1000;
+    const verdict = guardSql({ sql, dialect: conn.dialect, policy: { mode: 'read-only', maxRows } });
+    if (!verdict.allowed) {
+      throw new UserFacingError(`That query cannot be explained: ${verdict.reason ?? 'it is not a read-only query'}.`);
+    }
     await withTimeout(conn.connect(), CONNECT_TIMEOUT_MS, 'Could not reach the database to explain the plan.');
     return withTimeout(
-      conn.explain(sql, { maxRows: cfg().get<number>('maxRows') ?? 1000 }),
+      conn.explain(verdict.sql, { maxRows }),
       CONNECT_TIMEOUT_MS,
       'The query plan took too long.',
     );
   }
 
-  /** Drop the cached schema without tearing down connections. */
+  /**
+   * Drop the cached schema without tearing down connections.
+   *
+   * The engines cache their own catalog internally (5 min TTL), so clearing only
+   * this map left "Refresh Schema" refreshing the tree while chat kept answering
+   * - and validating - against the stale schema, telling users a table they had
+   * just created did not exist. Drop the engines too; they rebuild lazily.
+   */
   invalidateCatalogs(): void {
     this.catalogs.clear();
+    this.engines.clear();
   }
 
   /**
@@ -557,6 +615,7 @@ export class EngineManager {
     const handles = this.sqliteHandles;
     this.engines.clear();
     this.catalogs.clear();
+    this.catalogInflight.clear();
     this.failures = new Map();
     this.connectorsPromise = undefined;
     this.sqliteHandles = [];

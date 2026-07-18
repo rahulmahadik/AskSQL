@@ -21,7 +21,7 @@ import { EngineManager, apiKeyKey, storePassword, passwordKey, connectionStringK
 import { ChatViewProvider } from './chatView.js';
 import { SchemaTreeProvider, type Node } from './tree.js';
 import { addConnection, removeConnection } from './wizard.js';
-import { selectModel, selectProvider } from './models.js';
+import { selectProvider } from './models.js';
 import { initLog, log } from './log.js';
 import { userMessage } from './errors.js';
 
@@ -164,7 +164,7 @@ export function activate(ctx: vscode.ExtensionContext): void {
           'Select Model',
           'Open Settings',
         );
-        if (pick === 'Select Model') await vscode.commands.executeCommand('asksql.selectModel');
+        if (pick === 'Select Model') await vscode.commands.executeCommand('asksql.pickModel');
         if (pick === 'Open Settings') await vscode.commands.executeCommand('asksql.openSettings');
       }
     }),
@@ -221,10 +221,6 @@ export function activate(ctx: vscode.ExtensionContext): void {
       chat.refresh();
       void vscode.window.showInformationMessage('AskSQL: connections and keys removed.');
     })),
-
-    vscode.commands.registerCommand('asksql.selectModel', async () => {
-      await selectModel(ctx.secrets);
-    }),
 
     // The unified "which model answers" picker (VS Code chat model or your provider).
     vscode.commands.registerCommand('asksql.pickModel', guard(() => chat.pickModel())),

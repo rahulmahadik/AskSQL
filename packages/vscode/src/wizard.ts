@@ -186,13 +186,19 @@ export async function addConnection(secrets: vscode.SecretStorage): Promise<stri
     } else {
       const host = await ask('Host', 'localhost');
       if (host === undefined) return undefined;
-      const portStr = await ask('Port', String(DEFAULT_PORT[engine.value] ?? ''));
+      // Validate inline (1-65535) so a typo is corrected in place, not by aborting
+      // the whole wizard and making the user start over.
+      const portStr = await vscode.window.showInputBox({
+        prompt: 'Port',
+        value: String(DEFAULT_PORT[engine.value] ?? ''),
+        ignoreFocusOut: true,
+        validateInput: (v) => {
+          const n = Number(v.trim());
+          return Number.isInteger(n) && n >= 1 && n <= 65535 ? undefined : 'Enter a port between 1 and 65535.';
+        },
+      });
       if (portStr === undefined) return undefined;
-      const port = Number(portStr);
-      if (!Number.isFinite(port) || port <= 0) {
-        void vscode.window.showErrorMessage(`AskSQL: "${portStr}" is not a valid port.`);
-        return undefined;
-      }
+      const port = Number(portStr.trim());
       const user = await ask('User', engine.value === 'postgres' ? 'postgres' : 'root');
       if (user === undefined) return undefined;
       const database = await askRequired(

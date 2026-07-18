@@ -54,5 +54,5 @@ export function userMessage(err: unknown): string {
   if (err instanceof UserFacingError) return err.message;
   const mapped = BY_CODE[codeOf(err) ?? ''];
   if (mapped) return mapped;
-  return 'Could not read this database. See the AskSQL output channel for details.';
+  return 'Something went wrong. See the AskSQL output channel for details.';
 }
