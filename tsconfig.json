@@ -17,10 +17,19 @@
       "path": "packages/mysql"
     },
     {
+      "path": "packages/oracle"
+    },
+    {
+      "path": "packages/mongodb"
+    },
+    {
       "path": "packages/server"
     },
     {
       "path": "packages/react"
+    },
+    {
+      "path": "packages/widget"
     },
     {
       "path": "packages/mcp"

@@ -1,0 +1,32 @@
+{
+  "$schema": "https://typedoc.org/schema.json",
+  "entryPointStrategy": "packages",
+  "entryPoints": [
+    "packages/core",
+    "packages/postgres",
+    "packages/mysql",
+    "packages/sqlite",
+    "packages/mongodb",
+    "packages/oracle",
+    "packages/duckdb",
+    "packages/react",
+    "packages/server",
+    "packages/mcp",
+    "packages/widget"
+  ],
+  "out": "docs/api",
+  "name": "AskSQL API Reference",
+  "includeVersion": false,
+  "excludePrivate": true,
+  "excludeInternal": true,
+  "excludeExternals": true,
+  "readme": "none",
+  "navigationLinks": {
+    "GitHub": "https://github.com/rahulmahadik/AskSQL"
+  },
+  "externalSymbolLinkMappings": {
+    "ai": {
+      "LanguageModel": "https://ai-sdk.dev/docs/reference/ai-sdk-core"
+    }
+  }
+}
