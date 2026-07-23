@@ -31,3 +31,5 @@ The SDK is an optional peer dependency: `createAskSqlMcpTools` works without it;
 `startAskSqlMcpServer` needs `@modelcontextprotocol/sdk`.
 
 Full documentation: [https://github.com/rahulmahadik/AskSQL](https://github.com/rahulmahadik/AskSQL)
+
+API reference: [rahulmahadik.github.io/AskSQL](https://rahulmahadik.github.io/AskSQL/)

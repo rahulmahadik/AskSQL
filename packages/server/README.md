@@ -65,3 +65,5 @@ The wire response never includes internal error detail (hostnames, driver text);
 safe `userMessage`. Use `onError` if you need the full error server-side.
 
 Full documentation: [https://github.com/rahulmahadik/AskSQL](https://github.com/rahulmahadik/AskSQL)
+
+API reference: [rahulmahadik.github.io/AskSQL](https://rahulmahadik.github.io/AskSQL/)

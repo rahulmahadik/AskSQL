@@ -148,6 +148,8 @@ All packages publish under the [`@asksql`](https://www.npmjs.com/org/asksql) npm
 | [`@asksql/widget`](https://www.npmjs.com/package/@asksql/widget) | Vanilla-JS `<script>` embed (shadow-DOM isolated) for non-React pages. |
 | [`@asksql/mcp`](https://www.npmjs.com/package/@asksql/mcp) | Model Context Protocol tools, so agents (Claude Desktop, IDEs) can query through the same guard. |
 
+**API reference (TypeDoc):** [rahulmahadik.github.io/AskSQL](https://rahulmahadik.github.io/AskSQL/)
+
 ## Install only what your mode needs
 
 Every setup is **three parts**, and you install only the ones you use:

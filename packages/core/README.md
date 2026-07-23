@@ -60,3 +60,5 @@ so `baseURL` is only needed to override a default (an OpenAI-compatible gateway,
 `PROVIDER_API_HOST` exposes the defaults.
 
 Full documentation: [https://github.com/rahulmahadik/AskSQL](https://github.com/rahulmahadik/AskSQL)
+
+API reference: [rahulmahadik.github.io/AskSQL](https://rahulmahadik.github.io/AskSQL/)
