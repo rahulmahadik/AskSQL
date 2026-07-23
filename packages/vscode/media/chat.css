@@ -7,9 +7,12 @@
  * mode restyles it for free and light/dark need no separate handling.
  */
 
-* { box-sizing: border-box; }
+* {
+  box-sizing: border-box;
+}
 
-html, body {
+html,
+body {
   height: 100%;
   margin: 0;
   padding: 0;
@@ -26,8 +29,14 @@ body {
 }
 
 /* Match native controls (select popups, scrollbars) to the VS Code theme kind. */
-body.vscode-light, body.vscode-high-contrast-light { color-scheme: light; }
-body.vscode-dark, body.vscode-high-contrast { color-scheme: dark; }
+body.vscode-light,
+body.vscode-high-contrast-light {
+  color-scheme: light;
+}
+body.vscode-dark,
+body.vscode-high-contrast {
+  color-scheme: dark;
+}
 
 /* Header ------------------------------------------------------------------ */
 
@@ -82,12 +91,26 @@ button:focus-visible {
   gap: 10px;
 }
 
-#log:empty { display: none; }
+#log:empty {
+  display: none;
+}
 
 .turn {
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+
+/* "You" / "AskSQL" attribution above each side of a turn. */
+.role {
+  align-self: flex-end;
+  font-size: 0.8em;
+  font-weight: 600;
+  color: var(--vscode-descriptionForeground);
+}
+.role.assistant {
+  align-self: flex-start;
+  margin-top: 2px;
 }
 
 .q {
@@ -118,7 +141,7 @@ button:focus-visible {
 }
 
 .progress::before {
-  content: "";
+  content: '';
   width: 8px;
   height: 8px;
   border-radius: 50%;
@@ -127,13 +150,21 @@ button:focus-visible {
 }
 
 @keyframes pulse {
-  0%, 100% { opacity: 0.3; }
-  50% { opacity: 1; }
+  0%,
+  100% {
+    opacity: 0.3;
+  }
+  50% {
+    opacity: 1;
+  }
 }
 
 /* Respect the user's motion preference - the spinner is decoration, not information. */
 @media (prefers-reduced-motion: reduce) {
-  .progress::before { animation: none; opacity: 1; }
+  .progress::before {
+    animation: none;
+    opacity: 1;
+  }
 }
 
 /* SQL --------------------------------------------------------------------- */
@@ -154,6 +185,23 @@ pre.sql {
 .explain {
   color: var(--vscode-foreground);
   overflow-wrap: anywhere;
+}
+
+.explain code {
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 0.92em;
+  background: var(--vscode-textCodeBlock-background, rgba(127, 127, 127, 0.12));
+  border-radius: 3px;
+  padding: 0 3px;
+}
+
+.explain .md-bullet {
+  padding-left: 1em;
+  text-indent: -0.75em;
+}
+
+.explain .md-bullet::before {
+  content: '\2022  ';
 }
 
 .note {
@@ -181,13 +229,16 @@ table {
   font-size: 0.95em;
 }
 
-th, td {
+th,
+td {
   text-align: left;
   padding: 3px 8px;
   border-bottom: 1px solid var(--vscode-panel-border);
 }
 
-th { white-space: nowrap; }
+th {
+  white-space: nowrap;
+}
 
 /* Cap a cell so one long value cannot stretch the whole table unreadably wide. */
 td {
@@ -203,12 +254,17 @@ th {
   font-weight: 600;
 }
 
-tr:last-child td { border-bottom: none; }
+tr:last-child td {
+  border-bottom: none;
+}
 tbody tr:hover {
   background: var(--vscode-list-hoverBackground);
   color: var(--vscode-list-hoverForeground, inherit);
 }
-td.null { color: var(--vscode-descriptionForeground); font-style: italic; }
+td.null {
+  color: var(--vscode-descriptionForeground);
+  font-style: italic;
+}
 
 /* Errors ------------------------------------------------------------------ */
 
@@ -248,14 +304,18 @@ button {
   background: var(--vscode-button-background);
 }
 
-button:hover { background: var(--vscode-button-hoverBackground); }
+button:hover {
+  background: var(--vscode-button-hoverBackground);
+}
 
 button.secondary {
   color: var(--vscode-button-secondaryForeground);
   background: var(--vscode-button-secondaryBackground);
 }
 
-button.secondary:hover { background: var(--vscode-button-secondaryHoverBackground); }
+button.secondary:hover {
+  background: var(--vscode-button-secondaryHoverBackground);
+}
 
 button.iconbtn {
   display: inline-flex;
@@ -264,9 +324,14 @@ button.iconbtn {
   padding: 4px 6px;
 }
 
-button.iconbtn.ok { color: var(--vscode-testing-iconPassed, var(--vscode-charts-green, currentColor)); }
+button.iconbtn.ok {
+  color: var(--vscode-testing-iconPassed, var(--vscode-charts-green, currentColor));
+}
 
-button:disabled { opacity: 0.5; cursor: default; }
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
 
 /*
  * Cancel. The red comes from the theme's own status-bar error colour, so it is
@@ -293,9 +358,18 @@ button.danger:hover {
   text-align: center;
 }
 
-.empty.hidden { display: none; }
-.empty-title { margin: 0; font-weight: 600; }
-.empty-sub { margin: 0; color: var(--vscode-descriptionForeground); font-size: 0.9em; }
+.empty.hidden {
+  display: none;
+}
+.empty-title {
+  margin: 0;
+  font-weight: 600;
+}
+.empty-sub {
+  margin: 0;
+  color: var(--vscode-descriptionForeground);
+  font-size: 0.9em;
+}
 
 .samples {
   list-style: none;
@@ -343,6 +417,10 @@ textarea {
   font-size: inherit;
 }
 
-textarea::placeholder { color: var(--vscode-input-placeholderForeground); }
+textarea::placeholder {
+  color: var(--vscode-input-placeholderForeground);
+}
 
-.hidden { display: none !important; }
+.hidden {
+  display: none !important;
+}

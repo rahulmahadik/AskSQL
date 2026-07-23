@@ -2,8 +2,8 @@
   "name": "asksql-vscode",
   "private": true,
   "displayName": "AskSQL",
-  "description": "AI database chat for Postgres, MySQL and SQLite: ask in plain language, review the SQL, get answers. Read-only by design, bring your own model.",
-  "version": "0.2.1",
+  "description": "AI database chat: ask in plain language, review the query, get answers. Read-only by design, bring your own model.",
+  "version": "0.3.0",
   "publisher": "RahulMahadik",
   "license": "Apache-2.0",
   "pricing": "Free",
@@ -39,7 +39,11 @@
     "postgres",
     "mysql",
     "mariadb",
-    "sqlite"
+    "sqlite",
+    "oracle",
+    "mongodb",
+    "nosql",
+    "ollama"
   ],
   "engines": {
     "vscode": "^1.95.0"
@@ -121,6 +125,16 @@
         "title": "Clear Chat",
         "category": "AskSQL",
         "icon": "$(clear-all)"
+      },
+      {
+        "command": "asksql.askAboutSelection",
+        "title": "Ask About Selection",
+        "category": "AskSQL"
+      },
+      {
+        "command": "asksql.collectDiagnostics",
+        "title": "Collect Diagnostics",
+        "category": "AskSQL"
       }
     ],
     "configuration": {
@@ -151,7 +165,9 @@
                 "enum": [
                   "postgres",
                   "mysql",
-                  "sqlite"
+                  "sqlite",
+                  "oracle",
+                  "mongodb"
                 ],
                 "description": "Database engine."
               },
@@ -220,7 +236,7 @@
         },
         "asksql.maxRows": {
           "type": "number",
-          "default": 1000,
+          "default": 100,
           "minimum": 1,
           "maximum": 100000,
           "description": "Row cap injected into every query.",
@@ -251,6 +267,12 @@
           "default": false,
           "scope": "machine",
           "markdownDescription": "Read a few real values from short text columns that are not declared enums (for example a `status` column that only holds `active`, `closed`, `pending`) and show them to the model, so it filters on codes that actually exist instead of guessing casing and spelling. **This sends those values to the model** - it is the one setting that lets column data, not just schema, leave for the model, so it is off by default and does nothing with a local model beyond your own machine. Only short, low-cardinality columns are sampled; long or high-cardinality columns are skipped."
+        },
+        "asksql.answerSchemaQuestions": {
+          "type": "boolean",
+          "default": false,
+          "scope": "window",
+          "markdownDescription": "When a question can't be turned into a SQL query (for example \"what is this database for?\" or \"how are these tables related?\"), answer it in plain language from the schema instead of erroring. The answer is grounded in the tables, columns, and relationships only - it never reports data values, and names it invents are flagged. **Accuracy depends on your model:** the text is generated, so treat it as guidance, not fact. Off by default."
         }
       }
     },
@@ -267,13 +289,15 @@
       "asksql": [
         {
           "id": "asksql.schema",
-          "name": "Databases"
+          "name": "Databases",
+          "initialSize": 3
         },
         {
           "id": "asksql.chat",
           "name": "Ask",
           "type": "webview",
-          "visibility": "visible"
+          "visibility": "visible",
+          "initialSize": 7
         }
       ]
     },
@@ -308,6 +332,13 @@
           "command": "asksql.clearChat",
           "when": "view == asksql.chat",
           "group": "navigation@3"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "asksql.askAboutSelection",
+          "when": "editorHasSelection",
+          "group": "9_cutcopypaste@10"
         }
       ],
       "view/item/context": [
@@ -353,7 +384,7 @@
           {
             "id": "connect",
             "title": "Connect a database",
-            "description": "Add a Postgres, MySQL or SQLite connection. Passwords are stored in your OS keychain, never in settings.\n[Add Database Connection](command:asksql.addConnection)",
+            "description": "Add a Postgres, MySQL, SQLite, Oracle or MongoDB connection. Passwords are stored in your OS keychain, never in settings.\n[Add Database Connection](command:asksql.addConnection)",
             "media": {
               "markdown": "media/walkthrough/connect.md"
             },
@@ -403,10 +434,14 @@
     "@ai-sdk/openai": "^4.0.13",
     "@ai-sdk/openai-compatible": "^3.0.9",
     "@asksql/core": "workspace:*",
+    "@asksql/mongodb": "workspace:*",
     "@asksql/mysql": "workspace:*",
+    "@asksql/oracle": "workspace:*",
     "@asksql/postgres": "workspace:*",
     "@asksql/sqlite": "workspace:*",
+    "mongodb": "^6.10.0",
     "mysql2": "^3.22.6",
+    "oracledb": "^6.5.0",
     "pg": "^8.22.0"
   },
   "devDependencies": {
@@ -438,7 +473,7 @@
     },
     "virtualWorkspaces": {
       "supported": "limited",
-      "description": "Postgres and MySQL work in virtual workspaces. SQLite needs a real file system."
+      "description": "Postgres, MySQL, Oracle and MongoDB work in virtual workspaces. SQLite needs a real file system."
     }
   }
 }

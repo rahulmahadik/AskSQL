@@ -1,14 +1,7 @@
 /**
- * Bridges VS Code's Language Model API into AskSQL's engine.
- *
- * AskSQL accepts `ModelLike = LanguageModel | CustomModel`, where CustomModel is
- * just `(req) => Promise<string | AsyncIterable<string>>`. VS Code's
- * `sendRequest()` resolves to `{ text: AsyncIterable<string> }`. So the user's
- * chosen chat model (Copilot or any registered provider) drops straight in.
- *
- * Why this matters for enterprise: there is no API key to distribute or govern -
- * queries ride the model the organisation already approved, while AskSQL's
- * read-only guard still decides what may execute.
+ * Bridges VS Code's Language Model API into AskSQL's engine: the user's chosen
+ * chat model (Copilot or any registered provider) is wrapped as an AskSQL
+ * CustomModel, so no separate API key is needed.
  */
 
 import * as vscode from 'vscode';
@@ -22,9 +15,10 @@ import { AskSqlError, type CustomModel } from '@asksql/core';
 export function lmCustomModel(lm: vscode.LanguageModelChat): CustomModel {
   return async ({ system, prompt, signal }) => {
     const cts = new vscode.CancellationTokenSource();
+    const onAbort = () => cts.cancel();
     if (signal) {
       if (signal.aborted) cts.cancel();
-      else signal.addEventListener('abort', () => cts.cancel(), { once: true });
+      else signal.addEventListener('abort', onAbort, { once: true });
     }
     try {
       // The engine builds one system + one user prompt; VS Code models take a
@@ -57,6 +51,7 @@ export function lmCustomModel(lm: vscode.LanguageModelChat): CustomModel {
       }
       throw err;
     } finally {
+      signal?.removeEventListener('abort', onAbort);
       cts.dispose();
     }
   };

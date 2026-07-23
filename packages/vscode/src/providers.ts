@@ -1,16 +1,8 @@
 /**
- * Provider factories, imported STATICALLY.
- *
- * `@asksql/core`'s resolveModel() loads providers with `await import(pkgName)`
- * where the specifier is a variable. That is correct for a normal npm consumer
- * (npm installs the peer, Node resolves it at runtime) but it cannot survive a
- * bundler: esbuild cannot analyse a dynamic specifier, so the provider code is
- * never included, and a packaged .vsix ships no node_modules for Node to fall
- * back on. The result is a confusing "provider package is not installed" at
- * runtime for a package that IS declared.
- *
- * Importing the factories statically lets esbuild see them, so they land in the
- * bundle and work offline. The construction mirrors resolveModel exactly.
+ * Provider factories, imported statically. @asksql/core's resolveModel() uses a
+ * dynamic import specifier, which esbuild cannot analyse, and a packaged .vsix
+ * ships no node_modules to fall back on - so the factories are imported here
+ * statically and the construction mirrors resolveModel exactly.
  */
 
 import { createOpenAI } from '@ai-sdk/openai';
@@ -22,7 +14,6 @@ import { PROVIDER_API_HOST, type ModelLike } from '@asksql/core';
 import { UserFacingError } from './errors.js';
 
 export type ProviderName = 'ollama' | 'openai' | 'anthropic' | 'google' | 'groq' | 'nvidia' | 'openai-compatible';
-
 
 export interface ProviderOptions {
   readonly provider: ProviderName;
@@ -36,11 +27,8 @@ const isLoopback = (host: string): boolean =>
 
 /**
  * Link-local range (169.254.0.0/16), which includes the cloud instance-metadata
- * address. A request there from a dev machine on a cloud VM can return instance
- * credentials, so it is never a legitimate model endpoint.
- *
- * URL.hostname returns IPv6 hosts bracketed ("[fe80::1]"), so strip the brackets
- * before testing - a bare prefix test never matches otherwise.
+ * address that can return instance credentials - never a legitimate model
+ * endpoint. URL.hostname brackets IPv6 hosts, so strip the brackets before testing.
  */
 const isLinkLocal = (host: string): boolean => {
   const h = host.replace(/^\[|\]$/g, '');
@@ -70,7 +58,9 @@ export function assertBaseUrl(url: string, opts?: { readonly carriesSecret?: boo
   }
   if (!parsed.hostname) throw new UserFacingError('The base URL has no host. Check the asksql.baseURL setting.');
   if (parsed.username || parsed.password) {
-    throw new UserFacingError('Remove the user name or password from the base URL. Set the API key with "AskSQL: Set AI Provider API Key" instead.');
+    throw new UserFacingError(
+      'Remove the user name or password from the base URL. Set the API key with "AskSQL: Set AI Provider API Key" instead.',
+    );
   }
   if (isLinkLocal(parsed.hostname)) {
     throw new UserFacingError('That base URL points at a link-local address, which is not a model endpoint.');

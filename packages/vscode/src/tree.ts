@@ -23,9 +23,20 @@ const GROUPS: readonly { readonly kind: TableInfo['kind']; readonly label: strin
 export type Node =
   | { readonly kind: 'ai' }
   | { readonly kind: 'connection'; readonly conn: ConnectionConfig & { readonly scope: ConnectionScope } }
-  | { readonly kind: 'group'; readonly connId: string; readonly group: (typeof GROUPS)[number]; readonly tables: readonly TableInfo[] }
+  | {
+      readonly kind: 'group';
+      readonly connId: string;
+      readonly group: (typeof GROUPS)[number];
+      readonly tables: readonly TableInfo[];
+    }
   | { readonly kind: 'table'; readonly connId: string; readonly table: TableInfo }
-  | { readonly kind: 'column'; readonly connId: string; readonly tableKey: string; readonly label: string; readonly detail: string }
+  | {
+      readonly kind: 'column';
+      readonly connId: string;
+      readonly tableKey: string;
+      readonly label: string;
+      readonly detail: string;
+    }
   | { readonly kind: 'message'; readonly label: string };
 
 /** Schema-qualified table key: table names repeat across schemas. */
