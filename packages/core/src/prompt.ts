@@ -49,7 +49,7 @@ export function buildSqlUser(input: SqlPromptInput): string {
   if (input.glossary && input.glossary.length > 0) {
     parts.push('', 'Business glossary (use these definitions when the question uses these terms):');
     for (const g of input.glossary.slice(0, 40)) parts.push(`- ${g.term}: ${g.definition}`);
-}
+  }
 
   if (input.fewShots && input.fewShots.length > 0) {
     parts.push('', 'Examples of good answers for this database:');
@@ -108,5 +108,45 @@ export function buildExplainUser(sql: string, schemaText?: string): string {
   const parts: string[] = [];
   if (schemaText) parts.push('<schema>', schemaText, '</schema>', '');
   parts.push('Explain this query:', '```sql', sql, '```');
+  return parts.join('\n');
+}
+
+export function buildSchemaAnswerSystem(dialect: DialectInfo, allowDdlSuggestions = false): string {
+  const lines = [
+    `You are AskSQL, helping someone understand a ${dialect.promptLabel} database.`,
+    'Answer using ONLY the schema and relationships provided. Every EXISTING table or column you name must appear verbatim in the schema - never claim something exists that is not in the schema.',
+    'Explain structure, purpose, and relationships only. Do NOT state data values, row counts, or statistics: no query was run, so those are unknown.',
+  ];
+  if (allowDdlSuggestions) {
+    lines.push(
+      'If the user asks to add, change, or remove schema objects, you MAY suggest the DDL as a statement they can run themselves. State that AskSQL is read-only and will not run it, and that any new name is a proposal, not part of the current schema.',
+    );
+  }
+  lines.push(
+    'If the schema does not contain the answer, say so plainly. Keep it under 180 words. No markdown headings.',
+  );
+  return lines.join('\n');
+}
+
+/** Compound the user prompt with a correction after an ungrounded first answer (understanding questions only). */
+export function buildSchemaAnswerRepairUser(
+  question: string,
+  schemaText: string,
+  invented: readonly string[],
+  relationships?: readonly string[],
+): string {
+  return [
+    buildSchemaAnswerUser(question, schemaText, relationships),
+    '',
+    `Your previous answer referred to ${invented.join(', ')}, which are NOT in the schema above. Answer again using only names that appear in the schema.`,
+  ].join('\n');
+}
+
+export function buildSchemaAnswerUser(question: string, schemaText: string, relationships?: readonly string[]): string {
+  const parts: string[] = ['<schema>', schemaText, '</schema>', ''];
+  if (relationships && relationships.length > 0) {
+    parts.push('<relationships>', ...relationships, '</relationships>', '');
+  }
+  parts.push('Question:', question);
   return parts.join('\n');
 }

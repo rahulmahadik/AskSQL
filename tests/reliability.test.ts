@@ -25,10 +25,14 @@ afterAll(async () => {
 });
 
 const maybe = (name: string, fn: () => Promise<void>, timeout = 30_000) =>
-  it(name, async () => {
-    if (!ready) return;
-    await fn();
-  }, timeout);
+  it(
+    name,
+    async () => {
+      if (!ready) return;
+      await fn();
+    },
+    timeout,
+  );
 
 describe('pool exhaustion queues, never deadlocks', () => {
   maybe('20 concurrent queries through a 2-connection pool all complete', async () => {

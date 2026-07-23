@@ -62,7 +62,12 @@ describe('MySQL introspection', () => {
     const password = process.env['ASKSQL_MYSQL_PASSWORD'] ?? '';
     const db = process.env['ASKSQL_MYSQL_DB'] ?? 'asksql_test';
     const auth = password ? `${user}:${encodeURIComponent(password)}` : user;
-    const c = new MysqlConnector({ id: 'my-uri', name: 'Shop (uri)', uri: `mysql://${auth}@${host}:${port}/${db}`, database: '' });
+    const c = new MysqlConnector({
+      id: 'my-uri',
+      name: 'Shop (uri)',
+      uri: `mysql://${auth}@${host}:${port}/${db}`,
+      database: '',
+    });
     await c.connect();
     try {
       const cat = await c.introspect();
@@ -94,7 +99,9 @@ describe('MySQL execution', () => {
   });
 
   maybe('join + aggregate', async () => {
-    const res = await conn.execute('SELECT s.name, count(p.id) n FROM shops s LEFT JOIN products p ON p.shop_id=s.id GROUP BY s.name ORDER BY s.name');
+    const res = await conn.execute(
+      'SELECT s.name, count(p.id) n FROM shops s LEFT JOIN products p ON p.shop_id=s.id GROUP BY s.name ORDER BY s.name',
+    );
     expect(res.rowCount).toBe(2);
   });
 

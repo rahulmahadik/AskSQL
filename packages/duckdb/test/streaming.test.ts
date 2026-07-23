@@ -57,7 +57,9 @@ describe('large file - bounded fetch, no full-table materialization', () => {
 
     const table = await conn.registerFile({ table: 'big', path: big, format: 'csv' });
     // Registration is a view, not a materialized copy - near-instant, no full read.
-    const agg = await conn.execute(`SELECT region, count(*) n, round(sum(amount)) total FROM ${table} GROUP BY region ORDER BY region`);
+    const agg = await conn.execute(
+      `SELECT region, count(*) n, round(sum(amount)) total FROM ${table} GROUP BY region ORDER BY region`,
+    );
     expect(agg.rowCount).toBe(4);
     expect(agg.rows.reduce((s, r) => s + Number(r[1]), 0)).toBe(1_000_000);
 

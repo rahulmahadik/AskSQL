@@ -55,8 +55,12 @@ interface PgPool {
   query(text: string, params?: unknown[]): Promise<{ rows: Record<string, unknown>[] }>;
 }
 interface PgClient {
-  query(text: string, params?: unknown[]): Promise<{ rows: unknown[][] | Record<string, unknown>[]; fields: PgField[]; rowCount: number | null }>;
-  release(): void;
+  query(
+    text: string,
+    params?: unknown[],
+  ): Promise<{ rows: unknown[][] | Record<string, unknown>[]; fields: PgField[]; rowCount: number | null }>;
+  /** Passing an Error destroys the client instead of returning it to the pool. */
+  release(err?: Error): void;
   processID?: number;
 }
 
@@ -80,6 +84,7 @@ export class PostgresConnector implements Connector {
 
   private pool: PgPool | null = null;
   private typeNameCache: Map<number, string> | null = null;
+  private typeNameInflight: Promise<void> | null = null;
 
   constructor(private readonly config: PostgresConnectorConfig) {
     // Catch a genuinely empty config up front (it would otherwise build a Pool of
@@ -88,7 +93,10 @@ export class PostgresConnector implements Connector {
     // env-driven config (DATABASE_URL / PGHOST / PGSERVICE / ...) legitimately
     // passes neither a host nor a connection string here, so don't reject it.
     const env = typeof process !== 'undefined' ? process.env : undefined;
-    const envConfigured = !!(env && (env['PGHOST'] || env['PGHOSTADDR'] || env['PGSERVICE'] || env['PGURL'] || env['DATABASE_URL'] || env['PGUSER']));
+    const envConfigured = !!(
+      env &&
+      (env['PGHOST'] || env['PGHOSTADDR'] || env['PGSERVICE'] || env['PGURL'] || env['DATABASE_URL'] || env['PGUSER'])
+    );
     if (!config.connectionString && !config.host && !envConfigured) {
       throw new AskSqlError('CONFIG_ERROR', {
         detail: `postgres connector "${config.id ?? '(no id)'}" has neither connectionString nor host, and no PG* env vars are set`,
@@ -175,17 +183,24 @@ export class PostgresConnector implements Connector {
     }
   }
 
-  private async typeName(pool: PgPool, oid: number): Promise<string> {
-    if (!this.typeNameCache) {
-      this.typeNameCache = new Map();
-      try {
-        const r = await pool.query(`SELECT oid, typname FROM pg_type`);
-        for (const row of r.rows) this.typeNameCache.set(Number(row['oid']), String(row['typname']));
-      } catch {
-        // best-effort; unknown types fall back to 'unknown'
-      }
+  // Warm the OID->typename cache once, on the checked-out client (a fresh pool connection would
+  // deadlock a small pool). Concurrent cold-starts share one in-flight query and the map is
+  // published atomically, so no caller reads an empty map and mis-types uuid/enum/money columns.
+  private async warmTypeNames(client: Pick<PgClient, 'query'>): Promise<void> {
+    if (this.typeNameCache) return;
+    if (!this.typeNameInflight) {
+      this.typeNameInflight = (async () => {
+        const map = new Map<number, string>();
+        try {
+          const r = await client.query(`SELECT oid, typname FROM pg_type`);
+          for (const row of r.rows as Record<string, unknown>[]) map.set(Number(row['oid']), String(row['typname']));
+        } catch {
+          // best-effort; unknown types fall back to 'unknown'
+        }
+        this.typeNameCache = map;
+      })();
     }
-    return this.typeNameCache.get(oid) ?? 'unknown';
+    await this.typeNameInflight;
   }
 
   async execute(sql: string, opts?: ExecuteOptions): Promise<ResultSet> {
@@ -205,6 +220,8 @@ export class PostgresConnector implements Connector {
     const pid = client.processID;
     let onAbort: (() => void) | null = null;
     let cancelled = false;
+    let timedOut = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
 
     try {
       // Cancel via a side connection.
@@ -217,7 +234,7 @@ export class PostgresConnector implements Connector {
       }
 
       // Warm the OID->typename cache once so column typing is accurate.
-      if (!this.typeNameCache) await this.typeName(pool, 0);
+      await this.warmTypeNames(client);
 
       await client.query('BEGIN READ ONLY');
       await client.query(`SET LOCAL statement_timeout = ${Math.max(1, Math.floor(timeoutMs))}`);
@@ -226,11 +243,27 @@ export class PostgresConnector implements Connector {
       // queryMode 'extended' is a security backstop: the extended protocol allows
       // one statement per message, so multi-statement text is rejected server-side
       // even if it slipped past the guard's lexer. Do not switch to simple query.
-      const res = await client.query({
-        text: sql,
-        rowMode: 'array',
-        queryMode: 'extended',
-      } as unknown as string);
+      // Client-side deadline: statement_timeout is server-side and a wedged socket never delivers it; on expiry, pg_cancel_backend and reject.
+      const runQuery = (async () => {
+        try {
+          return await client.query({ text: sql, rowMode: 'array', queryMode: 'extended' } as unknown as string);
+        } catch (err) {
+          if (timedOut) return { fields: [], rows: [] } as unknown as Awaited<ReturnType<PgClient['query']>>;
+          throw err;
+        }
+      })();
+      const deadline = new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => {
+            timedOut = true;
+            if (pid) void pool.query(`SELECT pg_cancel_backend($1)`, [pid]).catch(() => {});
+            reject(new AskSqlError('DB_TIMEOUT', { detail: `query exceeded ${timeoutMs}ms` }));
+          },
+          Math.max(1, Math.floor(timeoutMs)),
+        );
+      });
+      const res = await Promise.race([runQuery, deadline]);
+      if (cancelled || opts?.signal?.aborted) throw new AskSqlError('CANCELLED');
       await client.query('COMMIT').catch(() => {});
 
       const fields = res.fields ?? [];
@@ -252,10 +285,19 @@ export class PostgresConnector implements Connector {
     } catch (err) {
       await client.query('ROLLBACK').catch(() => {});
       if (cancelled || opts?.signal?.aborted) throw new AskSqlError('CANCELLED');
+      if (timedOut)
+        throw err instanceof AskSqlError && err.code === 'DB_TIMEOUT'
+          ? err
+          : new AskSqlError('DB_TIMEOUT', {
+              userMessage: 'The query took too long and was stopped.',
+              detail: String(err),
+            });
       throw mapQueryError(err);
     } finally {
+      if (timer) clearTimeout(timer);
       if (onAbort && opts?.signal) opts.signal.removeEventListener('abort', onAbort);
-      client.release();
+      // Destroy a timed-out client so the pool replaces it instead of reusing a wedged connection.
+      client.release(timedOut ? new Error('asksql: query timed out') : undefined);
     }
   }
 
@@ -296,9 +338,7 @@ function mapConnectError(err: unknown): AskSqlError {
   if (code === '28P01' || code === '28000' || /password authentication failed|role.* does not exist/i.test(msg)) {
     return new AskSqlError('DB_AUTH', { detail: msg, cause: err });
   }
-  if (code === 'ECONNREFUSED' || code === 'ENOTFOUND' || code === 'ETIMEDOUT' || /connect|getaddrinfo|timeout/i.test(msg)) {
-    return new AskSqlError('DB_UNREACHABLE', { detail: msg, cause: err });
-  }
+  // Everything else (refused/not-found/timeout and any other connect failure) is unreachable.
   return new AskSqlError('DB_UNREACHABLE', { detail: msg, cause: err });
 }
 
@@ -308,7 +348,7 @@ function mapQueryError(err: unknown): AskSqlError {
   if (code === '57014' || /statement timeout|canceling statement due to statement timeout/i.test(msg)) {
     return new AskSqlError('DB_TIMEOUT', { detail: msg, cause: err });
   }
-if (code === '25006' || /read-only transaction|cannot execute.* in a read-only/i.test(msg)) {
+  if (code === '25006' || /read-only transaction|cannot execute.* in a read-only/i.test(msg)) {
     return new AskSqlError('GUARD_BLOCKED', {
       userMessage: 'Blocked for safety: the database rejected a write in read-only mode.',
       detail: msg,
@@ -326,4 +366,3 @@ if (code === '25006' || /read-only transaction|cannot execute.* in a read-only/i
 function firstLine(s: string): string {
   return s.split('\n')[0]!.slice(0, 200);
 }
-

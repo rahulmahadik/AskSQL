@@ -1,7 +1,7 @@
 /**
  * Lexical pre-processing for the SQL guard.
  *
- * `stripCommentsAndStrings` removes the CONTENT of string literals, quoted
+ * `stripCommentsAndStrings` removes the content of string literals, quoted
  * identifiers and comments (replacing each region with a single space) so
  * lexical safety checks (`FOR UPDATE`, `INTO OUTFILE`, semicolon counting)
  * can never be fooled by keywords hidden inside literals - and so literals
@@ -66,7 +66,7 @@ export function stripCommentsAndStrings(sql: string): string {
         continue;
       }
     }
-    // E'...' backslash-escape string (PostgreSQL). The `E` must START a token:
+    // E'...' backslash-escape string (PostgreSQL). The `E` must start a token:
     // otherwise the trailing E of `LIKE'x'` / `date'...'` is misread as an E-string,
     // treating `\'` as an escaped quote and running past the literal, which hides a
     // following `;` from the multi-statement check. Never widen without a test.
@@ -139,15 +139,10 @@ export function hasMultipleStatements(strippedSql: string): boolean {
 }
 
 /**
- * Trim trailing whitespace, statement-terminating semicolons and trailing
- * comments from a SQL statement, preserving string literals and any comments
- * that sit BEFORE the last real token. Used so the guard's auto-LIMIT is
- * appended to a clean single statement: a naive `replace(/;\s*$/, '')` leaves
- * an internal `;` when a comment follows it (`SELECT 1; --`), and appending
- * `LIMIT` after that `;` produces a dangling second-statement fragment while
- * silently dropping the row cap. This tracks the index just past the last
- * significant character (a string literal counts; a `;`, whitespace or comment
- * does not) so only trailing noise is removed.
+ * Trim trailing whitespace, semicolons and comments, preserving string
+ * literals and comments before the last real token, so the guard's appended
+ * auto-LIMIT binds to a clean single statement rather than landing after a
+ * trailing `;` or comment.
  */
 export function trimTrailingNoise(sql: string): string {
   const n = sql.length;
@@ -172,9 +167,13 @@ export function trimTrailingNoise(sql: string): string {
       let depth = 1;
       i += 2;
       while (i < n && depth > 0) {
-        if (sql[i] === '/' && sql[i + 1] === '*') { depth++; i += 2; }
-        else if (sql[i] === '*' && sql[i + 1] === '/') { depth--; i += 2; }
-        else i++;
+        if (sql[i] === '/' && sql[i + 1] === '*') {
+          depth++;
+          i += 2;
+        } else if (sql[i] === '*' && sql[i + 1] === '/') {
+          depth--;
+          i += 2;
+        } else i++;
       }
       continue;
     }
@@ -194,8 +193,10 @@ export function trimTrailingNoise(sql: string): string {
       while (i < n) {
         if (sql[i] === '\\') i += 2;
         else if (sql[i] === "'" && sql[i + 1] === "'") i += 2;
-        else if (sql[i] === "'") { i++; break; }
-        else i++;
+        else if (sql[i] === "'") {
+          i++;
+          break;
+        } else i++;
       }
       lastReal = i;
       continue;
@@ -204,8 +205,10 @@ export function trimTrailingNoise(sql: string): string {
       i++;
       while (i < n) {
         if (sql[i] === "'" && sql[i + 1] === "'") i += 2;
-        else if (sql[i] === "'") { i++; break; }
-        else i++;
+        else if (sql[i] === "'") {
+          i++;
+          break;
+        } else i++;
       }
       lastReal = i;
       continue;
@@ -214,8 +217,10 @@ export function trimTrailingNoise(sql: string): string {
       i++;
       while (i < n) {
         if (sql[i] === '"' && sql[i + 1] === '"') i += 2;
-        else if (sql[i] === '"') { i++; break; }
-        else i++;
+        else if (sql[i] === '"') {
+          i++;
+          break;
+        } else i++;
       }
       lastReal = i;
       continue;
@@ -229,7 +234,11 @@ export function trimTrailingNoise(sql: string): string {
     }
     if (c === '[') {
       const close = sql.indexOf(']', i + 1);
-      if (close !== -1) { i = close + 1; lastReal = i; continue; }
+      if (close !== -1) {
+        i = close + 1;
+        lastReal = i;
+        continue;
+      }
     }
     // Ordinary character: whitespace and statement terminators are noise; a `;`
     // is the only separator reachable here (multi-statement SQL is blocked upstream).

@@ -5,12 +5,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { guardSql } from '../src/guard.js';
-import {
-  DUCKDB_DIALECT,
-  MYSQL_DIALECT,
-  POSTGRES_DIALECT,
-  SQLITE_DIALECT,
-} from '../src/dialects.js';
+import { DUCKDB_DIALECT, MYSQL_DIALECT, POSTGRES_DIALECT, SQLITE_DIALECT } from '../src/dialects.js';
 import type { DialectInfo } from '../src/types.js';
 
 const pg = (sql: string, policy = {}) => guardSql({ sql, dialect: POSTGRES_DIALECT, policy });
@@ -89,7 +84,9 @@ describe('data-modifying CTE blocked', () => {
     it(sql, () => expect(pg(sql).allowed).toBe(false));
   }
   it('read-only CTE is allowed', () => {
-    const v = pg('WITH recent AS (SELECT * FROM orders WHERE created_at > now() - interval \'7 days\') SELECT count(*) FROM recent');
+    const v = pg(
+      "WITH recent AS (SELECT * FROM orders WHERE created_at > now() - interval '7 days') SELECT count(*) FROM recent",
+    );
     expect(v.allowed).toBe(true);
   });
 });
@@ -149,7 +146,7 @@ describe('SQLite attach/pragma', () => {
 });
 
 describe('DuckDB file functions', () => {
-  it("read_csv blocked in server mode (allowFileFunctions=false)", () => {
+  it('read_csv blocked in server mode (allowFileFunctions=false)', () => {
     expect(duck("SELECT * FROM read_csv_auto('/etc/passwd')").allowed).toBe(false);
   });
   it('read_csv allowed when policy permits (browser sandbox)', () => {
@@ -173,7 +170,14 @@ describe('EXPLAIN', () => {
 });
 
 describe('transaction/session control blocked', () => {
-  for (const sql of ['BEGIN', 'COMMIT', 'ROLLBACK', 'SET search_path TO evil', 'GRANT ALL ON users TO public', 'REVOKE SELECT ON users FROM public']) {
+  for (const sql of [
+    'BEGIN',
+    'COMMIT',
+    'ROLLBACK',
+    'SET search_path TO evil',
+    'GRANT ALL ON users TO public',
+    'REVOKE SELECT ON users FROM public',
+  ]) {
     it(sql, () => expect(pg(sql).allowed).toBe(false));
   }
 });
@@ -181,7 +185,7 @@ describe('transaction/session control blocked', () => {
 describe('CALL / DO blocked', () => {
   it('CALL proc blocked', () => expect(pg('CALL do_something()').allowed).toBe(false));
   it('immutable function inside SELECT is allowed', () => {
-    expect(pg("SELECT upper(name), length(name) FROM users").allowed).toBe(true);
+    expect(pg('SELECT upper(name), length(name) FROM users').allowed).toBe(true);
   });
 });
 
@@ -212,7 +216,9 @@ describe('catalog reads allowed', () => {
 
 describe('policy cannot loosen below read-only floor', () => {
   it('mode other than read-only throws', () => {
-    expect(() => guardSql({ sql: 'SELECT 1', dialect: POSTGRES_DIALECT, policy: { mode: 'write' as never } })).toThrow();
+    expect(() =>
+      guardSql({ sql: 'SELECT 1', dialect: POSTGRES_DIALECT, policy: { mode: 'write' as never } }),
+    ).toThrow();
   });
 });
 
@@ -256,6 +262,30 @@ describe('auto-LIMIT', () => {
     expect(v.sql).toContain("'a; b'");
     expect(v.sql.toLowerCase()).toContain('limit 100');
   });
+  // A bare `OFFSET n` with no LIMIT is not a row count - it must still get an auto-LIMIT, and the
+  // OFFSET value must never be read as (or lowered like) a limit.
+  it('adds a LIMIT to a query that has only an OFFSET, leaving the OFFSET untouched', () => {
+    const v = pg('SELECT * FROM users OFFSET 5', { maxRows: 100 });
+    expect(v.allowed).toBe(true);
+    expect(v.autoLimited).toBe(true);
+    expect(v.sql.toLowerCase()).toContain('limit 100');
+    expect(v.sql.toLowerCase()).toContain('offset 5');
+  });
+  it('never lowers a large OFFSET as if it were a LIMIT', () => {
+    const v = pg('SELECT * FROM users OFFSET 5000', { maxRows: 1000 });
+    expect(v.allowed).toBe(true);
+    expect(v.loweredLimit).toBe(false); // OFFSET 5000 is not a too-high LIMIT
+    expect(v.sql.toLowerCase()).toContain('offset 5000'); // pagination offset preserved
+    expect(v.autoLimited).toBe(true);
+    expect(v.sql.toLowerCase()).toContain('limit 1000');
+  });
+  it('reads the count (not the offset) from LIMIT n OFFSET m', () => {
+    const v = pg('SELECT * FROM users LIMIT 5 OFFSET 20', { maxRows: 100 });
+    expect(v.autoLimited).toBe(false); // 5 <= 100, already bounded
+    expect(v.loweredLimit).toBe(false);
+    expect(v.sql).toMatch(/limit\s+5/i);
+    expect(v.sql.toLowerCase()).toContain('offset 20');
+  });
 });
 
 describe('template smuggling is literal', () => {
@@ -290,13 +320,17 @@ describe('sqlite unbounded recursive CTE (sync-thread wedge)', () => {
     expect(v.ruleId).toBe('recursive_no_limit');
   });
   it('GROUP BY over unbounded recursion blocked', () =>
-    expect(lite('WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM r) SELECT n, count(*) FROM r GROUP BY n').allowed).toBe(false));
+    expect(
+      lite('WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM r) SELECT n, count(*) FROM r GROUP BY n')
+        .allowed,
+    ).toBe(false));
   it('same query with a LIMIT is allowed', () =>
-    expect(lite('WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM r LIMIT 100) SELECT count(*) FROM r').allowed).toBe(true));
+    expect(
+      lite('WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM r LIMIT 100) SELECT count(*) FROM r').allowed,
+    ).toBe(true));
   it('plain streaming select over recursion is allowed (auto-LIMIT bounds it)', () =>
     expect(lite('WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM r) SELECT n FROM r').allowed).toBe(true));
   it('non-recursive aggregate CTE is allowed', () =>
     expect(lite('WITH t AS (SELECT 1 AS n) SELECT count(*) FROM t').allowed).toBe(true));
-  it('the wedge is sqlite-only (pg has statement_timeout)', () =>
-    expect(pg(wedge).allowed).toBe(true));
+  it('the wedge is sqlite-only (pg has statement_timeout)', () => expect(pg(wedge).allowed).toBe(true));
 });

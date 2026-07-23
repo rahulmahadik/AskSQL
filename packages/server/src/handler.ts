@@ -1,15 +1,10 @@
 /**
- * Framework-agnostic AskSQL server core.
- *
- * One `handle(req)` entry maps the sidecar's HTTP contract onto the engine.
- * Cross-cutting guarantees enforced here, once, for every adapter:
+ * Framework-agnostic AskSQL server core: one `handle(req)` entry maps the
+ * sidecar's HTTP contract onto the engine. Guarantees enforced once for every adapter:
  * - Auth hook runs first; failure/empty -> 401/403, never fail-open.
  * - Every connectionId is checked against the caller's scope.
- * - The guard runs again server-side even though the client already ran it
- * (defense in depth) - inherent because /execute goes through the
- * engine, which guards.
- * - Errors serialize via AskSqlError.toJSON -> code + userMessage only,
- * never credentials/detail/stack.
+ * - The guard runs server-side on every execute (engine-enforced).
+ * - Errors serialize via AskSqlError.toJSON -> code + userMessage only, never credentials/detail/stack.
  */
 
 import {
@@ -20,12 +15,7 @@ import {
   type Connector,
   type EngineEvent,
 } from '@asksql/core';
-import type {
-  AskSqlServerConfig,
-  AuthContext,
-  ChatStreamEvent,
-  ServerRequest,
-} from './types.js';
+import type { AskSqlServerConfig, AuthContext, ChatStreamEvent, ServerRequest } from './types.js';
 
 export interface JsonResponse {
   readonly status: number;
@@ -49,6 +39,7 @@ export class AskSqlServer {
   private readonly history = new MemoryHistoryStore(2000);
   private readonly engine;
   private readonly byId: Map<string, Connector>;
+  private auditSeq = 0;
 
   constructor(private readonly config: AskSqlServerConfig) {
     if (typeof config.auth !== 'function') {
@@ -80,6 +71,8 @@ export class AskSqlServer {
       if (req.method === 'POST' && path === '/chat') return await this.chat(req, auth);
       if (req.method === 'POST' && path === '/execute') return await this.execute(req, auth);
       if (req.method === 'POST' && path === '/explain') return await this.explain(req, auth);
+      if (req.method === 'POST' && path === '/explainSchema') return await this.explainSchema(req, auth);
+      if (req.method === 'POST' && path === '/feedback') return await this.feedback(req, auth);
 
       return json(404, { error: { code: 'INVALID_INPUT', userMessage: 'Unknown endpoint.', retryable: false } });
     } catch (err) {
@@ -141,7 +134,7 @@ export class AskSqlServer {
   }
 
   private listConnections(auth: AuthContext): JsonResponse {
-    // Credentials NEVER appear here - id/name/engine only.
+    // Credentials never appear here - id/name/engine only.
     const items = this.config.connectors
       .filter((c) => auth.allowedConnectionIds.includes(c.id))
       .map((c) => ({ id: c.id, name: c.name, engine: c.engine, database: c.database, capabilities: c.capabilities }));
@@ -165,7 +158,11 @@ export class AskSqlServer {
   }
 
   private async chat(req: ServerRequest, auth: AuthContext): Promise<StreamResponse> {
-    const body = (await this.readBody(req)) as { question?: string; connectionId?: string; context?: { question: string; sql: string }[] };
+    const body = (await this.readBody(req)) as {
+      question?: string;
+      connectionId?: string;
+      context?: { question: string; sql: string }[];
+    };
     const connectionId = this.resolveConnectionId(req, auth, body.connectionId);
     const question = String(body.question ?? '');
     const engine = this.engine;
@@ -189,12 +186,16 @@ export class AskSqlServer {
       };
 
       let settled: Settled | undefined;
-      void engine
-        .ask(question, { connectionId, context: body.context, onEvent, userId: auth.userId })
-        .then(
-          (result: AskResult) => { settled = { ok: true, result }; wake(); },
-          (error: unknown) => { settled = { ok: false, error }; wake(); },
-        );
+      void engine.ask(question, { connectionId, context: body.context, onEvent, userId: auth.userId }).then(
+        (result: AskResult) => {
+          settled = { ok: true, result };
+          wake();
+        },
+        (error: unknown) => {
+          settled = { ok: false, error };
+          wake();
+        },
+      );
 
       const drain = function* (): Generator<ChatStreamEvent> {
         while (queue.length > 0) {
@@ -207,7 +208,9 @@ export class AskSqlServer {
       while (!settled) {
         yield* drain();
         if (settled) break;
-        await new Promise<void>((resolve) => { notify = resolve; });
+        await new Promise<void>((resolve) => {
+          notify = resolve;
+        });
       }
       yield* drain();
 
@@ -215,8 +218,8 @@ export class AskSqlServer {
         const r = settled.result;
         yield { type: 'sql', sql: r.sql, explanation: r.explanation, autoLimited: r.guard.autoLimited };
       } else {
-      report(settled.error);
-      yield { type: 'error',...AskSqlError.from(settled.error, 'LLM_UNAVAILABLE').toJSON() };
+        report(settled.error);
+        yield { type: 'error', ...AskSqlError.from(settled.error, 'LLM_UNAVAILABLE').toJSON() };
       }
       yield { type: 'done' };
     })();
@@ -225,18 +228,34 @@ export class AskSqlServer {
   }
 
   private async execute(req: ServerRequest, auth: AuthContext): Promise<JsonResponse> {
-    const body = (await this.readBody(req)) as { sql?: string; connectionId?: string; question?: string; maxRows?: number };
+    const body = (await this.readBody(req)) as {
+      sql?: string;
+      connectionId?: string;
+      question?: string;
+      maxRows?: number;
+    };
     const connectionId = this.resolveConnectionId(req, auth, body.connectionId);
     const sql = String(body.sql ?? '');
     if (!sql.trim()) throw new AskSqlError('INVALID_INPUT', { userMessage: 'Provide a SQL statement to run.' });
 
     try {
-      const result = await this.engine.execute(sql, { connectionId, question: body.question, maxRows: body.maxRows, userId: auth.userId });
+      const result = await this.engine.execute(sql, {
+        connectionId,
+        question: body.question,
+        maxRows: body.maxRows,
+        userId: auth.userId,
+      });
       await this.audit(connectionId, auth, sql, 'allowed', 'ok', result.rowCount);
       return json(200, { result });
     } catch (err) {
       const e = AskSqlError.from(err, 'DB_QUERY_ERROR');
-      await this.audit(connectionId, auth, sql, e.code === 'GUARD_BLOCKED' ? 'blocked' : 'allowed', e.code === 'GUARD_BLOCKED' ? 'blocked' : 'error');
+      await this.audit(
+        connectionId,
+        auth,
+        sql,
+        e.code === 'GUARD_BLOCKED' ? 'blocked' : 'allowed',
+        e.code === 'GUARD_BLOCKED' ? 'blocked' : 'error',
+      );
       // On a runtime DB error, offer a corrected query for the user to review
       // and re-run (never auto-run). Needs the original question for context.
       if (this.config.suggestFixOnError !== false && e.code === 'DB_QUERY_ERROR' && body.question) {
@@ -254,6 +273,24 @@ export class AskSqlServer {
     const connectionId = this.resolveConnectionId(req, auth, body.connectionId);
     const explanation = await this.engine.explain(String(body.sql ?? ''), { connectionId });
     return json(200, { explanation });
+  }
+
+  private async explainSchema(req: ServerRequest, auth: AuthContext): Promise<JsonResponse> {
+    const body = (await this.readBody(req)) as { question?: string; connectionId?: string };
+    const connectionId = this.resolveConnectionId(req, auth, body.connectionId);
+    const answer = await this.engine.explainSchema(String(body.question ?? ''), { connectionId });
+    return json(200, answer);
+  }
+
+  private async feedback(req: ServerRequest, auth: AuthContext): Promise<JsonResponse> {
+    const body = (await this.readBody(req)) as { question?: string; sql?: string; connectionId?: string };
+    const connectionId = this.resolveConnectionId(req, auth, body.connectionId);
+    // Pass the authenticated userId: the few-shot store is per-user, so examples never cross tenants.
+    await this.engine.recordFeedback(String(body.question ?? ''), String(body.sql ?? ''), {
+      connectionId,
+      userId: auth.userId,
+    });
+    return json(200, { ok: true });
   }
 
   private health(auth: AuthContext): JsonResponse {
@@ -290,7 +327,7 @@ export class AskSqlServer {
     if (!this.config.audit) return;
     try {
       await this.config.audit.write({
-        id: `a_${Date.now().toString(36)}_${Math.floor(auth.userId.length)}`,
+        id: `a_${Date.now().toString(36)}_${(this.auditSeq++).toString(36)}`,
         at: new Date().toISOString(),
         connectionId,
         userId: auth.userId,
@@ -300,7 +337,7 @@ export class AskSqlServer {
         ...(rowCount !== undefined ? { rowCount } : {}),
       });
     } catch {
-    // Audit failure must never block a read. Surfaced via health
+      // Audit failure must never block a read. Surfaced via health
       // in a fuller impl; swallowed here so the query still returns.
     }
   }
@@ -336,15 +373,23 @@ function clampInt(raw: string | undefined, dflt: number, min: number, max: numbe
 export function errorResponse(err: unknown): JsonResponse {
   const e = AskSqlError.from(err, 'CONFIG_ERROR');
   const status =
-    e.code === 'SERVER_AUTHZ' ? 403 :
-    e.code === 'INVALID_INPUT' ? 400 :
-    e.code === 'GUARD_BLOCKED' ? 400 :
-    e.code === 'DB_AUTH' || e.code === 'CONFIG_ERROR' ? 500 :
-    e.code === 'DB_UNREACHABLE' || e.code === 'LLM_UNREACHABLE' ? 502 :
-    e.code === 'DB_TIMEOUT' || e.code === 'LLM_TIMEOUT' ? 504 :
-    e.code === 'LLM_RATE_LIMIT' ? 429 :
-    e.code === 'LLM_BILLING' ? 402 :
-    200;
+    e.code === 'SERVER_AUTHZ'
+      ? 403
+      : e.code === 'INVALID_INPUT'
+        ? 400
+        : e.code === 'GUARD_BLOCKED'
+          ? 400
+          : e.code === 'DB_AUTH' || e.code === 'CONFIG_ERROR'
+            ? 500
+            : e.code === 'DB_UNREACHABLE' || e.code === 'LLM_UNREACHABLE'
+              ? 502
+              : e.code === 'DB_TIMEOUT' || e.code === 'LLM_TIMEOUT'
+                ? 504
+                : e.code === 'LLM_RATE_LIMIT'
+                  ? 429
+                  : e.code === 'LLM_BILLING'
+                    ? 402
+                    : 200;
   const suggestedSql = (e as { suggestedSql?: string }).suggestedSql;
   return {
     status: status === 200 ? 400 : status,

@@ -22,18 +22,34 @@ beforeAll(async () => {
     return;
   }
   if (process.env['GROQ_API_KEY']) {
-    model = await resolveModel({ provider: 'groq', model: process.env['ASKSQL_GROQ_MODEL'] ?? 'llama-3.3-70b-versatile', apiKey: process.env['GROQ_API_KEY'] });
+    model = await resolveModel({
+      provider: 'groq',
+      model: process.env['ASKSQL_GROQ_MODEL'] ?? 'llama-3.3-70b-versatile',
+      apiKey: process.env['GROQ_API_KEY'],
+    });
     label = 'groq';
   } else {
     try {
       const r = await fetch('http://localhost:11434/api/tags', { signal: AbortSignal.timeout(1500) });
       if (r.ok) {
-        model = await resolveModel({ provider: 'ollama', model: 'qwen2.5-coder:14b', baseURL: 'http://localhost:11434/v1' });
+        model = await resolveModel({
+          provider: 'ollama',
+          model: 'qwen2.5-coder:14b',
+          baseURL: 'http://localhost:11434/v1',
+        });
         label = 'ollama';
       }
-    } catch { /* none */ }
+    } catch {
+      /* none */
+    }
   }
-  if (model) engine = createAskSql({ connectors: [connector], model, policy: { maxRows: 100 }, llm: { timeoutMs: label === 'ollama' ? 120_000 : 45_000 } });
+  if (model)
+    engine = createAskSql({
+      connectors: [connector],
+      model,
+      policy: { maxRows: 100 },
+      llm: { timeoutMs: label === 'ollama' ? 120_000 : 45_000 },
+    });
 }, 30_000);
 
 afterAll(async () => {
@@ -48,13 +64,17 @@ async function scalar(q: string): Promise<{ sql: string; value: number }> {
 }
 
 const gen = (name: string, fn: () => Promise<void>, timeout = 90_000) =>
-  it(name, async () => {
-    if (!engine) {
-      console.warn('[skip] gen-quality - no model available');
-      return;
-    }
-    await fn();
-  }, timeout);
+  it(
+    name,
+    async () => {
+      if (!engine) {
+        console.warn('[skip] gen-quality - no model available');
+        return;
+      }
+      await fn();
+    },
+    timeout,
+  );
 
 describe('relative dates', () => {
   gen('"in the last 90 days" produces a valid date-filtered query', async () => {

@@ -62,13 +62,17 @@ afterAll(async () => {
 });
 
 const maybe = (name: string, fn: () => Promise<void>, timeout = 30_000) =>
-  it(name, async () => {
-    if (!ready || !browser) {
-      console.warn('[skip] widget browser test - Chrome or bundle unavailable');
-      return;
-    }
-    await fn();
-  }, timeout);
+  it(
+    name,
+    async () => {
+      if (!ready || !browser) {
+        console.warn('[skip] widget browser test - Chrome or bundle unavailable');
+        return;
+      }
+      await fn();
+    },
+    timeout,
+  );
 
 describe('widget in real Chrome', () => {
   maybe('mounts into a shadow root and renders the bubble', async () => {
@@ -136,7 +140,13 @@ describe('widget in real Chrome', () => {
       const btn = host!.shadowRoot!.querySelector('.asksql-bubble-btn') as HTMLElement;
       const r = btn.getBoundingClientRect();
       const scrollTop = document.getElementById('scrolltop')!.getBoundingClientRect();
-      return { btnLeft: r.left, btnRight: r.right, winW: window.innerWidth, scrollTopLeft: scrollTop.left, overlap: !(r.right < scrollTop.left || r.left > scrollTop.right) };
+      return {
+        btnLeft: r.left,
+        btnRight: r.right,
+        winW: window.innerWidth,
+        scrollTopLeft: scrollTop.left,
+        overlap: !(r.right < scrollTop.left || r.left > scrollTop.right),
+      };
     });
     // Bubble is anchored to the LEFT edge, and does not overlap the host's
     // bottom-right scroll-to-top button.
@@ -153,7 +163,10 @@ describe('widget in real Chrome', () => {
       // guard must prevent a second floating button.
       const t = document.createElement('div');
       document.body.appendChild(t);
-      (window as unknown as { AskSQL: { mount: (o: object) => void } }).AskSQL.mount({ target: t, serverUrl: '/asksql' });
+      (window as unknown as { AskSQL: { mount: (o: object) => void } }).AskSQL.mount({
+        target: t,
+        serverUrl: '/asksql',
+      });
     });
     await new Promise((r) => setTimeout(r, 300));
     const count = await page.evaluate(() =>
@@ -173,10 +186,13 @@ describe('widget in real Chrome', () => {
       const host = [...document.querySelectorAll('*')].find((el) => el.shadowRoot);
       (host?.shadowRoot?.querySelector('.asksql-bubble-btn') as HTMLButtonElement | undefined)?.click();
     });
-    await page.waitForFunction(() => {
-      const host = [...document.querySelectorAll('*')].find((el) => el.shadowRoot);
-      return !!host?.shadowRoot?.querySelector('.asksql-bubble-panel');
-    }, { timeout: 5000 });
+    await page.waitForFunction(
+      () => {
+        const host = [...document.querySelectorAll('*')].find((el) => el.shadowRoot);
+        return !!host?.shadowRoot?.querySelector('.asksql-bubble-panel');
+      },
+      { timeout: 5000 },
+    );
     const fits = await page.evaluate(() => {
       const host = [...document.querySelectorAll('*')].find((el) => el.shadowRoot);
       const panel = host!.shadowRoot!.querySelector('.asksql-bubble-panel') as HTMLElement;
@@ -206,21 +222,26 @@ describe('widget in real Chrome', () => {
       const host = [...document.querySelectorAll('*')].find((el) => el.shadowRoot);
       (host?.shadowRoot?.querySelector('.asksql-bubble-btn') as HTMLButtonElement | undefined)?.click();
     });
-    await page.waitForFunction(() => {
-      const host = [...document.querySelectorAll('*')].find((el) => el.shadowRoot);
-      return !!host?.shadowRoot?.querySelector('.asksql-bubble-panel');
-    }, { timeout: 5000 });
+    await page.waitForFunction(
+      () => {
+        const host = [...document.querySelectorAll('*')].find((el) => el.shadowRoot);
+        return !!host?.shadowRoot?.querySelector('.asksql-bubble-panel');
+      },
+      { timeout: 5000 },
+    );
 
     // Inject axe-core source and run it against the whole document (axe
     // descends into shadow roots).
     const axePath = fileURLToPath(new URL('../node_modules/axe-core/axe.min.js', import.meta.url));
     await page.addScriptTag({ path: axePath });
     const violations = await page.evaluate(async () => {
-      const axe = (window as unknown as { axe: { run: (ctx: unknown, opts: unknown) => Promise<{ violations: { id: string; impact: string }[] }> } }).axe;
+      const axe = (
+        window as unknown as {
+          axe: { run: (ctx: unknown, opts: unknown) => Promise<{ violations: { id: string; impact: string }[] }> };
+        }
+      ).axe;
       const res = await axe.run(document, { runOnly: ['wcag2a', 'wcag2aa'] });
-      return res.violations
-        .filter((v) => v.impact === 'critical' || v.impact === 'serious')
-        .map((v) => v.id);
+      return res.violations.filter((v) => v.impact === 'critical' || v.impact === 'serious').map((v) => v.id);
     });
     // No critical/serious WCAG A/AA violations in the widget UI.
     expect(violations).toEqual([]);

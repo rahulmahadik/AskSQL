@@ -33,6 +33,8 @@ export const ASKSQL_CSS = `
 .asksql-empty { margin: auto; text-align: center; color: var(--aq-muted); padding: 32px; max-width: 340px; }
 .asksql-empty h3 { margin: 0 0 8px; color: var(--aq-fg); font-size: 16px; }
 .asksql-turn { display: flex; flex-direction: column; gap: 8px; }
+.asksql-role { align-self: flex-end; font-size: 11px; font-weight: 600; color: var(--aq-muted); }
+.asksql-role-assistant { align-self: flex-start; }
 .asksql-q { align-self: flex-end; background: var(--aq-accent); color: var(--aq-accent-fg);
   padding: 8px 12px; border-radius: 12px 12px 2px 12px; max-width: 85%; }
 .asksql-a { align-self: flex-start; max-width: 100%; width: 100%; }
@@ -54,7 +56,11 @@ export const ASKSQL_CSS = `
 .asksql-btn-primary:hover { filter: brightness(1.08); }
 .asksql-btn:disabled { opacity:.5; cursor: not-allowed; }
 .asksql-explain { color: var(--aq-muted); font-size: 13px; margin: 2px 0; }
+.asksql-explain code { font-family: ui-monospace, monospace; font-size: 0.92em; background: var(--aq-code-bg, rgba(127,127,127,0.12)); border-radius: 3px; padding: 0 3px; }
+.asksql-md-bullet { padding-left: 1em; text-indent: -0.75em; }
+.asksql-md-bullet::before { content: "\\2022  "; }
 .asksql-warn { color: var(--aq-warn); font-size: 12px; }
+.asksql-note { color: var(--aq-muted); font-size: 12px; margin-top: 4px; opacity: 0.85; }
 .asksql-error { color: var(--aq-danger); font-size: 13px; padding: 8px 12px;
   border: 1px solid var(--aq-danger); border-radius: 8px; background: color-mix(in srgb, var(--aq-danger) 8%, transparent); }
 .asksql-tablewrap { overflow-x: auto; border: 1px solid var(--aq-border); border-radius: 8px; max-height: 360px; overflow-y: auto; }

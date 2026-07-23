@@ -34,9 +34,10 @@ const model = await resolveModel({
 app.use('/asksql', asksqlMiddleware({
   connectors: [connector],
   engine: { model },
-  // Required — resolve identity + which connections this caller may reach.
+  // Required: resolve identity + which connections this caller may reach.
   // Derive it from YOUR session/JWT; never trust a client-supplied id.
-  auth: (req) => ({ userId: req.header('x-user') ?? 'anon', allowedConnectionIds: ['main'] }),
+  // `req.headers` keys are lowercased; there is no `req.header()` accessor.
+  auth: (req) => ({ userId: req.headers['x-user'] ?? 'anon', allowedConnectionIds: ['main'] }),
   // Optional: observe every failure the server turns into a response.
   onError: (err, { method, path }) => console.error('asksql error', method, path, err),
 }));
@@ -53,14 +54,14 @@ chat UI. Credentials and the model key stay on the server.
 | Field | Required | Notes |
 | --- | --- | --- |
 | `connectors` | yes | The database connections the server may reach. |
-| `engine` | yes | Shared engine settings — at least `{ model }`. |
+| `engine` | yes | Shared engine settings, at least `{ model }`. |
 | `auth` | yes | `(req) => { userId, allowedConnectionIds }`. No anonymous default. |
 | `audit` | no | Sink called for every executed query. |
 | `onError` | no | Best-effort hook for every error turned into a response (throwing from it is swallowed). |
 | `maxBodyBytes` | no | Request body cap. Default 64 KB. |
 | `suggestFixOnError` | no | Offer a corrected query on a DB error. Default `true`. |
 
-The wire response never includes internal error detail (hostnames, driver text) — only a `code` and a
+The wire response never includes internal error detail (hostnames, driver text); only a `code` and a
 safe `userMessage`. Use `onError` if you need the full error server-side.
 
 Full documentation: [https://github.com/rahulmahadik/AskSQL](https://github.com/rahulmahadik/AskSQL)

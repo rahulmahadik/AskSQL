@@ -50,8 +50,7 @@ export function createAskSqlMcpTools(engine: AskSqlEngine): McpToolDef[] {
     },
     {
       name: 'asksql_schema',
-      description:
-        'Get the schema catalog (tables, columns, relationships) for a connection - what you can ask about.',
+      description: 'Get the schema catalog (tables, columns, relationships) for a connection - what you can ask about.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -121,8 +120,7 @@ export function createAskSqlMcpTools(engine: AskSqlEngine): McpToolDef[] {
     },
     {
       name: 'asksql_run',
-      description:
-        'Execute an approved read-only SQL query (SELECT only; guarded). Returns columns + rows.',
+      description: 'Execute an approved read-only SQL query (SELECT only; guarded). Returns columns + rows.',
       inputSchema: {
         type: 'object',
         properties: {

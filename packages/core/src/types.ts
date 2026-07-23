@@ -14,7 +14,7 @@ import type { LanguageModel } from 'ai';
 // ---------------------------------------------------------------------------
 
 /** Built-in engine identifiers. Future engines use their own string. */
-export type EngineKind = 'postgres' | 'mysql' | 'sqlite' | 'duckdb' | (string & {});
+export type EngineKind = 'postgres' | 'mysql' | 'sqlite' | 'duckdb' | 'oracle' | 'mongodb' | (string & {});
 
 /** Grammar names understood by the AST guard (node-sql-parser). */
 export type GuardGrammar = 'Postgresql' | 'MySQL' | 'Sqlite';
@@ -63,9 +63,9 @@ export interface ColumnInfo {
   /** Populated for enum-typed columns so WHERE literals use real values. */
   readonly enumValues?: readonly string[];
   /**
-   * Distinct values observed in a low-cardinality text column that is NOT a
+   * Distinct values observed in a low-cardinality text column that is not a
    * declared enum (e.g. a `status VARCHAR` that only ever holds a handful of
-   * codes). Unlike enumValues these are DATA, not schema, so a connector only
+   * codes). Unlike enumValues these are data, not schema, so a connector only
    * fills them when value sampling is explicitly enabled.
    */
   readonly sampledValues?: readonly string[];
@@ -115,9 +115,8 @@ export interface RoutineInfo {
   readonly returns?: string | null;
   readonly language?: string | null;
   /**
-   * Only 'immutable' / 'stable' routines are ever callable in generated SQL
-   *. 'volatile' / 'unknown' are listed for the schema browser
-   * but excluded from the prompt's callable set.
+   * Only 'immutable' / 'stable' routines are callable in generated SQL; 'volatile' /
+   * 'unknown' are listed for the schema browser but excluded from the callable set.
    */
   readonly volatility: 'immutable' | 'stable' | 'volatile' | 'unknown';
   readonly securityDefiner?: boolean;
@@ -176,16 +175,7 @@ export interface SchemaCatalog {
 // ---------------------------------------------------------------------------
 
 export type ColumnKind =
-  | 'text'
-  | 'number'
-  | 'bigint'
-  | 'decimal'
-  | 'boolean'
-  | 'timestamp'
-  | 'date'
-  | 'json'
-  | 'binary'
-  | 'unknown';
+  'text' | 'number' | 'bigint' | 'decimal' | 'boolean' | 'timestamp' | 'date' | 'json' | 'binary' | 'unknown';
 
 export interface ResultColumn {
   readonly name: string;
@@ -199,11 +189,7 @@ export interface ResultColumn {
  * are size + hex preview only.
  */
 export type CellValue =
-  | string
-  | number
-  | boolean
-  | null
-  | { readonly __binary: { readonly bytes: number; readonly hexPreview: string } };
+  string | number | boolean | null | { readonly __binary: { readonly bytes: number; readonly hexPreview: string } };
 
 export interface ResultSet {
   readonly columns: readonly ResultColumn[];
@@ -305,10 +291,7 @@ export interface HistoryPage {
 
 export interface HistoryStore {
   add(entry: HistoryEntry): Promise<void>;
-  list(
-    connectionId: string,
-    opts?: { limit?: number; offset?: number; userId?: string },
-  ): Promise<HistoryPage>;
+  list(connectionId: string, opts?: { limit?: number; offset?: number; userId?: string }): Promise<HistoryPage>;
 }
 
 // ---------------------------------------------------------------------------
@@ -327,13 +310,13 @@ export interface FewShotExample {
 }
 
 /**
- * Stores question->SQL pairs a user approved (👍) and retrieves the most
- * relevant ones for a new question, scoped per connection. The
- * engine forwards retrieved examples into the prompt as few-shots.
+ * Stores question->SQL pairs a user approved (👍), retrieved as few-shots for new questions.
+ * `userId` scopes storage/retrieval per user so a shared connection never leaks one user's
+ * approved SQL into another's prompt; undefined userId (local mode) is its own bucket.
  */
 export interface FewShotStore {
-  add(connectionId: string, example: FewShotExample): Promise<void>;
-  retrieve(connectionId: string, question: string, limit: number): Promise<readonly FewShotExample[]>;
+  add(connectionId: string, example: FewShotExample, userId?: string): Promise<void>;
+  retrieve(connectionId: string, question: string, limit: number, userId?: string): Promise<readonly FewShotExample[]>;
 }
 
 // ---------------------------------------------------------------------------
@@ -352,9 +335,7 @@ export interface CustomModelRequest {
  * a prompt to text (or a stream of text chunks). The public path is an AI
  * SDK {@link LanguageModel}.
  */
-export type CustomModel = (
-  req: CustomModelRequest,
-) => Promise<string | AsyncIterable<string>>;
+export type CustomModel = (req: CustomModelRequest) => Promise<string | AsyncIterable<string>>;
 
 export type ModelLike = LanguageModel | CustomModel;
 
@@ -409,16 +390,7 @@ export type EngineEvent =
   | { readonly type: 'token'; readonly text: string }
   | { readonly type: 'warning'; readonly message: string };
 
-export type EngineStage =
-  | 'catalog'
-  | 'prune'
-  | 'prompt'
-  | 'llm'
-  | 'extract'
-  | 'guard'
-  | 'repair'
-  | 'execute'
-  | 'done';
+export type EngineStage = 'catalog' | 'prune' | 'prompt' | 'llm' | 'extract' | 'guard' | 'repair' | 'execute' | 'done';
 
 // ---------------------------------------------------------------------------
 // Engine configuration & results

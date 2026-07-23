@@ -4,27 +4,76 @@
  */
 import { describe, expect, it } from 'vitest';
 import { AskSqlServer, isStream, type ChatStreamEvent } from '../src/index.js';
-import { AskSqlError, POSTGRES_DIALECT, type Connector, type CustomModel, type ResultSet, type ServerRequest as _sr } from '@asksql/core';
+import {
+  AskSqlError,
+  POSTGRES_DIALECT,
+  type Connector,
+  type CustomModel,
+  type FewShotExample,
+  type FewShotStore,
+  type ResultSet,
+  type ServerRequest as _sr,
+} from '@asksql/core';
 import type { ServerRequest } from '../src/types.js';
 
 class FakeConnector implements Connector {
   engine = 'postgres' as const;
   dialect = POSTGRES_DIALECT;
-  capabilities = { supportsCancel: true, supportsExplain: true, supportsSchemas: true, readOnlySession: true, supportsMatViews: true, supportsTriggers: true, supportsRoutines: true };
-  constructor(readonly id: string, readonly name: string, private readonly secret: string) {}
+  capabilities = {
+    supportsCancel: true,
+    supportsExplain: true,
+    supportsSchemas: true,
+    readOnlySession: true,
+    supportsMatViews: true,
+    supportsTriggers: true,
+    supportsRoutines: true,
+  };
+  constructor(
+    readonly id: string,
+    readonly name: string,
+    private readonly secret: string,
+  ) {}
   async connect() {}
   async close() {}
   async introspect() {
     return {
-      engine: 'postgres' as const, schemas: ['public'],
-      tables: [{ name: 'users', kind: 'table' as const, columns: [{ name: 'id', dbType: 'bigint', nullable: false }, { name: 'name', dbType: 'text', nullable: true }], primaryKey: ['id'], foreignKeys: [], uniques: [], checks: [], indexes: [], source: 'db' as const }],
-      enums: [], sequences: [], triggers: [], routines: [], warnings: [], fetchedAt: 'now',
+      engine: 'postgres' as const,
+      schemas: ['public'],
+      tables: [
+        {
+          name: 'users',
+          kind: 'table' as const,
+          columns: [
+            { name: 'id', dbType: 'bigint', nullable: false },
+            { name: 'name', dbType: 'text', nullable: true },
+          ],
+          primaryKey: ['id'],
+          foreignKeys: [],
+          uniques: [],
+          checks: [],
+          indexes: [],
+          source: 'db' as const,
+        },
+      ],
+      enums: [],
+      sequences: [],
+      triggers: [],
+      routines: [],
+      warnings: [],
+      fetchedAt: 'now',
     };
   }
   async execute(sql: string): Promise<ResultSet> {
     // The secret is embedded in the connector but must NEVER surface.
     void this.secret;
-    return { columns: [{ name: 'id', kind: 'bigint' }], rows: [['1']], rowCount: 1, truncated: false, durationMs: 1, warnings: [] };
+    return {
+      columns: [{ name: 'id', kind: 'bigint' }],
+      rows: [['1']],
+      rowCount: 1,
+      truncated: false,
+      durationMs: 1,
+      warnings: [],
+    };
   }
 }
 
@@ -60,7 +109,9 @@ describe('auth', () => {
     if (!isStream(r)) expect(r.status).toBe(403);
   });
   it('auth throwing -> 403', async () => {
-    const s = makeServer(() => { throw new Error('boom'); });
+    const s = makeServer(() => {
+      throw new Error('boom');
+    });
     const r = await s.handle(req('GET', '/connections'));
     if (!isStream(r)) expect(r.status).toBe(403);
   });
@@ -75,7 +126,7 @@ describe('/ connection scope', () => {
       expect(conns.map((c) => c.id)).toEqual(['db_a']);
     }
   });
-  it('accessing another user\'s connection -> 403', async () => {
+  it("accessing another user's connection -> 403", async () => {
     const s = makeServer(allowA);
     const r = await s.handle(req('POST', '/execute', { sql: 'SELECT id FROM users', connectionId: 'db_b' }));
     if (!isStream(r)) expect(r.status).toBe(403);
@@ -200,14 +251,27 @@ describe('suggested fix on DB error', () => {
   class FailingConnector extends FakeConnector {
     override async execute(sql: string): Promise<ResultSet> {
       if (/bogus/i.test(sql)) throw new Error('Unknown column "bogus" in field list');
-      return { columns: [{ name: 'id', kind: 'bigint' }], rows: [['1']], rowCount: 1, truncated: false, durationMs: 1, warnings: [] };
+      return {
+        columns: [{ name: 'id', kind: 'bigint' }],
+        rows: [['1']],
+        rowCount: 1,
+        truncated: false,
+        durationMs: 1,
+        warnings: [],
+      };
     }
   }
   const fixModel: CustomModel = async () => '```sql\nSELECT id, name FROM users\n```\ncorrected';
 
   it('returns a corrected query as suggestedSql (default on)', async () => {
-    const s = new AskSqlServer({ connectors: [new FailingConnector('db', 'DB', 's')], engine: { model: fixModel }, auth: (() => ({ userId: 'u', allowedConnectionIds: ['db'] })) as never });
-    const r = await s.handle(req('POST', '/execute', { sql: 'SELECT bogus FROM users', connectionId: 'db', question: 'list users' }));
+    const s = new AskSqlServer({
+      connectors: [new FailingConnector('db', 'DB', 's')],
+      engine: { model: fixModel },
+      auth: (() => ({ userId: 'u', allowedConnectionIds: ['db'] })) as never,
+    });
+    const r = await s.handle(
+      req('POST', '/execute', { sql: 'SELECT bogus FROM users', connectionId: 'db', question: 'list users' }),
+    );
     if (isStream(r)) throw new Error('unexpected stream');
     expect(r.status).toBeGreaterThanOrEqual(400);
     expect((r.body as { error: { code: string } }).error.code).toBe('DB_QUERY_ERROR');
@@ -215,14 +279,25 @@ describe('suggested fix on DB error', () => {
   });
 
   it('omits the suggestion when suggestFixOnError is false', async () => {
-    const s = new AskSqlServer({ connectors: [new FailingConnector('db', 'DB', 's')], engine: { model: fixModel }, auth: (() => ({ userId: 'u', allowedConnectionIds: ['db'] })) as never, suggestFixOnError: false });
-    const r = await s.handle(req('POST', '/execute', { sql: 'SELECT bogus FROM users', connectionId: 'db', question: 'list users' }));
+    const s = new AskSqlServer({
+      connectors: [new FailingConnector('db', 'DB', 's')],
+      engine: { model: fixModel },
+      auth: (() => ({ userId: 'u', allowedConnectionIds: ['db'] })) as never,
+      suggestFixOnError: false,
+    });
+    const r = await s.handle(
+      req('POST', '/execute', { sql: 'SELECT bogus FROM users', connectionId: 'db', question: 'list users' }),
+    );
     if (isStream(r)) throw new Error('unexpected stream');
     expect((r.body as { suggestedSql?: string }).suggestedSql).toBeUndefined();
   });
 
   it('no suggestion without the original question', async () => {
-    const s = new AskSqlServer({ connectors: [new FailingConnector('db', 'DB', 's')], engine: { model: fixModel }, auth: (() => ({ userId: 'u', allowedConnectionIds: ['db'] })) as never });
+    const s = new AskSqlServer({
+      connectors: [new FailingConnector('db', 'DB', 's')],
+      engine: { model: fixModel },
+      auth: (() => ({ userId: 'u', allowedConnectionIds: ['db'] })) as never,
+    });
     const r = await s.handle(req('POST', '/execute', { sql: 'SELECT bogus FROM users', connectionId: 'db' }));
     if (isStream(r)) throw new Error('unexpected stream');
     expect((r.body as { suggestedSql?: string }).suggestedSql).toBeUndefined();
@@ -239,7 +314,11 @@ describe('chat stream surfaces an early ask failure (no hang)', () => {
     }
   }
   it('emits an error event and done, does not hang', async () => {
-    const s = new AskSqlServer({ connectors: [new BrokenIntrospect('db', 'DB', 's')], engine: { model }, auth: (() => ({ userId: 'u', allowedConnectionIds: ['db'] })) as never });
+    const s = new AskSqlServer({
+      connectors: [new BrokenIntrospect('db', 'DB', 's')],
+      engine: { model },
+      auth: (() => ({ userId: 'u', allowedConnectionIds: ['db'] })) as never,
+    });
     const r = await s.handle(req('POST', '/chat', { question: 'how many users', connectionId: 'db' }));
     if (!isStream(r)) throw new Error('expected a stream');
     const events: ChatStreamEvent[] = [];
@@ -252,4 +331,63 @@ describe('chat stream surfaces an early ask failure (no hang)', () => {
     expect(errEvent.code).toBe('DB_UNREACHABLE');
     expect(errEvent.retryable).toBe(true);
   }, 10_000);
+});
+
+describe('POST /feedback forwards the authenticated userId', () => {
+  class CapturingFewShots implements FewShotStore {
+    calls: { connectionId: string; example: FewShotExample; userId?: string }[] = [];
+    async add(connectionId: string, example: FewShotExample, userId?: string): Promise<void> {
+      this.calls.push({ connectionId, example, userId });
+    }
+    async retrieve(): Promise<readonly FewShotExample[]> {
+      return [];
+    }
+  }
+
+  it('passes the request userId through to recordFeedback -> fewShots.add', async () => {
+    const store = new CapturingFewShots();
+    const s = new AskSqlServer({
+      connectors: [new FakeConnector('db_a', 'DB A', 's')],
+      engine: { model, fewShots: store },
+      auth: (() => ({ userId: 'tenant-42', allowedConnectionIds: ['db_a'] })) as never,
+    });
+    const r = await s.handle(
+      req('POST', '/feedback', { question: 'all user ids', sql: 'SELECT id FROM users', connectionId: 'db_a' }),
+    );
+    if (isStream(r)) throw new Error('unexpected stream');
+    expect(r.status).toBe(200);
+    expect(store.calls).toHaveLength(1);
+    expect(store.calls[0]!.userId).toBe('tenant-42');
+    expect(store.calls[0]!.example.sql).toMatch(/SELECT id FROM users/i);
+  });
+});
+
+describe('explain / explainSchema / routing', () => {
+  it('POST /explain returns an explanation for read-only SQL', async () => {
+    const r = await makeServer(allowAll).handle(
+      req('POST', '/explain', { sql: 'SELECT id FROM users', connectionId: 'db_a' }),
+    );
+    if (!isStream(r)) {
+      expect(r.status).toBe(200);
+      expect(typeof (r.body as { explanation: string }).explanation).toBe('string');
+    }
+  });
+
+  it('POST /explainSchema returns a grounded schema answer', async () => {
+    const r = await makeServer(allowAll).handle(
+      req('POST', '/explainSchema', { question: 'what tables are here?', connectionId: 'db_a' }),
+    );
+    if (!isStream(r)) {
+      expect(r.status).toBe(200);
+      const b = r.body as { answer: string; grounded: boolean; isSchemaChange: boolean };
+      expect(typeof b.answer).toBe('string');
+      expect(typeof b.grounded).toBe('boolean');
+      expect(typeof b.isSchemaChange).toBe('boolean');
+    }
+  });
+
+  it('an unknown path returns 404', async () => {
+    const r = await makeServer(allowAll).handle(req('GET', '/nope'));
+    if (!isStream(r)) expect(r.status).toBe(404);
+  });
 });

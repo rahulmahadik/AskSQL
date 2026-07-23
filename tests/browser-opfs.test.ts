@@ -19,7 +19,12 @@ import { resolveChrome } from './chrome.js';
 const here = dirname(fileURLToPath(import.meta.url));
 const dist = join(here, '..', 'examples', 'browser-duckdb', 'dist');
 const CHROME = resolveChrome();
-const MIME: Record<string, string> = { '.js': 'text/javascript', '.html': 'text/html', '.css': 'text/css', '.wasm': 'application/wasm' };
+const MIME: Record<string, string> = {
+  '.js': 'text/javascript',
+  '.html': 'text/html',
+  '.css': 'text/css',
+  '.wasm': 'application/wasm',
+};
 
 let browser: Browser | null = null;
 let server: Server | null = null;
@@ -29,7 +34,7 @@ let ready = existsSync(dist) && !!CHROME;
 beforeAll(async () => {
   if (!ready) return;
   server = createServer(async (req, res) => {
-    const file = ((req.url ?? '/').split('?')[0] === '/' ? 'index.html' : (req.url ?? '/').slice(1));
+    const file = (req.url ?? '/').split('?')[0] === '/' ? 'index.html' : (req.url ?? '/').slice(1);
     try {
       const body = await readFile(join(dist, file));
       res.setHeader('Content-Type', MIME[extname(file)] ?? 'application/octet-stream');
@@ -37,13 +42,18 @@ beforeAll(async () => {
       res.setHeader('Cross-Origin-Embedder-Policy', 'require-corp');
       res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
       res.end(body);
-    } catch { res.statusCode = 404; res.end('nf'); }
+    } catch {
+      res.statusCode = 404;
+      res.end('nf');
+    }
   });
-  await new Promise<void>((r) => server!.listen(0, () => {
-    const a = server!.address();
-    base = `http://127.0.0.1:${typeof a === 'object' && a ? a.port : 0}/`;
-    r();
-  }));
+  await new Promise<void>((r) =>
+    server!.listen(0, () => {
+      const a = server!.address();
+      base = `http://127.0.0.1:${typeof a === 'object' && a ? a.port : 0}/`;
+      r();
+    }),
+  );
   try {
     const pptr = await import('puppeteer-core');
     browser = await pptr.default.launch({ executablePath: CHROME, headless: true, args: ['--no-sandbox'] });
@@ -68,14 +78,25 @@ describe('OPFS persistence across connector reopen', () => {
     await page.waitForFunction(() => !!(window as unknown as { __asksql?: unknown }).__asksql, { timeout: 15_000 });
 
     const outcome = await page.evaluate(async () => {
-      const api = (window as unknown as { __asksql: { DuckDbWasmConnector: new (c: object) => { connect(): Promise<void>; execute(sql: string, o?: object): Promise<{ rows: unknown[][] }>; close(): Promise<void> }; BUNDLES: object } }).__asksql;
+      const api = (
+        window as unknown as {
+          __asksql: {
+            DuckDbWasmConnector: new (c: object) => {
+              connect(): Promise<void>;
+              execute(sql: string, o?: object): Promise<{ rows: unknown[][] }>;
+              close(): Promise<void>;
+            };
+            BUNDLES: object;
+          };
+        }
+      ).__asksql;
       const path = 'opfs://asksql-persist-test.db';
       try {
         // Connector A: create a persistent table with data.
         const a = new api.DuckDbWasmConnector({ id: 'a', name: 'A', bundles: api.BUNDLES, persistPath: path });
         await a.connect();
         await a.execute('CREATE TABLE IF NOT EXISTS kept (id INTEGER, note VARCHAR)');
-        await a.execute("DELETE FROM kept");
+        await a.execute('DELETE FROM kept');
         await a.execute("INSERT INTO kept VALUES (1,'hello'), (2,'world')");
         await a.execute('CHECKPOINT');
         await a.close();

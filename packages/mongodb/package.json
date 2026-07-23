@@ -1,0 +1,60 @@
+{
+  "name": "@asksql/mongodb",
+  "version": "0.1.0",
+  "description": "MongoDB connector for AskSQL. Sampling-based schema inference across collections + guarded read-only aggregation pipelines.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "!dist/**/*.map"
+  ],
+  "scripts": {
+    "build": "tsc -b"
+  },
+  "dependencies": {
+    "@asksql/core": "workspace:^"
+  },
+  "peerDependencies": {
+    "mongodb": ">=6.0"
+  },
+  "devDependencies": {
+    "mongodb": "^6.10.0"
+  },
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "sideEffects": false,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rahulmahadik/AskSQL.git",
+    "directory": "packages/mongodb"
+  },
+  "homepage": "https://github.com/rahulmahadik/AskSQL#readme",
+  "bugs": "https://github.com/rahulmahadik/AskSQL/issues",
+  "publishConfig": {
+    "access": "public"
+  },
+  "author": "Rahul Mahadik <rahultkiet@gmail.com>",
+  "keywords": [
+    "mongodb",
+    "mongo",
+    "nosql",
+    "text-to-query",
+    "natural-language",
+    "database",
+    "ai",
+    "llm",
+    "aggregation-pipeline",
+    "database-chat",
+    "ask-database",
+    "document-database"
+  ]
+}

@@ -15,7 +15,7 @@ import { createAskSql, resolveModel, AskSqlError } from '@asksql/core';
 import { PostgresConnector } from '@asksql/postgres';
 
 const model = await resolveModel({
-  provider: 'groq',                       // openai | anthropic | google | groq | nvidia | ollama | openai-compatible
+  provider: 'groq',                       // openai | anthropic | google | azure | groq | nvidia | ollama | openai-compatible
   model: 'llama-3.3-70b-versatile',
   apiKey: process.env.GROQ_API_KEY,
 });
@@ -32,7 +32,7 @@ console.table(result.rows);
 ```
 
 The model only ever receives your **schema and the question, never your data**. Every generated
-statement passes a deterministic AST guard before it can run — writes, DDL and stacked statements are
+statement passes a deterministic AST guard before it can run. Writes, DDL and stacked statements are
 refused, and a row `LIMIT` is injected automatically.
 
 ## Errors

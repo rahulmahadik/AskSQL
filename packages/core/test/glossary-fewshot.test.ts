@@ -9,17 +9,61 @@ import { POSTGRES_DIALECT } from '../src/dialects.js';
 import type { Connector, CustomModel, ResultSet, SchemaCatalog } from '../src/types.js';
 
 const CATALOG: SchemaCatalog = {
-  engine: 'postgres', schemas: ['public'],
-  tables: [{ name: 'orders', kind: 'table', columns: [{ name: 'id', dbType: 'bigint', nullable: false }, { name: 'total_cents', dbType: 'bigint', nullable: false }, { name: 'status', dbType: 'text', nullable: false }], primaryKey: ['id'], foreignKeys: [], uniques: [], checks: [], indexes: [], source: 'db' }],
-  enums: [], sequences: [], triggers: [], routines: [], warnings: [], fetchedAt: 'now',
+  engine: 'postgres',
+  schemas: ['public'],
+  tables: [
+    {
+      name: 'orders',
+      kind: 'table',
+      columns: [
+        { name: 'id', dbType: 'bigint', nullable: false },
+        { name: 'total_cents', dbType: 'bigint', nullable: false },
+        { name: 'status', dbType: 'text', nullable: false },
+      ],
+      primaryKey: ['id'],
+      foreignKeys: [],
+      uniques: [],
+      checks: [],
+      indexes: [],
+      source: 'db',
+    },
+  ],
+  enums: [],
+  sequences: [],
+  triggers: [],
+  routines: [],
+  warnings: [],
+  fetchedAt: 'now',
 };
 class Fake implements Connector {
-  engine = 'postgres' as const; dialect = POSTGRES_DIALECT;
-  capabilities = { supportsCancel: true, supportsExplain: true, supportsSchemas: true, readOnlySession: true, supportsMatViews: true, supportsTriggers: true, supportsRoutines: true };
-  id = 'f'; name = 'F';
-  async connect() {} async close() {}
-  async introspect() { return CATALOG; }
-  async execute(): Promise<ResultSet> { return { columns: [{ name: 'n', kind: 'number' }], rows: [[1]], rowCount: 1, truncated: false, durationMs: 1, warnings: [] }; }
+  engine = 'postgres' as const;
+  dialect = POSTGRES_DIALECT;
+  capabilities = {
+    supportsCancel: true,
+    supportsExplain: true,
+    supportsSchemas: true,
+    readOnlySession: true,
+    supportsMatViews: true,
+    supportsTriggers: true,
+    supportsRoutines: true,
+  };
+  id = 'f';
+  name = 'F';
+  async connect() {}
+  async close() {}
+  async introspect() {
+    return CATALOG;
+  }
+  async execute(): Promise<ResultSet> {
+    return {
+      columns: [{ name: 'n', kind: 'number' }],
+      rows: [[1]],
+      rowCount: 1,
+      truncated: false,
+      durationMs: 1,
+      warnings: [],
+    };
+  }
 }
 /** A model that echoes the prompt it received so tests can inspect it. */
 function capturing(): { model: CustomModel; prompts: string[] } {

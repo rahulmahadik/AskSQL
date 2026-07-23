@@ -28,7 +28,7 @@ const connector = new DuckDbConnector({
 
 ## Browser (DuckDB-WASM)
 
-Register uploaded content directly — pass the `File`/`Blob` (or an `ArrayBuffer`/text) as `data`, not a
+Register uploaded content directly: pass the `File`/`Blob` (or an `ArrayBuffer`/text) as `data`, not a
 path. Nothing is uploaded; files are read and queried entirely inside the tab.
 
 ```ts

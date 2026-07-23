@@ -1,0 +1,62 @@
+{
+  "name": "@asksql/oracle",
+  "version": "0.1.0",
+  "description": "Oracle Database connector for AskSQL. Data-dictionary schema introspection (tables, views, columns, primary/foreign keys, comments) + read-only transaction enforcement. Uses the oracledb driver in pure-JS Thin mode (no Instant Client).",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "!dist/**/*.map"
+  ],
+  "scripts": {
+    "build": "tsc -b"
+  },
+  "dependencies": {
+    "@asksql/core": "workspace:^"
+  },
+  "peerDependencies": {
+    "oracledb": ">=6.0"
+  },
+  "devDependencies": {
+    "oracledb": "^6.5.0"
+  },
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "sideEffects": false,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rahulmahadik/AskSQL.git",
+    "directory": "packages/oracle"
+  },
+  "homepage": "https://github.com/rahulmahadik/AskSQL#readme",
+  "bugs": "https://github.com/rahulmahadik/AskSQL/issues",
+  "publishConfig": {
+    "access": "public"
+  },
+  "author": "Rahul Mahadik <rahultkiet@gmail.com>",
+  "keywords": [
+    "sql",
+    "text-to-sql",
+    "nl2sql",
+    "natural-language",
+    "database",
+    "ai",
+    "llm",
+    "sql-generation",
+    "database-chat",
+    "ask-database",
+    "oracle",
+    "oracledb",
+    "oracle-database",
+    "text2sql"
+  ]
+}

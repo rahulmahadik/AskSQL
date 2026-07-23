@@ -56,7 +56,14 @@ class Fake implements Connector {
     return CATALOG;
   }
   async execute(): Promise<ResultSet> {
-    return { columns: [{ name: 'n', kind: 'number' }], rows: [[1]], rowCount: 1, truncated: false, durationMs: 1, warnings: [] };
+    return {
+      columns: [{ name: 'n', kind: 'number' }],
+      rows: [[1]],
+      rowCount: 1,
+      truncated: false,
+      durationMs: 1,
+      warnings: [],
+    };
   }
 }
 

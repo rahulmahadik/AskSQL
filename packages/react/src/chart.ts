@@ -50,8 +50,7 @@ export function inferChart(result: ResultSet): ChartSpec | null {
   if (result.rowCount > MAX_BARS) return null;
 
   const numericIdx: number[] = [];
-  for (let i = 0; i < result.columns.length; i++)
-    if (isNumericColumn(result, i)) numericIdx.push(i);
+  for (let i = 0; i < result.columns.length; i++) if (isNumericColumn(result, i)) numericIdx.push(i);
   if (numericIdx.length === 0) return null;
 
   // Label column = first non-numeric column, else the first column.

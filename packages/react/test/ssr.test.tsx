@@ -16,7 +16,17 @@ import type { ResultSet, SchemaCatalog } from '@asksql/core';
 
 const noopTransport: Transport = {
   listConnections: async () => [],
-  schema: async () => ({ engine: 'postgres', schemas: [], tables: [], enums: [], sequences: [], triggers: [], routines: [], warnings: [], fetchedAt: 'now' }),
+  schema: async () => ({
+    engine: 'postgres',
+    schemas: [],
+    tables: [],
+    enums: [],
+    sequences: [],
+    triggers: [],
+    routines: [],
+    warnings: [],
+    fetchedAt: 'now',
+  }),
   chat: async function* () {},
   execute: async () => ({ columns: [], rows: [], rowCount: 0, truncated: false, durationMs: 0, warnings: [] }),
   explain: async () => '',
@@ -69,19 +79,31 @@ describe('result cells are XSS-safe', () => {
 
 describe('SchemaBrowser renders (SSR-safe)', () => {
   const catalog: SchemaCatalog = {
-    engine: 'postgres', schemas: ['public'],
-    tables: [{
-      name: 'orders', kind: 'table',
-      columns: [
-        { name: 'id', dbType: 'bigint', nullable: false },
-        { name: 'status', dbType: 'order_status', nullable: false, enumValues: ['paid', 'shipped'] },
-        { name: 'customer_id', dbType: 'bigint', nullable: false },
-      ],
-      primaryKey: ['id'],
-      foreignKeys: [{ columns: ['customer_id'], refTable: 'customers', refColumns: ['id'] }],
-      uniques: [], checks: [], indexes: [], source: 'db',
-    }],
-    enums: [], sequences: [], triggers: [], routines: [], warnings: [], fetchedAt: 'now',
+    engine: 'postgres',
+    schemas: ['public'],
+    tables: [
+      {
+        name: 'orders',
+        kind: 'table',
+        columns: [
+          { name: 'id', dbType: 'bigint', nullable: false },
+          { name: 'status', dbType: 'order_status', nullable: false, enumValues: ['paid', 'shipped'] },
+          { name: 'customer_id', dbType: 'bigint', nullable: false },
+        ],
+        primaryKey: ['id'],
+        foreignKeys: [{ columns: ['customer_id'], refTable: 'customers', refColumns: ['id'] }],
+        uniques: [],
+        checks: [],
+        indexes: [],
+        source: 'db',
+      },
+    ],
+    enums: [],
+    sequences: [],
+    triggers: [],
+    routines: [],
+    warnings: [],
+    fetchedAt: 'now',
   };
   it('lists tables and is server-renderable', () => {
     const html = renderToString(createElement(SchemaBrowser, { catalog }));

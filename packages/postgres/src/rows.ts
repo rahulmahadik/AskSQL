@@ -1,7 +1,7 @@
 /**
  * Row-shaping shared by the Postgres connector. Applies the numeric
  * fidelity rule: BIGINT / NUMERIC arrive from `pg` as strings and
- * MUST stay strings; binary (bytea) becomes a size + hex preview; JSON is
+ * must stay strings; binary (bytea) becomes a size + hex preview; JSON is
  * kept as parsed values and re-stringified for the cell.
  */
 

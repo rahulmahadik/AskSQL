@@ -70,7 +70,12 @@ describe('ragged rows surface a clear error', () => {
 
 describe('non-UTF-8 encoding (UTF-16)', () => {
   maybe('UTF-16 file with unicode content reads without mojibake', async () => {
-    const table = await conn.registerFile({ table: 'cities', path: data('utf16.csv'), format: 'csv', encoding: 'utf-16' });
+    const table = await conn.registerFile({
+      table: 'cities',
+      path: data('utf16.csv'),
+      format: 'csv',
+      encoding: 'utf-16',
+    });
     const res = await conn.execute(`SELECT city FROM ${table} ORDER BY city`);
     const cities = res.rows.map((r) => String(r[0]));
     expect(cities).toContain('München');
@@ -96,8 +101,18 @@ describe('Excel (.xlsx)', () => {
 
   maybe('registers named sheets as separate tables and joins across them', async () => {
     try {
-      const sales = await conn.registerFile({ table: 'xl_sales', path: data('multi-sheet.xlsx'), format: 'xlsx', sheet: 'Sales' });
-      const targets = await conn.registerFile({ table: 'xl_targets', path: data('multi-sheet.xlsx'), format: 'xlsx', sheet: 'Targets' });
+      const sales = await conn.registerFile({
+        table: 'xl_sales',
+        path: data('multi-sheet.xlsx'),
+        format: 'xlsx',
+        sheet: 'Sales',
+      });
+      const targets = await conn.registerFile({
+        table: 'xl_targets',
+        path: data('multi-sheet.xlsx'),
+        format: 'xlsx',
+        sheet: 'Targets',
+      });
       // Each sheet is its own table with its own columns.
       const s = await conn.introspect();
       const salesCols = s.tables.find((t) => t.name === sales)!.columns.map((c) => c.name);
@@ -130,6 +145,15 @@ describe('duplicate table name is versioned, not overwritten', () => {
     const r2 = await conn.execute(`SELECT count(*) FROM ${second}`);
     expect(Number(r1.rows[0]![0])).toBeGreaterThan(0);
     expect(Number(r2.rows[0]![0])).toBeGreaterThan(0);
+  });
+});
+
+describe('duplicate OUTPUT column names are preserved by position, not collapsed', () => {
+  maybe('a query projecting two columns with the same name keeps both values', async () => {
+    const res = await conn.execute("SELECT 1 AS id, 'a' AS name, 2 AS id");
+    expect(res.columns.map((c) => c.name)).toEqual(['id', 'name', 'id']);
+    // Name-keyed reads would drop the first 'id' (last wins); positional reads keep 1 and 2.
+    expect(res.rows[0]).toEqual([1, 'a', 2]);
   });
 });
 

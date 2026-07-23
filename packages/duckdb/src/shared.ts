@@ -167,21 +167,29 @@ export function validateSqlDump(content: string): void {
         'This looks like a MySQL (mysqldump) file, which cannot be loaded directly. Re-export it as CSV, or as portable SQL - plain CREATE TABLE and INSERT statements.',
     });
   }
-  if (/\bCOPY\b[\s\S]*?\bFROM\s+stdin/i.test(content) || /^\s*\\[.]/m.test(content) || /^\s*\\connect\b/im.test(content)) {
+  if (
+    /\bCOPY\b[\s\S]*?\bFROM\s+stdin/i.test(content) ||
+    /^\s*\\[.]/m.test(content) ||
+    /^\s*\\connect\b/im.test(content)
+  ) {
     throw new AskSqlError('FILE_PARSE', {
       detail: 'pg_dump syntax detected in .sql upload',
       userMessage:
         'This looks like a PostgreSQL (pg_dump) file, which cannot be loaded directly. Re-export it as CSV, or with "pg_dump --inserts" so it uses plain INSERT statements.',
     });
   }
+  // The .sql upload runs verbatim (no AST guard), so this denylist is the only control. Match the
+  // whole reader/scan FAMILY by prefix - a fixed list lets read_csv_auto/read_blob/parquet_scan
+  // through - plus a bare quoted FROM path (DuckDB file shorthand).
   const danger =
-    /\b(ATTACH|INSTALL|LOAD|COPY)\b/i.exec(content) ??
-    /\b(read_csv|read_parquet|read_json|read_ndjson|read_text|glob)\s*\(/i.exec(content);
+    /\b(ATTACH|INSTALL|LOAD|COPY|IMPORT|EXPORT)\b/i.exec(content) ??
+    /\b((?:read_|scan_)\w*)\s*\(/i.exec(content) ??
+    /\b(parquet_scan|sniff_csv|glob|delta_scan|iceberg_scan|st_read\w*)\s*\(/i.exec(content) ??
+    /\b(FROM)\s+'[^']*'/i.exec(content);
   if (danger) {
     throw new AskSqlError('FILE_PARSE', {
       detail: `disallowed statement in .sql upload: ${danger[0]}`,
-      userMessage:
-        `This SQL file uses "${(danger[1] ?? danger[0]).toUpperCase()}", which is not allowed in an uploaded file - it could read other files or reach the network. Uploaded SQL may only create tables and insert data.`,
+      userMessage: `This SQL file uses "${(danger[1] ?? danger[0]).toUpperCase()}", which is not allowed in an uploaded file - it could read other files or reach the network. Uploaded SQL may only create tables and insert data.`,
     });
   }
 }
@@ -307,14 +315,10 @@ export function classifyDuckType(typeStr: string | undefined): ResultColumn['kin
   // and "decimal" must beat everything numeric (fidelity).
   if (/bool/.test(t)) return 'boolean';
   if (/decimal|numeric/.test(t)) return 'decimal';
-  if (/bigint|hugeint|int64|int128|int16\b/.test(t)) return 'bigint';
+  if (/bigint|hugeint|int64|int128/.test(t)) return 'bigint';
   if (/timestamp|datetime/.test(t)) return 'timestamp';
   if (/date/.test(t)) return 'date';
-  if (
-    /float|double|real|serial|\bint\b|integer|int8|int4|int2|int32|tinyint|smallint|mediumint|uint|number/.test(
-      t,
-    )
-  )
+  if (/float|double|real|serial|\bint\b|integer|int8|int4|int2|int16|int32|tinyint|smallint|mediumint|uint|number/.test(t))
     return 'number';
   if (/utf8|string|varchar|char|text|uuid|enum/.test(t)) return 'text';
   if (/binary|blob|bytea|bit/.test(t)) return 'binary';
@@ -334,14 +338,20 @@ export function buildResultColumns(
   }));
 }
 
-/** Race a query promise against a timeout + abort signal (shared). */
-export function withQueryTimeout<T>(p: Promise<T>, ms: number, signal?: AbortSignal): Promise<T> {
+/**
+ * Race a query promise against a timeout + abort signal. `onCancel` (the driver interrupt) fires on
+ * timeout or abort so a runaway query stops instead of grinding on the shared connection.
+ */
+export function withQueryTimeout<T>(p: Promise<T>, ms: number, signal?: AbortSignal, onCancel?: () => void): Promise<T> {
   return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(
-      () => reject(new AskSqlError('DB_TIMEOUT', { detail: `duckdb query exceeded ${ms}ms` })),
-      ms,
-    );
-    const onAbort = () => reject(new AskSqlError('CANCELLED'));
+    const timer = setTimeout(() => {
+      onCancel?.();
+      reject(new AskSqlError('DB_TIMEOUT', { detail: `duckdb query exceeded ${ms}ms` }));
+    }, ms);
+    const onAbort = () => {
+      onCancel?.();
+      reject(new AskSqlError('CANCELLED'));
+    };
     signal?.addEventListener('abort', onAbort, { once: true });
     p.then(
       (v) => {

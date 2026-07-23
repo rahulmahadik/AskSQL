@@ -50,12 +50,7 @@ export function SchemaBrowser({ catalog, onPick }: SchemaBrowserProps): JSX.Elem
       <div className="asksql-schema-list">
         {tables.length === 0 && <div className="asksql-meta">No matches.</div>}
         {tables.map((t) => (
-          <TableNode
-            key={`${t.schema ?? ''}.${t.name}`}
-            table={t}
-            multiSchema={multiSchema}
-            onPick={onPick}
-          />
+          <TableNode key={`${t.schema ?? ''}.${t.name}`} table={t} multiSchema={multiSchema} onPick={onPick} />
         ))}
       </div>
     </div>

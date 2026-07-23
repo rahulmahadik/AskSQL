@@ -65,7 +65,7 @@ describe('vendor dumps are rejected with a helpful message', () => {
   maybe('mysqldump (backticks/ENGINE) names MySQL', async () => {
     const p = await sqlFile(
       'mysql.sql',
-      "CREATE TABLE `users` (`id` int(11) NOT NULL AUTO_INCREMENT, PRIMARY KEY (`id`)) ENGINE=InnoDB;",
+      'CREATE TABLE `users` (`id` int(11) NOT NULL AUTO_INCREMENT, PRIMARY KEY (`id`)) ENGINE=InnoDB;',
     );
     await expect(conn.registerFile({ table: 'u', path: p })).rejects.toThrow(/MySQL|mysqldump/i);
   });

@@ -73,7 +73,11 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  await admin.query(`DROP SCHEMA IF EXISTS coord CASCADE; DROP SCHEMA IF EXISTS other CASCADE; DROP SCHEMA IF EXISTS emptyz CASCADE;`).catch(() => {});
+  await admin
+    .query(
+      `DROP SCHEMA IF EXISTS coord CASCADE; DROP SCHEMA IF EXISTS other CASCADE; DROP SCHEMA IF EXISTS emptyz CASCADE;`,
+    )
+    .catch(() => {});
   await admin.query(`DROP OWNED BY ${ROLE}; DROP ROLE IF EXISTS ${ROLE};`).catch(() => {});
   await admin.end().catch(() => {});
 });
