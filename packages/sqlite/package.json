@@ -1,6 +1,6 @@
 {
   "name": "@asksql/sqlite",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "SQLite connector for AskSQL. Works with better-sqlite3 or the built-in node:sqlite; full PRAGMA-based introspection.",
   "type": "module",
   "main": "./dist/index.js",

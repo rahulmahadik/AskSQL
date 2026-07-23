@@ -1,6 +1,6 @@
 {
   "name": "@asksql/mongodb",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "MongoDB connector for AskSQL. Sampling-based schema inference across collections + guarded read-only aggregation pipelines.",
   "type": "module",
   "main": "./dist/index.js",
