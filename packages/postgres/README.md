@@ -17,3 +17,5 @@ const connector = new PostgresConnector({ id: 'main', name: 'Main DB', connectio
 Pass the connector to `createAskSql` from `@asksql/core`.
 
 Full documentation: [https://github.com/rahulmahadik/AskSQL](https://github.com/rahulmahadik/AskSQL)
+
+API reference: [rahulmahadik.github.io/AskSQL](https://rahulmahadik.github.io/AskSQL/)

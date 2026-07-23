@@ -1,5 +1,13 @@
 # @asksql/widget
 
+## 0.2.2
+
+### Patch Changes
+
+- Render fenced ` ```sql ` code blocks in explanations and schema answers as real code blocks instead of literal backticks, and stop capping the query description at a fixed length so it always renders complete.
+- Updated dependencies
+  - @asksql/react@0.1.8
+
 ## 0.2.1
 
 ### Patch Changes

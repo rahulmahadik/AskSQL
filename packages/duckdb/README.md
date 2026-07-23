@@ -62,3 +62,5 @@ connect-src 'self' https://cdn.jsdelivr.net;
 - Cross-origin isolation (COOP/COEP) is **not** required for the default single-threaded build.
 
 Full documentation: [https://github.com/rahulmahadik/AskSQL](https://github.com/rahulmahadik/AskSQL)
+
+API reference: [rahulmahadik.github.io/AskSQL](https://rahulmahadik.github.io/AskSQL/)

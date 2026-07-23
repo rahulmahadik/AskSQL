@@ -1,0 +1,53 @@
+name: API Docs
+
+# Builds the TypeDoc API reference and deploys it to GitHub Pages.
+# One-time setup: repo Settings -> Pages -> Build and deployment -> Source: "GitHub Actions".
+# The gitignored internal/scripts/gen-api-docs.mjs is NOT used here (CI has no internal/);
+# typedoc runs directly against the tracked typedoc.json, with the version name read from core.
+
+on:
+  push:
+    # develop is the default branch (github-pages env allows it); it's fast-forwarded to main
+    # after every release, so the docs track the released code.
+    branches: [develop, main]
+    paths:
+      - 'packages/*/src/**'
+      - 'typedoc.json'
+      - '.github/workflows/docs.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deploy at a time; let an in-flight deploy finish rather than cancelling it.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -r --filter './packages/*' build
+      - name: Generate API reference (version read live from @asksql/core)
+        run: |
+          VERSION=$(node -p "require('./packages/core/package.json').version")
+          npx typedoc --name "AskSQL API Reference (core v$VERSION)"
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs/api
+      - id: deployment
+        uses: actions/deploy-pages@v4

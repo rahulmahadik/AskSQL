@@ -30,21 +30,36 @@ function inlineMarkdown(line: string): JSX.Element[] {
   return out;
 }
 
-/** Render explanation markdown: drop a redundant leading "Explanation:", bullets for "- "/"* " lines. */
+/** Render explanation markdown: drop a redundant leading "Explanation:", bullets for "- "/"* " lines, ```fenced``` blocks as code. */
 function Markdown({ text, className }: { text: string; className?: string }): JSX.Element {
   const body = text.replace(/^\s*(\*\*|__)?\s*Explanation\s*(\*\*|__)?\s*:\s*/iu, '');
-  return (
-    <div className={className}>
-      {body.split('\n').map((line, i) => {
-        const bullet = /^\s*[-*]\s+/u.test(line);
-        return (
-          <div key={i} className={bullet ? 'asksql-md-bullet' : undefined}>
-            {inlineMarkdown(bullet ? line.replace(/^\s*[-*]\s+/u, '') : line)}
-          </div>
-        );
-      })}
-    </div>
-  );
+  const lines = body.split('\n');
+  const blocks: JSX.Element[] = [];
+  let i = 0;
+  let key = 0;
+  while (i < lines.length) {
+    // Fenced code block (```sql ... ```): render as a code block, not literal backticks.
+    if (/^\s*```/u.test(lines[i]!)) {
+      const code: string[] = [];
+      i++;
+      while (i < lines.length && !/^\s*```/u.test(lines[i]!)) code.push(lines[i++]!);
+      i++; // skip the closing fence
+      blocks.push(
+        <pre key={key++} className="asksql-sqlcode">
+          {code.join('\n')}
+        </pre>,
+      );
+      continue;
+    }
+    const line = lines[i++]!;
+    const bullet = /^\s*[-*]\s+/u.test(line);
+    blocks.push(
+      <div key={key++} className={bullet ? 'asksql-md-bullet' : undefined}>
+        {inlineMarkdown(bullet ? line.replace(/^\s*[-*]\s+/u, '') : line)}
+      </div>,
+    );
+  }
+  return <div className={className}>{blocks}</div>;
 }
 
 export interface AskSqlChatProps {

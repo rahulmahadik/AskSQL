@@ -20,3 +20,5 @@ const connector = new MysqlConnector({
 Pass the connector to `createAskSql` from `@asksql/core`.
 
 Full documentation: [https://github.com/rahulmahadik/AskSQL](https://github.com/rahulmahadik/AskSQL)
+
+API reference: [rahulmahadik.github.io/AskSQL](https://rahulmahadik.github.io/AskSQL/)

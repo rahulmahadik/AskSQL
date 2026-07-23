@@ -17,3 +17,5 @@ const connector = new SqliteConnector({ id: 'main', name: 'Main DB', file: './ap
 Pass the connector to `createAskSql` from `@asksql/core`.
 
 Full documentation: [https://github.com/rahulmahadik/AskSQL](https://github.com/rahulmahadik/AskSQL)
+
+API reference: [rahulmahadik.github.io/AskSQL](https://rahulmahadik.github.io/AskSQL/)
