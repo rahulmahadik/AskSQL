@@ -33,6 +33,12 @@ describe('extractSql', () => {
   it('no sql -> null', () => {
     expect(extractSql("I can't help with that.")).toBeNull();
   });
+  it('keeps a long description complete (no blind character cap)', () => {
+    const longText = 'This query does the following thing in detail. '.repeat(120); // ~5600 chars
+    const r = extractSql(`\`\`\`sql\nSELECT 1\n\`\`\`\n${longText}`);
+    expect(r?.explanation.length).toBeGreaterThan(3000);
+    expect(r?.explanation.endsWith('detail.')).toBe(true); // not cut mid-word
+  });
   it('IMPOSSIBLE sentinel', () => {
     expect(extractImpossible('IMPOSSIBLE: there is no revenue column')).toMatch(/revenue/);
     expect(extractImpossible('SELECT 1')).toBeNull();

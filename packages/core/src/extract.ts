@@ -105,6 +105,7 @@ export function extractSql(text: string): Extraction | null {
   return null;
 }
 
+// Normalize whitespace; no length cap - the description stays complete.
 function tidy(explanation: string): string {
-  return explanation.replace(/\s+/gu, ' ').trim().slice(0, 2000);
+  return explanation.replace(/\s+/gu, ' ').trim();
 }

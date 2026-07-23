@@ -81,6 +81,31 @@ describe('AskSqlChat', () => {
     expect(explain.textContent).not.toMatch(/Explanation:/);
   });
 
+  it('renders a fenced ```sql block as a code block, not literal backticks', async () => {
+    const user = userEvent.setup();
+    const transport = makeTransport({
+      chat: chatOf(
+        {
+          type: 'sql',
+          sql: 'SELECT 1',
+          explanation: 'You could add it:\n```sql\nALTER TABLE t ADD COLUMN x int;\n```\nRead-only, nothing ran.',
+        },
+        { type: 'done' },
+      ),
+    });
+    const { container } = render(<AskSqlChat transport={transport} />);
+    await user.type(screen.getByRole('textbox', { name: /Ask a question/i }), 'q');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    await waitFor(() => expect(container.querySelector('.asksql-explain')).toBeTruthy());
+    const explain = container.querySelector('.asksql-explain')!;
+    const pre = explain.querySelector('pre.asksql-sqlcode');
+    expect(pre).toBeTruthy();
+    expect(pre!.textContent).toContain('ALTER TABLE t ADD COLUMN x int;');
+    // The fence markers are consumed, never shown as literal backticks.
+    expect(explain.textContent).not.toContain('```');
+  });
+
   it('approval mode gates results behind a Run query button', async () => {
     const user = userEvent.setup();
     const execute = vi.fn(async () => resultOf());

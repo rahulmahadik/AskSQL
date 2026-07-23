@@ -52,11 +52,25 @@
   function renderMarkdown(cls, text) {
     const box = el('div', cls);
     const body = text.replace(/^\s*(\*\*|__)?\s*Explanation\s*(\*\*|__)?\s*:\s*/iu, '');
-    for (const line of body.split('\n')) {
-      const bullet = /^\s*[-*]\s+/u.test(line);
+    const lines = body.split('\n');
+    let i = 0;
+    while (i < lines.length) {
+      // Fenced code block (```sql ... ```): render as a <pre>, not literal backticks.
+      if (/^\s*```/u.test(lines[i])) {
+        const code = [];
+        i++;
+        while (i < lines.length && !/^\s*```/u.test(lines[i])) code.push(lines[i++]);
+        i++; // skip the closing fence
+        const pre = el('pre', 'md-code');
+        pre.textContent = code.join('\n');
+        box.appendChild(pre);
+        continue;
+      }
+      const bullet = /^\s*[-*]\s+/u.test(lines[i]);
       const row = el('div', bullet ? 'md-bullet' : null);
-      mdInline(row, bullet ? line.replace(/^\s*[-*]\s+/u, '') : line);
+      mdInline(row, bullet ? lines[i].replace(/^\s*[-*]\s+/u, '') : lines[i]);
       box.appendChild(row);
+      i++;
     }
     return box;
   }
