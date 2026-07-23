@@ -1,6 +1,6 @@
 {
   "name": "@asksql/widget",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Vanilla-JS AskSQL embed for non-React pages. Mounts the bubble/chat into a shadow root so host CSS never bleeds in or out.",
   "type": "module",
   "main": "./dist/index.js",

@@ -1,5 +1,11 @@
 # @asksql/core
 
+## 0.3.3
+
+### Patch Changes
+
+- Render fenced ` ```sql ` code blocks in explanations and schema answers as real code blocks instead of literal backticks, and stop capping the query description at a fixed length so it always renders complete.
+
 ## 0.3.2
 
 ### Patch Changes

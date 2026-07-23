@@ -6,6 +6,12 @@ All notable changes to the AskSQL VS Code extension are documented here. The for
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-07-24
+
+### Fixed
+
+- Fenced ` ```sql ` code blocks in schema answers and explanations now render as code blocks instead of literal backticks.
+
 ## [0.3.0] - 2026-07-24
 
 ### Added
