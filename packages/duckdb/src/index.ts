@@ -75,11 +75,15 @@ interface DuckConnection {
   runAndReadUntil(sql: string, targetRowCount: number): Promise<DuckReader>;
   /** Compiles exactly ONE statement; throws on a multi-statement string. */
   prepare(sql: string): Promise<DuckPrepared>;
+  /** Aborts the running query so a timeout doesn't wedge the shared connection. */
+  interrupt?(): void;
   closeSync?(): void;
   disconnectSync?(): void;
 }
 interface DuckReader {
   getRowObjects(): Record<string, unknown>[];
+  /** Positional rows: preserves duplicate output column names that getRowObjects() collapses. */
+  getRows(): unknown[][];
   columnNames(): string[];
   columnTypes?(): { toString?(): string }[];
 }
@@ -104,7 +108,7 @@ export class DuckDbConnector implements Connector {
     this.id = config.id;
     this.name = config.name;
     // Display hint: the database file's base name, or in-memory when none.
-    this.database = config.path ? (config.path.split(/[\\/]/).pop() || undefined) : 'in-memory';
+    this.database = config.path ? config.path.split(/[\\/]/).pop() || undefined : 'in-memory';
   }
 
   private async api(): Promise<{ DuckDBInstance: { create(path?: string): Promise<DuckInstance> } }> {
@@ -133,10 +137,7 @@ export class DuckDbConnector implements Connector {
     // scanners, spatial st_read*, gsheets) cannot load behind the guard's back:
     // a query that reaches for one errors instead of executing. Extensions we
     // need (excel for xlsx) are still loaded explicitly via INSTALL/LOAD.
-    for (const stmt of [
-      'SET autoinstall_known_extensions=false',
-      'SET autoload_known_extensions=false',
-    ]) {
+    for (const stmt of ['SET autoinstall_known_extensions=false', 'SET autoload_known_extensions=false']) {
       try {
         await this.conn.run(stmt);
       } catch {
@@ -163,11 +164,11 @@ export class DuckDbConnector implements Connector {
     return this.conn;
   }
 
-/**
- * Register a file as a view. Duplicate names are versioned;
- * large files stream. Returns the actual table name used.
- */
-async registerFile(file: FileSource): Promise<string> {
+  /**
+   * Register a file as a view. Duplicate names are versioned;
+   * large files stream. Returns the actual table name used.
+   */
+  async registerFile(file: FileSource): Promise<string> {
     const conn = this.connection();
     const format = resolveFormat(file);
     // A .sql file is executed to build its own tables, not read as one table.
@@ -180,76 +181,81 @@ async registerFile(file: FileSource): Promise<string> {
       this.registered.add(table);
       return table;
     } catch (err) {
-    throw mapFileError(file, err);
-}
-}
-
-/**
- * Load a portable .sql dump (CREATE TABLE + INSERT) and expose the tables it
- * creates. Vendor dumps (mysqldump / pg_dump) and file/network statements are
- * rejected with a clear message BEFORE anything runs. Returns the first table
- * the script created.
- */
-private async registerSqlDump(file: FileSource): Promise<string> {
-  assertSafeFilePath(file);
-  let content: string;
-  try {
-    content = await readFile(file.path, 'utf8');
-  } catch (err) {
-    throw mapFileError(file, err);
+      throw mapFileError(file, err);
+    }
   }
-  validateSqlDump(content);
-  const conn = this.connection();
-  const before = await this.tableNames();
-  try {
-    await conn.run(content);
-  } catch (err) {
-    throw mapFileError(file, err);
-  }
-  const created = [...(await this.tableNames())].filter((t) => !before.has(t));
-  if (created.length === 0) {
-    throw new AskSqlError('FILE_PARSE', {
-      detail: 'sql upload created no tables',
-      userMessage: `"${file.path.split(/[\\/]/).pop()}" ran but created no tables. An uploadable SQL file must CREATE TABLE and INSERT its data.`,
-    });
-  }
-  for (const t of created) this.registered.add(t);
-  return created[0]!;
-}
 
-/** Names of tables/views currently in the main schema. */
-private async tableNames(): Promise<Set<string>> {
-  const reader = await this.connection().runAndReadUntil(
-    "SELECT table_name FROM information_schema.tables WHERE table_schema = 'main'",
-    100_000,
-  );
-  return new Set(reader.getRowObjects().map((r) => String(r['table_name'])));
-}
-
-/** Remove a previously registered file source (view for data files, table for a .sql dump). */
-async unregisterFile(table: string): Promise<void> {
-  const name = sanitizeTableName(table);
-  if (!this.registered.has(name)) return;
-  await this.connection().run(`DROP VIEW IF EXISTS ${quoteIdent(name)}`).catch(() => {});
-  await this.connection().run(`DROP TABLE IF EXISTS ${quoteIdent(name)}`).catch(() => {});
-  this.registered.delete(name);
-}
-
-/** Names currently registered from files. */
-registeredTables(): readonly string[] {
-  return [...this.registered];
-}
-
-private async ensureExcel(): Promise<void> {
-  if (this.excelLoaded) return;
-  try {
-    await this.connection().run('INSTALL excel');
-    await this.connection().run('LOAD excel');
-    this.excelLoaded = true;
-} catch (err) {
+  /**
+   * Load a portable .sql dump (CREATE TABLE + INSERT) and expose the tables it
+   * creates. Vendor dumps (mysqldump / pg_dump) and file/network statements are
+   * rejected with a clear message BEFORE anything runs. Returns the first table
+   * the script created.
+   */
+  private async registerSqlDump(file: FileSource): Promise<string> {
+    assertSafeFilePath(file);
+    let content: string;
+    try {
+      content = await readFile(file.path, 'utf8');
+    } catch (err) {
+      throw mapFileError(file, err);
+    }
+    validateSqlDump(content);
+    const conn = this.connection();
+    const before = await this.tableNames();
+    try {
+      await conn.run(content);
+    } catch (err) {
+      throw mapFileError(file, err);
+    }
+    const created = [...(await this.tableNames())].filter((t) => !before.has(t));
+    if (created.length === 0) {
       throw new AskSqlError('FILE_PARSE', {
-          userMessage: 'Excel support needs the DuckDB "excel" extension, which could not be loaded (offline?). Convert the file to CSV.',
-          detail: err instanceof Error ? err.message : String(err),
+        detail: 'sql upload created no tables',
+        userMessage: `"${file.path.split(/[\\/]/).pop()}" ran but created no tables. An uploadable SQL file must CREATE TABLE and INSERT its data.`,
+      });
+    }
+    for (const t of created) this.registered.add(t);
+    return created[0]!;
+  }
+
+  /** Names of tables/views currently in the main schema. */
+  private async tableNames(): Promise<Set<string>> {
+    const reader = await this.connection().runAndReadUntil(
+      "SELECT table_name FROM information_schema.tables WHERE table_schema = 'main'",
+      100_000,
+    );
+    return new Set(reader.getRowObjects().map((r) => String(r['table_name'])));
+  }
+
+  /** Remove a previously registered file source (view for data files, table for a .sql dump). */
+  async unregisterFile(table: string): Promise<void> {
+    const name = sanitizeTableName(table);
+    if (!this.registered.has(name)) return;
+    await this.connection()
+      .run(`DROP VIEW IF EXISTS ${quoteIdent(name)}`)
+      .catch(() => {});
+    await this.connection()
+      .run(`DROP TABLE IF EXISTS ${quoteIdent(name)}`)
+      .catch(() => {});
+    this.registered.delete(name);
+  }
+
+  /** Names currently registered from files. */
+  registeredTables(): readonly string[] {
+    return [...this.registered];
+  }
+
+  private async ensureExcel(): Promise<void> {
+    if (this.excelLoaded) return;
+    try {
+      await this.connection().run('INSTALL excel');
+      await this.connection().run('LOAD excel');
+      this.excelLoaded = true;
+    } catch (err) {
+      throw new AskSqlError('FILE_PARSE', {
+        userMessage:
+          'Excel support needs the DuckDB "excel" extension, which could not be loaded (offline?). Convert the file to CSV.',
+        detail: err instanceof Error ? err.message : String(err),
         cause: err,
       });
     }
@@ -266,7 +272,9 @@ private async ensureExcel(): Promise<void> {
     }
     let viewNames = new Set<string>();
     try {
-      viewNames = new Set((await conn.runAndReadUntil(INTROSPECT_VIEWS_SQL, 100_000)).getRowObjects().map((r) => String(r['table_name'])));
+      viewNames = new Set(
+        (await conn.runAndReadUntil(INTROSPECT_VIEWS_SQL, 100_000)).getRowObjects().map((r) => String(r['table_name'])),
+      );
     } catch {
       /* views are optional */
     }
@@ -348,7 +356,9 @@ private async ensureExcel(): Promise<void> {
       const prepared = await conn.prepare(sql);
       // Bounded read: fetch at most maxRows+1 rows so `SELECT *` over a huge
       // file never materializes millions of JS objects.
-      reader = await withQueryTimeout(prepared.runAndReadUntil(maxRows + 1), opts?.timeoutMs ?? 30_000, opts?.signal);
+      reader = await withQueryTimeout(prepared.runAndReadUntil(maxRows + 1), opts?.timeoutMs ?? 30_000, opts?.signal, () =>
+        conn.interrupt?.(),
+      );
     } catch (err) {
       throw mapQueryError(err);
     }
@@ -356,10 +366,11 @@ private async ensureExcel(): Promise<void> {
     const names = reader.columnNames();
     const typeStrings = safeTypeStrings(reader, names.length);
     const columns = buildResultColumns(names, typeStrings);
-    const rawRows = reader.getRowObjects();
+    // Positional rows: getRowObjects() collapses duplicate column names (a JOIN's two `id`s); getRows() doesn't.
+    const rawRows = reader.getRows();
     const truncated = rawRows.length > maxRows;
     const clipped = truncated ? rawRows.slice(0, maxRows) : rawRows;
-    const rows = clipped.map((r) => names.map((name, i) => shapeDuckValue(r[name], columns[i]!.kind)));
+    const rows = clipped.map((r) => r.map((v, i) => shapeDuckValue(v, columns[i]!.kind)));
     return { columns, rows, rowCount: rows.length, truncated, durationMs: Date.now() - started, warnings: [] };
   }
 

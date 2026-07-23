@@ -61,8 +61,14 @@ describe('formatCell', () => {
 
 describe('toCsv', () => {
   it('quotes fields with commas/quotes/newlines', () => {
-    const cols: ResultColumn[] = [{ name: 'a', kind: 'text' }, { name: 'b', kind: 'text' }];
-    const rows: CellValue[][] = [['hello, world', 'say "hi"'], ['line\nbreak', null]];
+    const cols: ResultColumn[] = [
+      { name: 'a', kind: 'text' },
+      { name: 'b', kind: 'text' },
+    ];
+    const rows: CellValue[][] = [
+      ['hello, world', 'say "hi"'],
+      ['line\nbreak', null],
+    ];
     const csv = toCsv(cols, rows);
     expect(csv).toContain('"hello, world"');
     expect(csv).toContain('"say ""hi"""');

@@ -9,10 +9,15 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./mongo": {
+      "types": "./dist/mongo/index.d.ts",
+      "default": "./dist/mongo/index.js"
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "!dist/**/*.map"
   ],
   "scripts": {
     "build": "tsc -b"

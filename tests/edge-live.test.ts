@@ -80,7 +80,10 @@ describe('exotic types fall back to safe text', () => {
     const res = await conn.execute('SELECT id, span::text AS span_t, span, dur, addr, flags FROM edge.exotic');
     // Every cell is a JSON-safe scalar (string/number/bool/null) or binary object.
     for (const cell of res.rows[0]!) {
-      const ok = cell === null || ['string', 'number', 'boolean'].includes(typeof cell) || (typeof cell === 'object' && '__binary' in cell);
+      const ok =
+        cell === null ||
+        ['string', 'number', 'boolean'].includes(typeof cell) ||
+        (typeof cell === 'object' && '__binary' in cell);
       expect(ok).toBe(true);
     }
     // The values are present as readable text.

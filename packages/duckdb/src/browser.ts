@@ -94,12 +94,7 @@ interface WasmDb {
   instantiate(mainModule: string, pthreadWorker?: string): Promise<void>;
   open(config: { path: string; accessMode?: number }): Promise<void>;
   connect(): Promise<WasmConn>;
-  registerFileHandle(
-    name: string,
-    handle: unknown,
-    protocol: number,
-    directIO: boolean,
-  ): Promise<void>;
+  registerFileHandle(name: string, handle: unknown, protocol: number, directIO: boolean): Promise<void>;
   registerFileBuffer(name: string, buffer: Uint8Array): Promise<void>;
   registerFileText(name: string, text: string): Promise<void>;
   terminate(): Promise<void>;
@@ -121,13 +116,29 @@ interface ArrowTable {
   toArray: ArrowToArray;
   numRows: number;
 }
-type AsyncBatchReader = AsyncIterable<{
+type ArrowBatch = {
   schema: { fields: ArrowField[] };
   toArray: ArrowToArray;
-}>;
+  // Positional column access on real Arrow batches; keeps duplicate column names toArray() collapses.
+  numRows?: number;
+  getChildAt?(i: number): { get(row: number): unknown } | null;
+};
+type AsyncBatchReader = AsyncIterable<ArrowBatch>;
 
 function arrowRows(t: { toArray: ArrowToArray }): Record<string, unknown>[] {
   return typeof t.toArray === 'function' ? t.toArray() : t.toArray;
+}
+
+/** Rows as positional arrays (preserving duplicate column names), via Arrow column access when present. */
+function positionalRows(batch: ArrowBatch, colCount: number): unknown[][] {
+  if (typeof batch.getChildAt === 'function' && typeof batch.numRows === 'number') {
+    const cols = Array.from({ length: colCount }, (_v, i) => batch.getChildAt!(i));
+    const out: unknown[][] = [];
+    for (let r = 0; r < batch.numRows; r++) out.push(cols.map((c) => (c ? c.get(r) : null)));
+    return out;
+  }
+  const names = batch.schema.fields.map((f) => f.name);
+  return arrowRows(batch).map((row) => names.map((n) => row[n]));
 }
 
 /** Decode uploaded .sql content (File/Blob/buffer/text) to a string. */
@@ -164,8 +175,7 @@ export class DuckDbWasmConnector implements Connector {
     } catch (err) {
       throw new AskSqlError('WASM_LOAD', {
         detail: `cannot import @duckdb/duckdb-wasm: ${err instanceof Error ? err.message : String(err)}`,
-        userMessage:
-          'The in-browser analysis engine could not be loaded. Run: npm install @duckdb/duckdb-wasm',
+        userMessage: 'The in-browser analysis engine could not be loaded. Run: npm install @duckdb/duckdb-wasm',
         cause: err,
       });
     }
@@ -193,8 +203,7 @@ export class DuckDbWasmConnector implements Connector {
     } catch (err) {
       throw new AskSqlError('WASM_LOAD', {
         detail: err instanceof Error ? err.message : String(err),
-        userMessage:
-          'The in-browser analysis engine failed to start. Check your network and browser settings (CSP).',
+        userMessage: 'The in-browser analysis engine failed to start. Check your network and browser settings (CSP).',
         cause: err,
       });
     }
@@ -252,12 +261,7 @@ export class DuckDbWasmConnector implements Connector {
         await db.registerFileBuffer(vfsName, new Uint8Array(file.data));
       } else {
         // Blob / File - stream via a file handle (memory-safe for big files).
-        await db.registerFileHandle(
-          vfsName,
-          file.data,
-          duckdb.DuckDBDataProtocol.BROWSER_FILEREADER,
-          true,
-        );
+        await db.registerFileHandle(vfsName, file.data, duckdb.DuckDBDataProtocol.BROWSER_FILEREADER, true);
       }
 
       if (format === 'xlsx' && !this.excelLoaded) {
@@ -300,15 +304,21 @@ export class DuckDbWasmConnector implements Connector {
   }
 
   private async tableNames(): Promise<Set<string>> {
-    const rows = arrowRows(await this.connection().query("SELECT table_name FROM information_schema.tables WHERE table_schema = 'main'"));
+    const rows = arrowRows(
+      await this.connection().query("SELECT table_name FROM information_schema.tables WHERE table_schema = 'main'"),
+    );
     return new Set(rows.map((r) => String(r['table_name'])));
   }
 
   async unregisterFile(table: string): Promise<void> {
     const name = sanitizeTableName(table);
     if (!this.registered.has(name)) return;
-    await this.connection().query(`DROP VIEW IF EXISTS ${quoteIdent(name)}`).catch(() => {});
-    await this.connection().query(`DROP TABLE IF EXISTS ${quoteIdent(name)}`).catch(() => {});
+    await this.connection()
+      .query(`DROP VIEW IF EXISTS ${quoteIdent(name)}`)
+      .catch(() => {});
+    await this.connection()
+      .query(`DROP TABLE IF EXISTS ${quoteIdent(name)}`)
+      .catch(() => {});
     this.registered.delete(name);
   }
 
@@ -319,15 +329,11 @@ export class DuckDbWasmConnector implements Connector {
     try {
       columnRows = arrowRows(await conn.query(INTROSPECT_COLUMNS_SQL));
     } catch (err) {
-      warnings.push(
-        `Could not introspect columns: ${err instanceof Error ? err.message : String(err)}`,
-      );
+      warnings.push(`Could not introspect columns: ${err instanceof Error ? err.message : String(err)}`);
     }
     let viewNames = new Set<string>();
     try {
-      viewNames = new Set(
-        arrowRows(await conn.query(INTROSPECT_VIEWS_SQL)).map((r) => String(r['table_name'])),
-      );
+      viewNames = new Set(arrowRows(await conn.query(INTROSPECT_VIEWS_SQL)).map((r) => String(r['table_name'])));
     } catch {
       /* optional */
     }
@@ -372,11 +378,11 @@ async function readBounded(
   maxRows: number,
 ): Promise<{ columns: ResultColumn[]; rows: ResultSet['rows']; truncated: boolean }> {
   const reader = await conn.send(sql);
-  const collected: Record<string, unknown>[] = [];
+  const collected: unknown[][] = [];
   let fields: ArrowField[] = [];
   for await (const batch of reader) {
     if (fields.length === 0) fields = batch.schema.fields;
-    for (const row of arrowRows(batch)) {
+    for (const row of positionalRows(batch, fields.length)) {
       collected.push(row);
       if (collected.length > maxRows) break;
     }
@@ -387,8 +393,6 @@ async function readBounded(
   const columns = buildResultColumns(names, types);
   const truncated = collected.length > maxRows;
   const clipped = truncated ? collected.slice(0, maxRows) : collected;
-  const rows = clipped.map((r) =>
-    names.map((name, i) => shapeDuckValue(r[name], columns[i]!.kind)),
-  );
+  const rows = clipped.map((r) => r.map((v, i) => shapeDuckValue(v, columns[i]!.kind)));
   return { columns, rows, truncated };
 }

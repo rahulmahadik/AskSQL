@@ -1,6 +1,6 @@
 # AskSQL
 
-*AI database chat: ask in plain language, review the SQL, get answers.*
+*AI database chat: ask in plain language, review the query, get answers.*
 
 [![CI](https://github.com/rahulmahadik/AskSQL/actions/workflows/ci.yml/badge.svg)](https://github.com/rahulmahadik/AskSQL/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/@asksql/core?label=%40asksql%2Fcore)](https://www.npmjs.com/package/@asksql/core)
@@ -29,9 +29,10 @@ const transport = new HttpTransport({ baseUrl: '/asksql' });
 ## Use it in VS Code
 
 Prefer a ready-made tool over the libraries? The **AskSQL** VS Code extension puts the same engine
-and read-only guard in a sidebar panel: connect Postgres, MySQL / MariaDB or SQLite, ask in plain
-language, and get answers without leaving your editor. Bring your own model - a chat model already in
-VS Code, a local Ollama model, or your own OpenAI / Anthropic / Google / Groq key.
+and read-only guard in a sidebar panel: connect Postgres, MySQL / MariaDB, SQLite, Oracle or
+MongoDB, ask in plain language, and get answers without leaving your editor. Bring your own model -
+a chat model already in VS Code, a local Ollama model, or your own OpenAI / Anthropic / Google /
+Groq / NVIDIA key.
 
 <p align="center">
   <img src="packages/vscode/images/extension-overview.png" width="820"
@@ -40,12 +41,16 @@ VS Code, a local Ollama model, or your own OpenAI / Anthropic / Google / Groq ke
 <p align="center">
   <img src="packages/vscode/images/sidebar-chat.png" width="410"
        alt="Ask a question in the AskSQL sidebar and get the answer as a table." />
-  <img src="packages/vscode/images/nl-to-sql-result.png" width="410"
-       alt="A plain-language question turned into SQL, with the results below it." />
+  <img src="packages/vscode/images/general-db-question.png" width="410"
+       alt="A plain-language question turned into SQL with results, plus a general question answered from the schema." />
 </p>
 
 Install **AskSQL** from the VS Code Marketplace (or build the `.vsix` from `packages/vscode`). See the
 [extension README](packages/vscode/README.md) for details.
+
+Working in a JetBrains IDE instead? The **AskSQL** plugin for IntelliJ IDEA, DataGrip, PyCharm, and
+the rest of the family lives in [`packages/jetbrains`](packages/jetbrains/README.md) - a pure
+Kotlin/JVM port of the same engine and guard.
 
 ## Why AskSQL
 
@@ -55,9 +60,9 @@ an afternoon**, self-hosted with your own LLM and your own database.
 
 It fits three shapes of app without a rewrite - drop the `<AskSqlBubble/>` into an existing
 product, mount `<AskSqlChat/>` as a full-page analytics tool, or build a custom surface on the
-headless `useAskSql` hook. Postgres, MySQL, SQLite, and DuckDB (including CSV / Parquet / Excel
-files queried in the browser) are first-class, and any OpenAI-compatible model works. Nothing
-runs until a deterministic guard has proven the SQL is read-only.
+headless `useAskSql` hook. Postgres, MySQL, SQLite, DuckDB (including CSV / Parquet / Excel
+files queried in the browser), Oracle, and MongoDB are first-class, and any OpenAI-compatible
+model works. Nothing runs until a deterministic guard has proven the SQL is read-only.
 
 - **Two surfaces, one engine** - `<AskSqlBubble/>` (Intercom-style chat head) and
   `<AskSqlChat/>` (full page), plus headless `useAskSql` for custom UIs.
@@ -65,8 +70,8 @@ runs until a deterministic guard has proven the SQL is read-only.
   fully local model with Ollama. Data and credentials never have to leave your infrastructure.
 - **Verifiable safety** - read-only by default, a deterministic **AST-based SQL guard** (not
   regex), optional human approval before execution, and query audit.
-- **Bring your own LLM** - OpenAI, Anthropic, Google Gemini, Azure OpenAI, **Groq**, Ollama, or
-  any OpenAI-compatible endpoint, via the Vercel AI SDK.
+- **Bring your own LLM** - OpenAI, Anthropic, Google Gemini, Azure OpenAI, **Groq**, NVIDIA,
+  Ollama, or any OpenAI-compatible endpoint, via the Vercel AI SDK.
 - **Pay only for what you import** - per-database adapter packages; a MySQL-only app never
   downloads DuckDB's WASM or `pg`.
 
@@ -76,8 +81,8 @@ runs until a deterministic guard has proven the SQL is read-only.
   Browser                         Your server                    Your database
   ---------------------           ----------------------         -------------------
   <AskSqlChat/>                    @asksql/server                 Postgres / MySQL /
-  <AskSqlBubble/>   --HTTP/SSE-->  - auth hook (your login)       SQLite / DuckDB
-  useAskSql  /  widget            - holds DB credentials
+  <AskSqlBubble/>   --HTTP/SSE-->  - auth hook (your login)       SQLite / DuckDB /
+  useAskSql  /  widget            - holds DB credentials          Oracle / MongoDB
                                    - server-side guard
                                         |
                                         v
@@ -87,7 +92,8 @@ runs until a deterministic guard has proven the SQL is read-only.
                                        (no DB rows sent)   <----  generated SQL
                                     3. AST guard: read-only SELECT only
                                        (blocked -> refused, never runs)
-                                    4. connector runs it in a read-only session --> DB
+                                    4. connector runs it (read-only session
+                                       where the engine supports it) --> DB
 ```
 
 Credentials and the authoritative guard live on the server; the browser only ever sends a
@@ -136,7 +142,7 @@ All packages publish under the [`@asksql`](https://www.npmjs.com/org/asksql) npm
 | Package | What it is |
 |---------|------------|
 | [`@asksql/core`](https://www.npmjs.com/package/@asksql/core) | Engine: schema catalog, AST guard, NL->SQL pipeline, provider resolver. No drivers. |
-| [`@asksql/postgres`](https://www.npmjs.com/package/@asksql/postgres) [`@asksql/mysql`](https://www.npmjs.com/package/@asksql/mysql) [`@asksql/sqlite`](https://www.npmjs.com/package/@asksql/sqlite) [`@asksql/duckdb`](https://www.npmjs.com/package/@asksql/duckdb) | Database connectors (drivers are peer deps). |
+| [`@asksql/postgres`](https://www.npmjs.com/package/@asksql/postgres) [`@asksql/mysql`](https://www.npmjs.com/package/@asksql/mysql) [`@asksql/sqlite`](https://www.npmjs.com/package/@asksql/sqlite) [`@asksql/duckdb`](https://www.npmjs.com/package/@asksql/duckdb) [`@asksql/oracle`](https://www.npmjs.com/package/@asksql/oracle) [`@asksql/mongodb`](https://www.npmjs.com/package/@asksql/mongodb) | Database connectors (drivers are peer deps). |
 | [`@asksql/server`](https://www.npmjs.com/package/@asksql/server) | Credential-holding sidecar: auth hook, server-side guard, SSE `/chat`. Express adapter included. |
 | [`@asksql/react`](https://www.npmjs.com/package/@asksql/react) | `<AskSqlChat/>`, `<AskSqlBubble/>`, `useAskSql`, result table, CSV export. Light/dark. |
 | [`@asksql/widget`](https://www.npmjs.com/package/@asksql/widget) | Vanilla-JS `<script>` embed (shadow-DOM isolated) for non-React pages. |
@@ -174,6 +180,7 @@ Pick the **one** model-provider SDK that matches your `provider` - they are opti
 | `google` | `@ai-sdk/google` |
 | `azure` (classic) | `@ai-sdk/azure` |
 | `groq` | `@ai-sdk/groq` |
+| `nvidia` | `@ai-sdk/openai-compatible` |
 | `ollama`, `openai-compatible` (LM Studio, vLLM, OpenRouter, Azure AI Foundry, ...) | `@ai-sdk/openai-compatible` |
 
 You pay for exactly what you import: install `@asksql/core` plus only the adapter(s) you use.
@@ -181,8 +188,8 @@ A MySQL-only app never pulls in DuckDB's WASM or `pg`.
 
 ## Databases
 
-Four engines are first-class. Each connector introspects the schema (tables, views, columns,
-keys, enums, indexes) and executes only guarded, read-only SQL. The driver is a peer
+Six engines are first-class. Each connector introspects the schema (tables, views, columns,
+keys, enums, indexes) and executes only guarded, read-only queries. The driver is a peer
 dependency you install yourself.
 
 | Database | Package | Driver (peer) | How you connect |
@@ -191,6 +198,8 @@ dependency you install yourself.
 | MySQL / MariaDB | `@asksql/mysql` | `mysql2` | `uri` + `database`, or `host`/`port`/`user`/`password`/`database` |
 | SQLite | `@asksql/sqlite` | `better-sqlite3` (or `node:sqlite`) | `file` path, or pass an existing `database` handle |
 | DuckDB | `@asksql/duckdb` | `@duckdb/node-api` (Node) / `@duckdb/duckdb-wasm` (browser) | `path` (`:memory:` default) and/or `files` to register CSV/JSON/Parquet/Excel/`.sql` as tables (each data file or Excel `sheet` becomes its own joinable table; a portable `.sql` dump runs its CREATE + INSERT and exposes the tables it builds) |
+| Oracle | `@asksql/oracle` | `oracledb` (pure-JS Thin mode) | `host`/`port`/`user`/`password`/`database` (service name), or a `connectString` |
+| MongoDB | `@asksql/mongodb` | `mongodb` | `connectionString` (`mongodb://` or `mongodb+srv://`) + `database` |
 
 ```ts
 new PostgresConnector({ id: 'shop', name: 'Shop', connectionString: process.env.DATABASE_URL });
@@ -198,6 +207,9 @@ new MysqlConnector({ id: 'app', name: 'App', uri: process.env.DATABASE_URL, data
 new SqliteConnector({ id: 'local', name: 'Local', file: './app.db' });
 new DuckDbConnector({ id: 'files', name: 'Files', files: [{ table: 'sales', path: 'sales.csv', format: 'csv' }] });
 ```
+
+MongoDB is non-SQL: pass `MongodbConnector` to `createMongoAskSql` from `@asksql/core/mongo` (not
+`createAskSql`): the same ask, guard, run flow, over aggregation pipelines.
 
 Connectors open **read-only** sessions where the engine supports it, so the AST guard has a
 second line of defense at the database itself. Registering multiple connectors lets one engine
@@ -242,9 +254,9 @@ app.use('/asksql', asksqlMiddleware({
 
 ## Configuration
 
-**Model providers** - OpenAI, Anthropic, Gemini, Azure (classic + AI Foundry), Groq, Ollama, or
-any OpenAI-compatible endpoint. See **[docs/providers.md](docs/providers.md)** for per-provider
-config (including the Azure classic-vs-Foundry gotcha).
+**Model providers** - OpenAI, Anthropic, Gemini, Azure (classic + AI Foundry), Groq, NVIDIA,
+Ollama, or any OpenAI-compatible endpoint. See **[docs/providers.md](docs/providers.md)** for
+per-provider config (including the Azure classic-vs-Foundry gotcha).
 
 Prompts and model sampling are host-configurable - no forking required.
 
@@ -414,8 +426,10 @@ The LLM is untrusted input. A deterministic guard - not the prompt - decides wha
 - Single read-only `SELECT` only (CTEs verified recursively); every write/DDL form, stacked
   statement, data-modifying CTE, `SELECT INTO`, locking clause, `INTO OUTFILE`, and a
   per-dialect dangerous-function denylist are **blocked**. Anything unparseable fails closed.
-- Runs client-side for UX **and** server-side for authority; connectors also open read-only DB
-  sessions, so a bypass still hits a read-only transaction.
+- Runs client-side for UX **and** server-side for authority; where the engine supports it
+  (Postgres, MySQL, SQLite, Oracle) the connector also opens a read-only session, so a bypass
+  still hits a read-only transaction. DuckDB has no read-only session, so the AST guard is its
+  only barrier there.
 - Row caps injected automatically; the generated SQL is always shown before it runs, and an
   optional `requireApproval` gate can hold every query behind a Run button; every query (and
   every block) is recorded.
@@ -430,13 +444,9 @@ Be clear-eyed about what AskSQL guarantees. The guard guarantees **safety** - th
 read-only and is shown to you before it runs. It does **not** guarantee the query is
 **semantically** what you meant. How good the generated SQL is depends on two things:
 
-- **How capable your model is.** AskSQL is built to run fully offline on a local coder model. In
-  our testing a **7B** (for example `qwen2.5-coder:7b`) is the sweet spot - it matched a 14B on
-  multi-join analytics while running about twice as fast, and it is easy to run locally. A 14B
-  gives a little more headroom on the hardest questions; a tiny 1.5B-3B is fine for simple,
-  small-schema questions but slips on complex joins. Pick a local model sized to your workload -
-  and if you ever need to, a cloud model is an option for the heaviest analytics, never a
-  requirement.
+- **How capable your model is.** AskSQL is built to run fully offline on a local coder model -
+  pick one sized to your workload (see the rule of thumb below), and if you ever need to, a
+  cloud model is an option for the heaviest analytics, never a requirement.
 - **How complex the question is.** Single-table filters and simple joins are reliable across the
   board. But multi-table analytics - especially aggregating measures across several
   one-to-many tables at once - can trip a smaller model into a classic **join fan-out**
@@ -452,9 +462,8 @@ more inconsistently-named your schema, the more model capability you need:
 | Complex schema (many tables), questions needing several joins | Use **7B or larger**. A 1.5B failed outright on a real 63-table schema; a 7B matched a 14B. |
 | Very deep joins (4+ tables) on an inconsistently-named schema | Even a 14B can slip on a wrong column - review the SQL, and prefer consistent naming (`service_id`, not `id`). |
 
-So yes: **if your schema is complicated and your questions need many joins, a small model will
-struggle** - reach for a 7B (the sweet spot for reliable results) or larger, and do not expect a
-1.5B-3B to get it right on a big, messy schema.
+In our testing the **7B** (for example `qwen2.5-coder:7b`) is the sweet spot for accuracy
+against speed, and it is easy to run locally.
 
 Practical guidance: **review the generated SQL** (it is always shown first; set
 `requireApproval` to force a click), give heavy analytics a more capable local model, and treat
@@ -467,6 +476,8 @@ review optional.
 - **`examples/browser-duckdb`** - no backend at all: upload a CSV, ask questions, everything
   runs in the tab via DuckDB-WASM. Nothing leaves the browser. ([screenshot](docs/screenshots/README.md))
 - `examples/node-duckdb` - headless file analytics with a real model.
+- `examples/node-oracle` - headless Oracle (Thin-mode driver, EZConnect string).
+- `examples/node-mongodb` - headless MongoDB (aggregation-pipeline engine, `mongodb://` URI).
 - `examples/express-postgres` - sidecar + static page over live Postgres.
 - `examples/vite-react` - the React app (bubble + full page).
 - `examples/plain-html` - one `<script>` tag, `AskSQL.mount(...)`.

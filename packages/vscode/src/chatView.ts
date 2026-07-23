@@ -1,26 +1,24 @@
 /**
- * The AskSQL panel - a dedicated view, not a guest in someone else's chat.
+ * The AskSQL panel - a dedicated WebviewView (VS Code has no API for a native
+ * custom chat surface, and a chat participant can only live inside the shared
+ * chat panel). All styling comes from VS Code's theme variables.
  *
- * The Chat Participant API was the obvious "native" choice and it was the wrong
- * one: a participant can ONLY live inside VS Code's shared chat panel, which
- * means an `@asksql` mention, VS Code's own model dropdown listing Copilot and
- * Claude, and settings that belong to that panel rather than to us. None of that
- * is restylable - the panel is VS Code's. VS Code exposes no API for a native
- * custom chat surface, so a WebviewView is the only way to own the experience.
- *
- * "Webview" does not mean "web page in a tab". Every colour, font, radius, and
- * focus ring below comes from VS Code's own theme variables, so this matches the
- * user's theme (any theme, light or dark) without us shipping a palette.
- *
- * Trust boundary: the webview renders, and nothing else. It never sees a
- * credential, never touches a database, and never builds SQL. It posts a
- * question to the extension host and receives structured results back. All
- * values are written with textContent in media/chat.js, never innerHTML.
+ * Trust boundary: the webview only renders. It never sees a credential, never
+ * touches a database, and never builds SQL; it posts questions to the extension
+ * host and receives structured results back. All values are written with
+ * textContent in media/chat.js, never innerHTML.
  */
 
 import * as vscode from 'vscode';
 import { randomBytes } from 'node:crypto';
-import { AskSqlError, type AskSqlEngine, type ResultSet, type SchemaCatalog, type TableInfo } from '@asksql/core';
+import {
+  AskSqlError,
+  type AskSqlEngine,
+  type GuardVerdict,
+  type ResultSet,
+  type SchemaCatalog,
+  type TableInfo,
+} from '@asksql/core';
 import { type ConnectionConfig, type EngineManager, connectionConfigs } from './engine.js';
 import { providerModels } from './models.js';
 import { LM_LIST_TIMEOUT_MS, MODEL_LOOKUP_TIMEOUT_MS } from './constants.js';
@@ -31,9 +29,12 @@ import { userMessage, UserFacingError, setupAction } from './errors.js';
 const INLINE_ROWS = 50;
 /** Per-cell preview cap. A single huge TEXT/JSON value must not cross to the webview whole. */
 const MAX_CELL_CHARS = 4000;
-/** Result store bounds: kept for export/copy, evicted by count AND approx bytes. */
+/** Result store bounds: kept for export/copy, evicted by count and approx bytes. */
 const MAX_RESULTS = 80;
 const MAX_RESULT_BYTES = 24 * 1024 * 1024;
+/** Follow-up context: how many prior turns to keep, and how many to send with a question. */
+const MAX_HISTORY = 20;
+const CONTEXT_TURNS = 6;
 
 /** Cheap byte estimate for a result (samples a few rows) - a wide 100k-row result must not pin memory. */
 function estimateResultBytes(res: ResultSet): number {
@@ -47,7 +48,7 @@ function estimateResultBytes(res: ResultSet): number {
   return Math.ceil((per / sample) * rows.length) + 256;
 }
 
-/** Which model answers. Chosen in OUR picker, not VS Code's. */
+/** Which model answers. Chosen in our picker, not VS Code's. */
 type ModelChoice = { readonly kind: 'vscode'; readonly id: string } | { readonly kind: 'configured' };
 
 const STAGE_LABEL: Record<string, string> = {
@@ -76,10 +77,11 @@ interface ModelOption {
 const cell = (v: unknown): string | null => {
   if (v === null || v === undefined) return null;
   const s = typeof v === 'object' ? JSON.stringify(v) : String(v);
-  // One big TEXT/JSON cell used to cross postMessage and land in the DOM whole -
-  // a multi-MB payload froze the panel. The grid is a preview; the full value is
-  // still one click away via "Open results in editor" / Export CSV.
-  return s.length > MAX_CELL_CHARS ? `${s.slice(0, MAX_CELL_CHARS)}... (${s.length - MAX_CELL_CHARS} more characters)` : s;
+  // The grid is a preview: cap huge TEXT/JSON cells so a multi-MB payload never
+  // crosses postMessage whole. The full value is available via "Open results in editor".
+  return s.length > MAX_CELL_CHARS
+    ? `${s.slice(0, MAX_CELL_CHARS)}... (${s.length - MAX_CELL_CHARS} more characters)`
+    : s;
 };
 
 /** Where the model choice is remembered across reloads. */
@@ -89,11 +91,9 @@ const MODEL_CHOICE_KEY = 'asksql.modelChoice';
 const RESULT_GONE = 'This result is no longer kept in memory - run the query again.';
 
 /**
- * The only commands the webview may ask the host to run. The webview is a trust
- * boundary - it renders untrusted result data - so it must not invoke arbitrary
- * VS Code commands. Deny-by-default: this is exactly the set of commands our error
- * banners attach as an action button today. Add a command here only when a new
- * banner offers it.
+ * The only commands the webview may ask the host to run - it renders untrusted
+ * result data, so it must not invoke arbitrary VS Code commands. Deny-by-default:
+ * add a command only when an error banner offers it as an action button.
  */
 const WEBVIEW_COMMANDS: ReadonlySet<string> = new Set([
   'asksql.addConnection',
@@ -122,11 +122,7 @@ const LIST_TABLES_PATTERNS: readonly RegExp[] = [
 
 export class ChatViewProvider implements vscode.WebviewViewProvider {
   private view: vscode.WebviewView | undefined;
-  /**
-   * Restored from globalState: a picker that forgets on every reload is not a
-   * picker. Machine-level, like the model setting itself - the model you can run
-   * is a property of your machine, not of the project you have open.
-   */
+  /** Restored from globalState - machine-level, like the model setting itself. */
   private choice: ModelChoice;
   /** The in-flight turn, so Stop actually stops it. */
   private running: AbortController | undefined;
@@ -166,11 +162,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       localResourceRoots: [vscode.Uri.joinPath(this.ctx.extensionUri, 'media')],
     };
 
-    // Listener BEFORE html, always. Assigning html loads the page, which posts
-    // `ready` immediately; registering afterwards races that message and loses
-    // it, so the state reply never fires and the Database and Model pickers stay
-    // empty forever. With no connection selected the panel then silently used
-    // whichever connection came first.
+    // Register the listener before assigning html: loading the page posts `ready`
+    // immediately, and a late listener loses it, leaving the pickers empty.
     view.webview.onDidReceiveMessage((m: { type: string; [k: string]: unknown }) => {
       if (m.type === 'ready') void this.pushState();
       if (m.type === 'ask') void this.ask(String(m.text ?? ''), m.connectionId ? String(m.connectionId) : undefined);
@@ -208,7 +201,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         if (res) void this.openResultInEditor(res);
         else this.post({ type: 'error', message: RESULT_GONE });
       }
-      if (m.type === 'plan') void this.plan(String(m.sql ?? ''), m.connectionId ? String(m.connectionId) : undefined, m.planId ? String(m.planId) : undefined);
+      if (m.type === 'plan')
+        void this.plan(
+          String(m.sql ?? ''),
+          m.connectionId ? String(m.connectionId) : undefined,
+          m.planId ? String(m.planId) : undefined,
+        );
       if (m.type === 'command') {
         const id = String(m.id ?? '');
         if (WEBVIEW_COMMANDS.has(id)) void vscode.commands.executeCommand(id);
@@ -236,6 +234,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   focus(): void {
     void vscode.commands.executeCommand('asksql.chat.focus');
+  }
+
+  /** Reveal the panel and drop text into the input, without sending it (the user reviews and asks). */
+  prefill(text: string): void {
+    this.focus();
+    this.post({ type: 'prefill', text });
   }
 
   clear(): void {
@@ -266,9 +270,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   /**
-   * The configured-provider option, always available and built synchronously.
-   * This is what lets the pickers render instantly - it needs no network and no
-   * language-model activation.
+   * The configured-provider option, built synchronously - no network, no
+   * language-model activation - so the pickers render instantly.
    */
   private configuredOption(): ModelOption {
     const cfg = vscode.workspace.getConfiguration('asksql');
@@ -298,7 +301,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   private async setModel(id: string): Promise<void> {
-    this.choice = id.startsWith('vscode:') ? { kind: 'vscode', id: id.slice('vscode:'.length) } : { kind: 'configured' };
+    this.choice = id.startsWith('vscode:')
+      ? { kind: 'vscode', id: id.slice('vscode:'.length) }
+      : { kind: 'configured' };
     await this.ctx.globalState.update(MODEL_CHOICE_KEY, id);
     this.pushState();
   }
@@ -390,11 +395,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
     const vscodeModels = await this.vscodeModelOptions();
 
-    type Pick = { readonly kind: 'provider'; readonly model: string } | { readonly kind: 'vscode'; readonly id: string } | { readonly kind: 'change' };
+    type Pick =
+      | { readonly kind: 'provider'; readonly model: string }
+      | { readonly kind: 'vscode'; readonly id: string }
+      | { readonly kind: 'change' };
     const items: (vscode.QuickPickItem & { pick: Pick })[] = [];
     for (const model of provModels) {
       const cur = this.choice.kind === 'configured' && model === currentModel;
-      items.push({ label: model, description: `${provider}${cur ? ' - current' : ''}`, pick: { kind: 'provider', model } });
+      items.push({
+        label: model,
+        description: `${provider}${cur ? ' - current' : ''}`,
+        pick: { kind: 'provider', model },
+      });
     }
     if (provModels.length === 0) {
       const c = this.configuredOption();
@@ -403,11 +415,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
     for (const m of vscodeModels) {
       const cur = this.choice.kind === 'vscode' && `vscode:${this.choice.id}` === m.id;
-      items.push({ label: m.label, description: `${m.detail}${cur ? ' - current' : ''}`, pick: { kind: 'vscode', id: m.id } });
+      items.push({
+        label: m.label,
+        description: `${m.detail}${cur ? ' - current' : ''}`,
+        pick: { kind: 'vscode', id: m.id },
+      });
     }
     items.push({ label: '$(gear) Change provider or endpoint...', pick: { kind: 'change' } });
 
-    const picked = await vscode.window.showQuickPick(items, { placeHolder: 'Which model should answer?', ignoreFocusOut: true });
+    const picked = await vscode.window.showQuickPick(items, {
+      placeHolder: 'Which model should answer?',
+      ignoreFocusOut: true,
+    });
     if (!picked) return;
     const p = picked.pick;
     if (p.kind === 'change') {
@@ -425,36 +444,78 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     void vscode.window.showInformationMessage(`AskSQL: ${provider} ${p.model} will answer.`);
   }
 
-  private async engineFor(): Promise<AskSqlEngine> {
+  /** The chat-picked language model, resolved and validated (shared by SQL and Mongo paths). */
+  private async chatModel(): Promise<vscode.LanguageModelChat> {
     const choice = this.choice;
-    if (choice.kind === 'configured') return this.engines.forConfiguredModel();
     // Bounded: an unbounded selectChatModels() on the ask path could stall forever
     // and leave the panel locked (turnEnd never fires). Same guard as the picker.
     const models = await Promise.race([
       vscode.lm.selectChatModels(),
       new Promise<vscode.LanguageModelChat[]>((resolve) => setTimeout(() => resolve([]), LM_LIST_TIMEOUT_MS)),
     ]);
-    const lm = models.find((m) => m.id === choice.id);
+    const lm = choice.kind === 'vscode' ? models.find((m) => m.id === choice.id) : undefined;
     if (!lm) {
       throw new UserFacingError(
         'That model is no longer available. Choose another with "AskSQL: Choose Answering Model" (the sparkle icon in this panel\'s title bar).',
       );
     }
-    return this.engines.forChatModel(lm);
+    return lm;
   }
 
   /**
-   * Describe a table straight from the catalog.
-   *
-   * "describe the customers table" is a question about STRUCTURE, and we already
-   * hold the structure. Handing it to a model produced `SELECT * FROM customers`
-   * - the rows, not the shape - because the model's job is data questions. This
-   * answers instantly, exactly, and without spending a token.
-   *
-   * Only fires when the named thing is really a table in this connection, so a
-   * question like "describe the trend in orders" still goes to the model.
+   * An answering engine for one connection. MongoDB routes to the separate non-SQL
+   * engine and is adapted to the same AskResult shape the panel already renders (the
+   * pipeline JSON takes the place of SQL).
    */
-  private describeFromCatalog(question: string, cat: SchemaCatalog): { table: TableInfo } | { missing: string } | undefined {
+  private async engineFor(
+    connectionId: string,
+  ): Promise<Pick<AskSqlEngine, 'ask'> & { explainSchema?: AskSqlEngine['explainSchema'] }> {
+    const configured = this.choice.kind === 'configured';
+    if (this.engines.isMongo(connectionId)) {
+      const mongo = configured
+        ? await this.engines.forConfiguredModelMongo(connectionId)
+        : await this.engines.forChatModelMongo(await this.chatModel(), connectionId);
+      return {
+        ask: async (question, opts) => {
+          const r = await mongo.ask(question, {
+            signal: opts?.signal,
+            context: opts?.context?.map((c) => ({ question: c.question, pipelineJson: c.sql })),
+            onEvent: opts?.onEvent,
+          });
+          const guard: GuardVerdict = {
+            allowed: true,
+            sql: r.pipelineJson,
+            autoLimited: r.autoLimited,
+            loweredLimit: r.loweredLimit,
+            warnings: r.warnings,
+            tables: [r.collection],
+          };
+          return {
+            sql: r.pipelineJson,
+            explanation: r.explanation,
+            guard,
+            connectionId,
+            usage: { inputTokens: 0, outputTokens: 0 },
+            repairs: r.repairs,
+            run: (execOpts) => mongo.execute(r.pipelineJson, r.collection, execOpts),
+          };
+        },
+      };
+    }
+    if (configured) return this.engines.forConfiguredModel();
+    return this.engines.forChatModel(await this.chatModel());
+  }
+
+  /**
+   * Describe a table straight from the catalog - a structure question the
+   * extension can answer exactly without a model. Only fires when the named
+   * thing is really a table in this connection, so "describe the trend in
+   * orders" still goes to the model.
+   */
+  private describeFromCatalog(
+    question: string,
+    cat: SchemaCatalog,
+  ): { table: TableInfo } | { missing: string } | undefined {
     let m: RegExpExecArray | null = null;
     for (const re of DESCRIBE_PATTERNS) {
       m = re.exec(question);
@@ -500,20 +561,27 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const question = text.trim();
     if (!question) return;
     const conns = connectionConfigs();
-    // A provided id that no longer resolves is stale (settings changed under the
-    // webview); fall back to the first connection ONLY when none was provided, so
-    // a question is never silently run against the wrong database.
+    // A provided id that no longer resolves is stale; fall back to the first
+    // connection only when none was provided, never on a stale id.
     const conn = connectionId ? conns.find((c) => c.id === connectionId) : conns[0];
-    // Open the turn FIRST, so even the no-connection case renders the question
-    // and an actionable error instead of the question silently vanishing.
+    // Open the turn first, so even the no-connection case renders the question
+    // and an actionable error.
     this.post({ type: 'turnStart', question, connection: conn ? (this.connLabels().get(conn.id) ?? conn.name) : '' });
     if (conns.length === 0) {
-      this.post({ type: 'error', message: 'Connect a database first.', action: 'asksql.addConnection', actionLabel: 'Add Connection' });
+      this.post({
+        type: 'error',
+        message: 'Connect a database first.',
+        action: 'asksql.addConnection',
+        actionLabel: 'Add Connection',
+      });
       this.post({ type: 'turnEnd' });
       return;
     }
     if (!conn) {
-      this.post({ type: 'error', message: 'That database is no longer available. Pick one from the Database menu and ask again.' });
+      this.post({
+        type: 'error',
+        message: 'That database is no longer available. Pick one from the Database menu and ask again.',
+      });
       this.post({ type: 'turnEnd' });
       return;
     }
@@ -525,8 +593,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const turnWarnings: string[] = [];
 
     try {
-      // "What tables are here?" is answered from the catalog, not the model - the
-      // schema block IS the table list, but the model refuses it as unanswerable.
+      // "What tables are here?" is answered from the catalog, not the model,
+      // which refuses it as unanswerable.
       if (LIST_TABLES_PATTERNS.some((re) => re.test(question))) {
         this.post({ type: 'progress', label: 'Reading schema' });
         const cat = await this.engines.catalogFor(conn.id);
@@ -539,7 +607,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         this.post({
           type: 'result',
           columns: ['table', 'type', 'columns'],
-          rows: cat.tables.map((t) => [`${t.schema ? `${t.schema}.` : ''}${t.name}`, t.kind.replace('_', ' '), String(t.columns.length)]),
+          rows: cat.tables.map((t) => [
+            `${t.schema ? `${t.schema}.` : ''}${t.name}`,
+            t.kind.replace('_', ' '),
+            String(t.columns.length),
+          ]),
           rowCount: cat.tables.length,
           shown: cat.tables.length,
           durationMs: 0,
@@ -566,7 +638,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
               c.name,
               c.dbType,
               c.nullable ? 'yes' : 'no',
-              [t.primaryKey.includes(c.name) ? 'PK' : '', t.foreignKeys.find((f) => f.columns.includes(c.name)) ? 'FK' : '']
+              [
+                t.primaryKey.includes(c.name) ? 'PK' : '',
+                t.foreignKeys.find((f) => f.columns.includes(c.name)) ? 'FK' : '',
+              ]
                 .filter(Boolean)
                 .join(' '),
             ]),
@@ -589,26 +664,55 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         }
       }
 
-      const engine = await this.engineFor();
-      const answer = await engine.ask(question, {
-        // The resolved connection, matching the turn's displayed attribution - not
-        // the raw webview id, which can be stale before its state refresh arrives.
-        connectionId: conn.id,
-        // Follow-up context, but ONLY for the connection being asked now - a prior
-        // query against another database references tables this one does not have.
-        context: this.history.filter((h) => h.connectionId === conn.id).slice(-6).map((h) => ({ question: h.question, sql: h.sql })),
-        signal: ac.signal,
-        onEvent: (e) => {
-          if (e.type === 'stage') this.post({ type: 'progress', label: STAGE_LABEL[e.stage] ?? e.stage });
-          else if (e.type === 'warning') turnWarnings.push(e.message);
-        },
-      });
+      const engine = await this.engineFor(conn.id);
+      let answer;
+      try {
+        answer = await engine.ask(question, {
+          // The resolved connection, matching the turn's displayed attribution - not
+          // the raw webview id, which can be stale before its state refresh arrives.
+          connectionId: conn.id,
+          // Follow-up context, but only for the connection being asked now: a prior
+          // query against another database references tables this one does not have.
+          context: this.history
+            .filter((h) => h.connectionId === conn.id)
+            .slice(-CONTEXT_TURNS)
+            .map((h) => ({ question: h.question, sql: h.sql })),
+          signal: ac.signal,
+          onEvent: (e) => {
+            if (e.type === 'stage') this.post({ type: 'progress', label: STAGE_LABEL[e.stage] ?? e.stage });
+            else if (e.type === 'warning') turnWarnings.push(e.message);
+          },
+        });
+      } catch (askErr) {
+        // Schema-understanding fallback: when no SQL could be built and the setting is
+        // on, answer a conceptual question from the schema in prose instead of erroring.
+        if (
+          engine.explainSchema &&
+          vscode.workspace.getConfiguration('asksql').get<boolean>('answerSchemaQuestions') === true &&
+          AskSqlError.is(askErr) &&
+          (askErr.code === 'LLM_BAD_OUTPUT' || askErr.code === 'LLM_REFUSAL')
+        ) {
+          if (ac.signal.aborted) return;
+          this.post({ type: 'progress', label: 'Reading schema' });
+          const sa = await engine.explainSchema(question, { connectionId: conn.id, signal: ac.signal });
+          if (ac.signal.aborted) return;
+          this.post({
+            type: 'schemaAnswer',
+            answer: sa.answer,
+            grounded: sa.grounded,
+            unknownReferences: [...sa.unknownReferences],
+            isSchemaChange: sa.isSchemaChange,
+          });
+          return;
+        }
+        throw askErr;
+      }
       if (ac.signal.aborted) return;
 
       // Remember this turn as context for the next follow-up (bounded), tagged with
       // its connection so a later switch does not carry the wrong schema's queries.
       this.history.push({ question, sql: answer.sql, connectionId: conn.id });
-      if (this.history.length > 20) this.history.shift();
+      if (this.history.length > MAX_HISTORY) this.history.shift();
 
       // Approval requires reading the query, so that setting forces SQL first.
       const cfg = vscode.workspace.getConfiguration('asksql');
@@ -628,8 +732,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       });
 
       if (approvalId) {
-        // Inline approval: Run / Don't run render under the SQL in the panel,
-        // instead of a blocking native modal with the query crammed into it.
+        // Inline approval: Run / Don't run render under the SQL, not in a blocking modal.
         const ok = await new Promise<boolean>((resolve) => {
           this.pendingApproval = { id: approvalId, resolve };
           if (ac.signal.aborted) resolve(false);
@@ -644,8 +747,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
       if (ac.signal.aborted) return;
 
-      // No manual tick here: the engine emits its own `execute` stage, and
-      // posting one too showed the user "Running the query" twice.
+      // The engine emits its own `execute` stage; no extra progress tick here.
       const res = await answer.run({ signal: ac.signal });
       if (ac.signal.aborted) return;
 
@@ -664,9 +766,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       });
     } catch (err) {
       if (ac.signal.aborted) return;
-      // A connection that failed to BUILD (bad file path, missing database name)
-      // is absent from the engine, so it surfaces as a generic "unknown
-      // connection". Show the real reason the tree already records.
+      // A connection that failed to build is absent from the engine and surfaces
+      // as a generic "unknown connection"; show the recorded reason instead.
       const failure = this.engines.failureFor(conn.id);
       if (failure) {
         this.post({ type: 'error', message: userMessage(failure) });
@@ -691,9 +792,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       else log.error('chat turn failed', err);
       this.post({ type: 'error', message: userMessage(err), ...(setup ?? {}) });
     } finally {
-      // Only the CURRENT turn unlocks the UI. A superseded turn (aborted because a
-      // new question started) must not post turnEnd - that would unlock the panel
-      // while the newer turn is still running.
+      // Only the current turn unlocks the UI; a superseded turn must not post
+      // turnEnd while the newer turn is still running.
       if (this.running === ac) {
         this.running = undefined;
         this.post({ type: 'turnEnd' });
@@ -719,12 +819,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   /**
-   * Open the WHOLE result in an editor as JSON. The panel shows only the first rows.
-   *
-   * JSON carries the result without altering it: NULL stays `null`, an empty string
-   * stays `""`, and a literal "NULL" stays a quoted string - none of which a text
-   * table can distinguish. Rows stay arrays so duplicate column names (routine in a
-   * join) are not collapsed, and nothing needs padding or truncating.
+   * Open the whole result in an editor as JSON, which preserves NULL vs "" vs a
+   * literal "NULL" and keeps rows as arrays so duplicate column names survive.
    */
   private async openResultInEditor(res: ResultSet): Promise<void> {
     // JSON has no BigInt, NaN, or Infinity - stringify them, or a non-finite float exports as null.

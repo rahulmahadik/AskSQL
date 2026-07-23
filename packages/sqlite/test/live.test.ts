@@ -58,7 +58,9 @@ describe('SQLite introspection', () => {
 
 describe('SQLite query + guard', () => {
   it('runs a join', async () => {
-    const res = await conn.execute('SELECT a.name, count(b.id) n FROM authors a JOIN books b ON b.author_id=a.id GROUP BY a.name ORDER BY n DESC');
+    const res = await conn.execute(
+      'SELECT a.name, count(b.id) n FROM authors a JOIN books b ON b.author_id=a.id GROUP BY a.name ORDER BY n DESC',
+    );
     expect(res.rowCount).toBe(2);
     expect(res.rows[0]![1]).toBe(2); // Le Guin has 2 books
   });
@@ -106,7 +108,12 @@ describe('SQLite value sampling (opt-in)', () => {
   });
 
   it('samples distinct values of a short low-cardinality text column when enabled', async () => {
-    const c = new SqliteConnector({ id: 's1', name: 'on', database: makeSampleDb() as never, sampleColumnValues: true });
+    const c = new SqliteConnector({
+      id: 's1',
+      name: 'on',
+      database: makeSampleDb() as never,
+      sampleColumnValues: true,
+    });
     await c.connect();
     const cat = await c.introspect();
     const status = cat.tables.find((t) => t.name === 'tickets')!.columns.find((col) => col.name === 'status')!;
@@ -135,5 +142,24 @@ describe('SQLite value sampling (opt-in)', () => {
     const view = cat.tables.find((t) => t.name === 'tickets_v')!;
     expect(view.kind).toBe('view');
     expect(view.columns.find((col) => col.name === 'status')!.sampledValues).toBeUndefined();
+  });
+});
+
+describe('SQLite 64-bit integer fidelity', () => {
+  it('preserves a 64-bit id that a JS number cannot represent', async () => {
+    const db = new DatabaseSync(':memory:');
+    db.exec('CREATE TABLE big (id INTEGER PRIMARY KEY, n INTEGER, small INTEGER);');
+    // 9007199254740993 = 2^53 + 1, the first integer a JS number rounds (to ...992).
+    db.exec('INSERT INTO big (id, n, small) VALUES (9007199254740993, 9223372036854775807, 42);');
+    const c = new SqliteConnector({ id: 'big64', name: 'big', database: db as never });
+    await c.connect();
+    const res = await c.execute('SELECT id, n, small FROM big');
+    const [id, n, small] = res.rows[0]!;
+    expect(id).toBe('9007199254740993');
+    expect(n).toBe('9223372036854775807');
+    expect(res.columns[0]!.kind).toBe('bigint');
+    // An ordinary small integer still comes back as a number, not a string.
+    expect(small).toBe(42);
+    expect(res.columns[2]!.kind).toBe('number');
   });
 });

@@ -58,7 +58,9 @@ describe('FIL - file registration + introspection', () => {
   });
 
   maybe('queries CSV with aggregation', async () => {
-    const res = await conn.execute('SELECT region, count(*) n, sum(amount) total FROM sales GROUP BY region ORDER BY total DESC');
+    const res = await conn.execute(
+      'SELECT region, count(*) n, sum(amount) total FROM sales GROUP BY region ORDER BY total DESC',
+    );
     expect(res.rowCount).toBe(3);
     expect(res.columns.map((c) => c.name)).toEqual(['region', 'n', 'total']);
   });
@@ -92,7 +94,11 @@ describe('FIL - file registration + introspection', () => {
 
 describe('file-function guard integration', () => {
   it('server-mode guard blocks read_csv of arbitrary path', () => {
-    const v = guardSql({ sql: "SELECT * FROM read_csv_auto('/etc/passwd')", dialect: DUCKDB_DIALECT, policy: { allowFileFunctions: false } });
+    const v = guardSql({
+      sql: "SELECT * FROM read_csv_auto('/etc/passwd')",
+      dialect: DUCKDB_DIALECT,
+      policy: { allowFileFunctions: false },
+    });
     expect(v.allowed).toBe(false);
   });
   it('querying the registered table name is allowed (no path)', () => {
@@ -130,7 +136,11 @@ describe('bad file surfaces FILE_PARSE', () => {
 describe('DuckDB value sampling (opt-in)', () => {
   it('does not sample unless enabled', async () => {
     if (!available) return;
-    const off = new DuckDbConnector({ id: 'ds0', name: 'off', files: [{ table: 'sales', path: data('sales.csv'), format: 'csv' }] });
+    const off = new DuckDbConnector({
+      id: 'ds0',
+      name: 'off',
+      files: [{ table: 'sales', path: data('sales.csv'), format: 'csv' }],
+    });
     await off.connect();
     try {
       const cat = await off.introspect();
@@ -144,7 +154,9 @@ describe('DuckDB value sampling (opt-in)', () => {
   it('samples distinct values of low-cardinality text columns when enabled', async () => {
     if (!available) return;
     const on = new DuckDbConnector({
-      id: 'ds1', name: 'on', sampleColumnValues: true,
+      id: 'ds1',
+      name: 'on',
+      sampleColumnValues: true,
       files: [
         { table: 'sales', path: data('sales.csv'), format: 'csv' },
         { table: 'customers', path: data('customers.json'), format: 'json' },

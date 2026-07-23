@@ -4,6 +4,18 @@ All notable changes to the AskSQL VS Code extension are documented here. The for
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [0.3.0] - 2026-07-24
+
+### Added
+
+- Oracle and MongoDB connections.
+
+### Fixed
+
+- Reliability: query timeouts, connection-pool recovery, and read-only enforcement hardened across all engines.
+
 ## [0.2.1] - 2026-07-19
 
 ### Added

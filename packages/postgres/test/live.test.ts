@@ -116,7 +116,9 @@ describe('EXE - execution, fidelity, read-only, cancel', () => {
   });
 
   maybe('NUMERIC fidelity preserved as string', async () => {
-    const res = await conn.execute('SELECT tax_amount FROM shop.orders WHERE tax_amount > 0 ORDER BY tax_amount DESC LIMIT 1');
+    const res = await conn.execute(
+      'SELECT tax_amount FROM shop.orders WHERE tax_amount > 0 ORDER BY tax_amount DESC LIMIT 1',
+    );
     expect(res.columns[0]!.kind).toBe('decimal');
     expect(res.rows[0]![0]).toBe('12.50');
   });

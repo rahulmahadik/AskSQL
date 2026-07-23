@@ -1,0 +1,8 @@
+**/dist/**
+**/node_modules/**
+**/*.tsbuildinfo
+packages/jetbrains/**
+**/*.vsix
+pnpm-lock.yaml
+**/*.md
+coverage/**

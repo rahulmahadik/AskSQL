@@ -7,7 +7,7 @@
  */
 
 export { AskSqlChat, AskSqlBubble, SqlBlock, ResultTable } from './components.js';
-export type { AskSqlChatProps, AskSqlBubbleProps } from './components.js';
+export type { AskSqlChatProps, AskSqlBubbleProps, BubblePosition } from './components.js';
 export { SchemaBrowser, type SchemaBrowserProps } from './SchemaBrowser.js';
 export { ResultChart, isChartable } from './ResultChart.js';
 export { inferChart, type ChartSpec, type ChartKind, type ChartSeries } from './chart.js';

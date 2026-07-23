@@ -1,0 +1,12 @@
+{
+  "name": "asksql-example-node-mongodb",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@ai-sdk/groq": "^4.0.10",
+    "@ai-sdk/openai-compatible": "^3.0.9",
+    "@asksql/core": "workspace:*",
+    "@asksql/mongodb": "workspace:*",
+    "mongodb": "^6.10.0"
+  }
+}

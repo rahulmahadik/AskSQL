@@ -14,7 +14,11 @@ export function formatCell(value: CellValue, _column?: ResultColumn): DisplayCel
   if (value === null) return { text: 'NULL', kind: 'null', title: 'NULL (no value)' };
   if (typeof value === 'object' && '__binary' in value) {
     const b = value.__binary;
-    return { text: `⬡ ${formatBytes(b.bytes)}`, kind: 'binary', title: `binary, ${b.bytes} bytes (0x${b.hexPreview}…)` };
+    return {
+      text: `⬡ ${formatBytes(b.bytes)}`,
+      kind: 'binary',
+      title: `binary, ${b.bytes} bytes (0x${b.hexPreview}…)`,
+    };
   }
   if (typeof value === 'boolean') return { text: value ? 'true' : 'false', kind: 'value' };
   if (typeof value === 'number') return { text: String(value), kind: 'value' };

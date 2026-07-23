@@ -71,42 +71,107 @@ interface CloudProvider {
 }
 
 const CLOUD_PROVIDERS: readonly CloudProvider[] = [
-  { label: 'OpenAI', envKey: 'OPENAI_API_KEY',
-    config: (k) => ({ provider: 'openai', model: process.env['ASKSQL_OPENAI_MODEL'] ?? 'gpt-4o-mini', apiKey: k }) },
-  { label: 'Anthropic', envKey: 'ANTHROPIC_API_KEY',
-    config: (k) => ({ provider: 'anthropic', model: process.env['ASKSQL_ANTHROPIC_MODEL'] ?? 'claude-3-5-haiku-latest', apiKey: k }) },
-  { label: 'Gemini', envKey: 'GOOGLE_GENERATIVE_AI_API_KEY',
-    config: (k) => ({ provider: 'google', model: process.env['ASKSQL_GEMINI_MODEL'] ?? 'gemini-2.0-flash', apiKey: k }) },
+  {
+    label: 'OpenAI',
+    envKey: 'OPENAI_API_KEY',
+    config: (k) => ({ provider: 'openai', model: process.env['ASKSQL_OPENAI_MODEL'] ?? 'gpt-4o-mini', apiKey: k }),
+  },
+  {
+    label: 'Anthropic',
+    envKey: 'ANTHROPIC_API_KEY',
+    config: (k) => ({
+      provider: 'anthropic',
+      model: process.env['ASKSQL_ANTHROPIC_MODEL'] ?? 'claude-3-5-haiku-latest',
+      apiKey: k,
+    }),
+  },
+  {
+    label: 'Gemini',
+    envKey: 'GOOGLE_GENERATIVE_AI_API_KEY',
+    config: (k) => ({ provider: 'google', model: process.env['ASKSQL_GEMINI_MODEL'] ?? 'gemini-2.0-flash', apiKey: k }),
+  },
   // Azure also needs AZURE_RESOURCE_NAME and the model set to your *deployment* name.
-  { label: 'Azure OpenAI', envKey: 'AZURE_API_KEY',
-    config: (k) => ({ provider: 'azure', model: process.env['ASKSQL_AZURE_DEPLOYMENT'] ?? 'gpt-4o-mini', apiKey: k, resourceName: process.env['AZURE_RESOURCE_NAME'] }) },
-  { label: 'Cerebras', envKey: 'CEREBRAS_API_KEY',
-    config: (k) => ({ provider: 'openai-compatible', model: process.env['ASKSQL_CEREBRAS_MODEL'] ?? 'llama-3.3-70b', apiKey: k, baseURL: 'https://api.cerebras.ai/v1' }) },
-  { label: 'OpenRouter', envKey: 'OPENROUTER_API_KEY',
-    config: (k) => ({ provider: 'openai-compatible', model: process.env['ASKSQL_OPENROUTER_MODEL'] ?? 'meta-llama/llama-3.3-70b-instruct', apiKey: k, baseURL: 'https://openrouter.ai/api/v1' }) },
-  { label: 'DeepSeek', envKey: 'DEEPSEEK_API_KEY',
-    config: (k) => ({ provider: 'openai-compatible', model: process.env['ASKSQL_DEEPSEEK_MODEL'] ?? 'deepseek-chat', apiKey: k, baseURL: 'https://api.deepseek.com/v1' }) },
-  { label: 'Together', envKey: 'TOGETHER_API_KEY',
-    config: (k) => ({ provider: 'openai-compatible', model: process.env['ASKSQL_TOGETHER_MODEL'] ?? 'meta-llama/Llama-3.3-70B-Instruct-Turbo', apiKey: k, baseURL: 'https://api.together.xyz/v1' }) },
-  { label: 'Mistral', envKey: 'MISTRAL_API_KEY',
-    config: (k) => ({ provider: 'openai-compatible', model: process.env['ASKSQL_MISTRAL_MODEL'] ?? 'mistral-small-latest', apiKey: k, baseURL: 'https://api.mistral.ai/v1' }) },
-  { label: 'xAI', envKey: 'XAI_API_KEY',
-    config: (k) => ({ provider: 'openai-compatible', model: process.env['ASKSQL_XAI_MODEL'] ?? 'grok-2-latest', apiKey: k, baseURL: 'https://api.x.ai/v1' }) },
+  {
+    label: 'Azure OpenAI',
+    envKey: 'AZURE_API_KEY',
+    config: (k) => ({
+      provider: 'azure',
+      model: process.env['ASKSQL_AZURE_DEPLOYMENT'] ?? 'gpt-4o-mini',
+      apiKey: k,
+      resourceName: process.env['AZURE_RESOURCE_NAME'],
+    }),
+  },
+  {
+    label: 'Cerebras',
+    envKey: 'CEREBRAS_API_KEY',
+    config: (k) => ({
+      provider: 'openai-compatible',
+      model: process.env['ASKSQL_CEREBRAS_MODEL'] ?? 'llama-3.3-70b',
+      apiKey: k,
+      baseURL: 'https://api.cerebras.ai/v1',
+    }),
+  },
+  {
+    label: 'OpenRouter',
+    envKey: 'OPENROUTER_API_KEY',
+    config: (k) => ({
+      provider: 'openai-compatible',
+      model: process.env['ASKSQL_OPENROUTER_MODEL'] ?? 'meta-llama/llama-3.3-70b-instruct',
+      apiKey: k,
+      baseURL: 'https://openrouter.ai/api/v1',
+    }),
+  },
+  {
+    label: 'DeepSeek',
+    envKey: 'DEEPSEEK_API_KEY',
+    config: (k) => ({
+      provider: 'openai-compatible',
+      model: process.env['ASKSQL_DEEPSEEK_MODEL'] ?? 'deepseek-chat',
+      apiKey: k,
+      baseURL: 'https://api.deepseek.com/v1',
+    }),
+  },
+  {
+    label: 'Together',
+    envKey: 'TOGETHER_API_KEY',
+    config: (k) => ({
+      provider: 'openai-compatible',
+      model: process.env['ASKSQL_TOGETHER_MODEL'] ?? 'meta-llama/Llama-3.3-70B-Instruct-Turbo',
+      apiKey: k,
+      baseURL: 'https://api.together.xyz/v1',
+    }),
+  },
+  {
+    label: 'Mistral',
+    envKey: 'MISTRAL_API_KEY',
+    config: (k) => ({
+      provider: 'openai-compatible',
+      model: process.env['ASKSQL_MISTRAL_MODEL'] ?? 'mistral-small-latest',
+      apiKey: k,
+      baseURL: 'https://api.mistral.ai/v1',
+    }),
+  },
+  {
+    label: 'xAI',
+    envKey: 'XAI_API_KEY',
+    config: (k) => ({
+      provider: 'openai-compatible',
+      model: process.env['ASKSQL_XAI_MODEL'] ?? 'grok-2-latest',
+      apiKey: k,
+      baseURL: 'https://api.x.ai/v1',
+    }),
+  },
 ];
 
 for (const p of CLOUD_PROVIDERS) {
   const key = process.env[p.envKey];
   const d = key ? describe : describe.skip;
   d(`Cloud: ${p.label} (live)`, () => {
-    it(
-      'answers three questions against live Postgres',
-      async () => {
-        if (!pgReady) return;
-        const engine = await makeEngine(p.config(key!), 45_000);
-        await runQuestionSuite(engine, p.label);
-      },
-      120_000,
-    );
+    it('answers three questions against live Postgres', async () => {
+      if (!pgReady) return;
+      const engine = await makeEngine(p.config(key!), 45_000);
+      await runQuestionSuite(engine, p.label);
+    }, 120_000);
   });
 }
 
@@ -114,35 +179,30 @@ for (const p of CLOUD_PROVIDERS) {
 // 2. Groq model matrix - several models live through one key.
 // ---------------------------------------------------------------------------
 const GROQ_KEY = process.env['GROQ_API_KEY'];
-const GROQ_MODELS = (process.env['ASKSQL_GROQ_MODELS'] ??
-  'llama-3.3-70b-versatile,llama-3.1-8b-instant,qwen/qwen3-32b,openai/gpt-oss-120b'
-).split(',').map((s) => s.trim()).filter(Boolean);
+const GROQ_MODELS = (
+  process.env['ASKSQL_GROQ_MODELS'] ?? 'llama-3.3-70b-versatile,llama-3.1-8b-instant,qwen/qwen3-32b,openai/gpt-oss-120b'
+)
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
 
 const groqDescribe = GROQ_KEY ? describe : describe.skip;
 groqDescribe('Groq model matrix (live)', () => {
   for (const model of GROQ_MODELS) {
-    it(
-      `${model} answers against live Postgres`,
-      async () => {
-        if (!pgReady) return;
-        const engine = await makeEngine({ provider: 'groq', model, apiKey: GROQ_KEY! }, 45_000);
-        await runQuestionSuite(engine, `groq:${model}`);
-      },
-      120_000,
-    );
+    it(`${model} answers against live Postgres`, async () => {
+      if (!pgReady) return;
+      const engine = await makeEngine({ provider: 'groq', model, apiKey: GROQ_KEY! }, 45_000);
+      await runQuestionSuite(engine, `groq:${model}`);
+    }, 120_000);
   }
 
-  it(
-    'explains a query in plain language',
-    async () => {
-      if (!pgReady) return;
-      const engine = await makeEngine({ provider: 'groq', model: GROQ_MODELS[0]!, apiKey: GROQ_KEY! }, 45_000);
-      const explanation = await engine.explain("SELECT count(*) FROM shop.orders WHERE status = 'paid'");
-      expect(explanation.length).toBeGreaterThan(20);
-      console.log('[groq] explain:', explanation.slice(0, 140));
-    },
-    60_000,
-  );
+  it('explains a query in plain language', async () => {
+    if (!pgReady) return;
+    const engine = await makeEngine({ provider: 'groq', model: GROQ_MODELS[0]!, apiKey: GROQ_KEY! }, 45_000);
+    const explanation = await engine.explain("SELECT count(*) FROM shop.orders WHERE status = 'paid'");
+    expect(explanation.length).toBeGreaterThan(20);
+    console.log('[groq] explain:', explanation.slice(0, 140));
+  }, 60_000);
 });
 
 // ---------------------------------------------------------------------------
@@ -163,13 +223,9 @@ describe('Ollama end-to-end (live)', () => {
     if (!up) console.warn('[skip] Ollama not reachable at', OLLAMA_URL);
   });
 
-  it(
-    'answers questions against live Postgres with a local model',
-    async () => {
-      if (!up || !pgReady) return;
-      const engine = await makeEngine({ provider: 'ollama', model: OLLAMA_MODEL, baseURL: OLLAMA_URL }, 120_000);
-      await runQuestionSuite(engine, 'ollama');
-    },
-    240_000,
-  );
+  it('answers questions against live Postgres with a local model', async () => {
+    if (!up || !pgReady) return;
+    const engine = await makeEngine({ provider: 'ollama', model: OLLAMA_MODEL, baseURL: OLLAMA_URL }, 120_000);
+    await runQuestionSuite(engine, 'ollama');
+  }, 240_000);
 });

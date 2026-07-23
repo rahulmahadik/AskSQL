@@ -12,24 +12,61 @@ function bigCatalog(n: number): SchemaCatalog {
   const tables: TableInfo[] = [];
   for (let i = 0; i < n; i++) {
     tables.push({
-      name: `noise_${i}`, kind: 'table',
-      columns: [{ name: 'id', dbType: 'bigint', nullable: false }, { name: 'blob', dbType: 'text', nullable: true }],
-      primaryKey: ['id'], foreignKeys: [], uniques: [], checks: [], indexes: [], source: 'db',
+      name: `noise_${i}`,
+      kind: 'table',
+      columns: [
+        { name: 'id', dbType: 'bigint', nullable: false },
+        { name: 'blob', dbType: 'text', nullable: true },
+      ],
+      primaryKey: ['id'],
+      foreignKeys: [],
+      uniques: [],
+      checks: [],
+      indexes: [],
+      source: 'db',
     });
   }
   // The two tables the question is actually about, linked by FK.
   tables.push({
-    name: 'customers', kind: 'table',
-    columns: [{ name: 'id', dbType: 'bigint', nullable: false }, { name: 'email', dbType: 'text', nullable: false }],
-    primaryKey: ['id'], foreignKeys: [], uniques: [], checks: [], indexes: [], source: 'db',
+    name: 'customers',
+    kind: 'table',
+    columns: [
+      { name: 'id', dbType: 'bigint', nullable: false },
+      { name: 'email', dbType: 'text', nullable: false },
+    ],
+    primaryKey: ['id'],
+    foreignKeys: [],
+    uniques: [],
+    checks: [],
+    indexes: [],
+    source: 'db',
   });
   tables.push({
-    name: 'invoices', kind: 'table',
-    columns: [{ name: 'id', dbType: 'bigint', nullable: false }, { name: 'customer_id', dbType: 'bigint', nullable: false }, { name: 'amount_cents', dbType: 'bigint', nullable: false }],
-    primaryKey: ['id'], foreignKeys: [{ columns: ['customer_id'], refTable: 'customers', refColumns: ['id'] }],
-    uniques: [], checks: [], indexes: [], source: 'db',
+    name: 'invoices',
+    kind: 'table',
+    columns: [
+      { name: 'id', dbType: 'bigint', nullable: false },
+      { name: 'customer_id', dbType: 'bigint', nullable: false },
+      { name: 'amount_cents', dbType: 'bigint', nullable: false },
+    ],
+    primaryKey: ['id'],
+    foreignKeys: [{ columns: ['customer_id'], refTable: 'customers', refColumns: ['id'] }],
+    uniques: [],
+    checks: [],
+    indexes: [],
+    source: 'db',
   });
-  return { engine: 'postgres', schemas: ['public'], tables, enums: [], sequences: [], triggers: [], routines: [], warnings: [], fetchedAt: 'now' };
+  return {
+    engine: 'postgres',
+    schemas: ['public'],
+    tables,
+    enums: [],
+    sequences: [],
+    triggers: [],
+    routines: [],
+    warnings: [],
+    fetchedAt: 'now',
+  };
 }
 
 describe('large-schema pruning', () => {
@@ -55,21 +92,69 @@ describe('large-schema pruning', () => {
 
 // ---- concurrent asks don't cross-wire ----
 const CATALOG: SchemaCatalog = {
-  engine: 'postgres', schemas: ['public'],
+  engine: 'postgres',
+  schemas: ['public'],
   tables: [
-    { name: 'a', kind: 'table', columns: [{ name: 'id', dbType: 'bigint', nullable: false }], primaryKey: ['id'], foreignKeys: [], uniques: [], checks: [], indexes: [], source: 'db' },
-    { name: 'b', kind: 'table', columns: [{ name: 'id', dbType: 'bigint', nullable: false }], primaryKey: ['id'], foreignKeys: [], uniques: [], checks: [], indexes: [], source: 'db' },
+    {
+      name: 'a',
+      kind: 'table',
+      columns: [{ name: 'id', dbType: 'bigint', nullable: false }],
+      primaryKey: ['id'],
+      foreignKeys: [],
+      uniques: [],
+      checks: [],
+      indexes: [],
+      source: 'db',
+    },
+    {
+      name: 'b',
+      kind: 'table',
+      columns: [{ name: 'id', dbType: 'bigint', nullable: false }],
+      primaryKey: ['id'],
+      foreignKeys: [],
+      uniques: [],
+      checks: [],
+      indexes: [],
+      source: 'db',
+    },
   ],
-  enums: [], sequences: [], triggers: [], routines: [], warnings: [], fetchedAt: 'now',
+  enums: [],
+  sequences: [],
+  triggers: [],
+  routines: [],
+  warnings: [],
+  fetchedAt: 'now',
 };
 
 class Fake implements Connector {
-  engine = 'postgres' as const; dialect = POSTGRES_DIALECT;
-  capabilities = { supportsCancel: true, supportsExplain: true, supportsSchemas: true, readOnlySession: true, supportsMatViews: true, supportsTriggers: true, supportsRoutines: true };
-  id = 'f'; name = 'F';
-  async connect() {} async close() {}
-  async introspect() { return CATALOG; }
-  async execute(): Promise<ResultSet> { return { columns: [{ name: 'n', kind: 'number' }], rows: [[1]], rowCount: 1, truncated: false, durationMs: 1, warnings: [] }; }
+  engine = 'postgres' as const;
+  dialect = POSTGRES_DIALECT;
+  capabilities = {
+    supportsCancel: true,
+    supportsExplain: true,
+    supportsSchemas: true,
+    readOnlySession: true,
+    supportsMatViews: true,
+    supportsTriggers: true,
+    supportsRoutines: true,
+  };
+  id = 'f';
+  name = 'F';
+  async connect() {}
+  async close() {}
+  async introspect() {
+    return CATALOG;
+  }
+  async execute(): Promise<ResultSet> {
+    return {
+      columns: [{ name: 'n', kind: 'number' }],
+      rows: [[1]],
+      rowCount: 1,
+      truncated: false,
+      durationMs: 1,
+      warnings: [],
+    };
+  }
 }
 
 describe('concurrent asks stay isolated', () => {

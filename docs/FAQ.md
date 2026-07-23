@@ -10,13 +10,13 @@ SQL runs against your database, and the results come back from there, not from t
 
 Not for browser file analytics: with `@asksql/duckdb/browser`, CSV / JSON / Parquet / Excel
 are parsed and queried entirely in the tab, and the model is called from the client. For a
-real database (Postgres / MySQL / SQLite) you run the `@asksql/server` sidecar so credentials
-and the guard stay server-side; the browser only talks HTTP to it.
+real database (Postgres / MySQL / SQLite / Oracle / MongoDB) you run the `@asksql/server`
+sidecar so credentials and the guard stay server-side; the browser only talks HTTP to it.
 
 ### Which databases are supported?
 
-PostgreSQL, MySQL / MariaDB, SQLite, and DuckDB. Each has its own adapter package and its own
-driver as a peer dependency. See the Databases section of the README.
+PostgreSQL, MySQL / MariaDB, SQLite, DuckDB, Oracle, and MongoDB. Each has its own adapter
+package and its own driver as a peer dependency. See the Databases section of the README.
 
 ### I work in Excel / CSV spreadsheets all day - can AskSQL help?
 
@@ -57,9 +57,9 @@ you get a clear `FILE_PARSE` error naming the file, not a crash.
 
 ### Which LLM providers work?
 
-OpenAI, Anthropic, Google Gemini, Azure (classic and AI Foundry), Groq, Ollama (fully local),
-and any OpenAI-compatible endpoint (OpenRouter, Together, DeepSeek, xAI, LM Studio, vLLM, and
-more). See [docs/providers.md](providers.md) for per-provider config.
+OpenAI, Anthropic, Google Gemini, Azure (classic and AI Foundry), Groq, NVIDIA, Ollama (fully
+local), and any OpenAI-compatible endpoint (OpenRouter, Together, DeepSeek, xAI, LM Studio,
+vLLM, and more). See [docs/providers.md](providers.md) for per-provider config.
 
 ### Is there a free option?
 
@@ -72,7 +72,22 @@ account (no usable free API tier in most regions).
 No. A deterministic, AST-based guard - not the prompt - decides what runs. It allows a single
 read-only `SELECT` (CTEs included) and blocks every write, DDL, stacked statement, locking
 clause, file-reading function, and a per-dialect dangerous-function denylist. Anything it
-cannot parse fails closed. Connectors also open read-only sessions as a backstop.
+cannot parse fails closed. Where the engine supports it (Postgres, MySQL, SQLite, Oracle) the
+connector also opens a read-only session as a backstop; DuckDB has no read-only session, so the
+AST guard is the sole barrier there.
+
+### Can I ask general questions about the schema - or how to change it?
+
+Yes, if you turn on **Answer schema questions** (off by default, in the extension/plugin settings).
+With it on, a question that isn't a data query - "summarize this database", "how are customers and
+orders related?", or even "how would I add an index on email?" / "what column tracks loyalty points?"
+- is answered in plain language from the schema instead of erroring.
+
+Two guarantees hold. It is **grounded**: it only names tables, columns, and relationships that exist;
+any name it can't find is flagged, and an ungrounded answer is regenerated once. And it stays
+**read-only**: schema-change advice is shown as DDL you run yourself, marked as a proposal - AskSQL
+never writes to the database (the guard blocks every DDL statement regardless). Accuracy depends on
+your model, so treat the text as guidance.
 
 ### Do results require human approval?
 
@@ -181,8 +196,9 @@ entirely. The guard still enforces read-only regardless of what any prompt says.
 
 ### Is it production-ready?
 
-It is an early (`0.1.x`) but functional release: the pipeline (schema to SQL to guard to
-execute), the safety guard, the four database adapters, the server sidecar, the React UI, and
-the MCP server are all working and tested against live databases and multiple providers. Treat
+It is an early (pre-1.0; `@asksql/core` is at `0.3.x`) but functional release: the pipeline
+(schema to SQL to guard to execute), the safety guard, the six database adapters, the server
+sidecar, the React UI, and the MCP server are all working and tested against live databases
+and multiple providers. Treat
 generated SQL for complex analytics as reviewable draft, keep credentials on the server sidecar,
 and pin the versions you deploy.

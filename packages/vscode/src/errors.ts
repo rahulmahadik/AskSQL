@@ -1,15 +1,8 @@
 /**
- * Turning any failure into a sentence the user can act on.
- *
- * Three kinds of error reach the UI:
- *  - AskSqlError, which already carries a written `userMessage`,
- *  - UserFacingError, which we wrote ourselves and can show verbatim,
- *  - anything else: a driver or runtime error. Those are NOT shown. `ECONNREFUSED
- *    127.0.0.1:5432` tells a developer plenty and a user nothing, and driver
- *    errors routinely carry the host and user name.
- *
- * The last kind is mapped to a plain sentence by its code where we recognise it,
- * and to a generic line otherwise. The real text always goes to the log channel.
+ * Turns any failure into a sentence the user can act on. AskSqlError and
+ * UserFacingError messages are shown verbatim; driver/runtime errors are mapped
+ * by code or replaced with a generic line, since they routinely carry hosts and
+ * user names. The real text always goes to the log channel.
  */
 
 import { AskSqlError } from '@asksql/core';
@@ -22,7 +15,7 @@ export interface SetupAction {
 }
 
 /**
- * An error whose message was written FOR the user and may be shown as-is.
+ * An error whose message was written for the user and may be shown as-is.
  * Setup failures (no model, no key) carry a `setup` action so the chat can
  * render a button that jumps straight to the fix.
  */
@@ -36,15 +29,10 @@ export class UserFacingError extends Error {
 }
 
 /**
- * Default fix-it action for the AskSqlError codes that mean "the AI provider is
- * not set up right", so a chat failure offers the relevant setup command
- * instead of a dead-end message. UserFacingError carries its own action; this
- * fills in for the typed engine errors.
+ * Default fix-it action for AskSqlError codes that unambiguously mean the AI
+ * provider is not set up right. CONFIG_ERROR is excluded: it also covers sqlite
+ * file-open failures and connector validation, where a model picker would be wrong.
  */
-// Only codes that UNAMBIGUOUSLY mean "the AI provider is not set up right".
-// CONFIG_ERROR is deliberately excluded: it is also the code for a sqlite
-// file-open failure, guard misconfig and connector validation, so mapping it to
-// a model picker would show "Choose model" on a broken database path.
 const SETUP_ACTION_BY_CODE: Readonly<Record<string, SetupAction>> = {
   LLM_AUTH: { action: 'asksql.setApiKey', actionLabel: 'Update API key' },
   LLM_UNREACHABLE: { action: 'asksql.selectProvider', actionLabel: 'Set up provider' },
@@ -79,11 +67,9 @@ const BY_CODE: Readonly<Record<string, string>> = {
 };
 
 /**
- * The first string `code` on the error or anywhere in its `cause` chain. A
- * refused connection surfaces as a fetch error whose `cause` (not the top
- * error) carries `ECONNREFUSED`, so without walking the chain a
- * "start the server" failure falls through to the generic line. Bounded so a
- * self-referential cause cannot loop.
+ * The first string `code` on the error or in its `cause` chain (a refused
+ * connection carries ECONNREFUSED on the cause, not the top error). Bounded so
+ * a self-referential cause cannot loop.
  */
 const codeOf = (err: unknown): string | undefined => {
   let cur: unknown = err;

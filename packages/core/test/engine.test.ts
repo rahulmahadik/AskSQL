@@ -7,13 +7,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createAskSql } from '../src/engine.js';
 import { AskSqlError } from '../src/errors.js';
 import { POSTGRES_DIALECT } from '../src/dialects.js';
-import type {
-  Connector,
-  CustomModel,
-  ExecuteOptions,
-  ResultSet,
-  SchemaCatalog,
-} from '../src/types.js';
+import type { Connector, CustomModel, ExecuteOptions, ResultSet, SchemaCatalog } from '../src/types.js';
 
 const CATALOG: SchemaCatalog = {
   engine: 'postgres',
@@ -84,7 +78,14 @@ class FakeConnector implements Connector {
     this.lastSql = sql;
     this.executed.push(sql);
     if (this.onExecute) return this.onExecute(sql);
-    return { columns: [{ name: 'n', kind: 'number' }], rows: [[1]], rowCount: 1, truncated: false, durationMs: 1, warnings: [] };
+    return {
+      columns: [{ name: 'n', kind: 'number' }],
+      rows: [[1]],
+      rowCount: 1,
+      truncated: false,
+      durationMs: 1,
+      warnings: [],
+    };
   }
 }
 
@@ -229,7 +230,14 @@ describe('DB-error auto-repair suggestion', () => {
     // valid columns), so it reaches the DB and the suggestFix path runs.
     const conn = new FakeConnector((sql) => {
       if (/1 \/ 0|1\/0/.test(sql)) throw new AskSqlError('DB_QUERY_ERROR', { userMessage: 'division by zero' });
-      return { columns: [{ name: 'id', kind: 'number' }], rows: [[1]], rowCount: 1, truncated: false, durationMs: 1, warnings: [] };
+      return {
+        columns: [{ name: 'id', kind: 'number' }],
+        rows: [[1]],
+        rowCount: 1,
+        truncated: false,
+        durationMs: 1,
+        warnings: [],
+      };
     });
     const engine = createAskSql({
       connectors: [conn],
@@ -259,7 +267,14 @@ describe('connector recovers after a query error', () => {
     const conn = new FakeConnector((sql) => {
       calls++;
       if (/boom/.test(sql)) throw new AskSqlError('DB_QUERY_ERROR', { userMessage: 'boom' });
-      return { columns: [{ name: 'n', kind: 'number' }], rows: [[calls]], rowCount: 1, truncated: false, durationMs: 1, warnings: [] };
+      return {
+        columns: [{ name: 'n', kind: 'number' }],
+        rows: [[calls]],
+        rowCount: 1,
+        truncated: false,
+        durationMs: 1,
+        warnings: [],
+      };
     });
     const engine = createAskSql({ connectors: [conn], model: model(['x']) });
     await expect(engine.execute('SELECT boom FROM users')).rejects.toMatchObject({ code: 'DB_QUERY_ERROR' });
@@ -271,13 +286,19 @@ describe('connector recovers after a query error', () => {
 
 describe('introspection masking', () => {
   class MaskingConnector extends FakeConnector {
-    constructor(private readonly catalog: () => Awaited<ReturnType<FakeConnector['introspect']>>) { super(); }
-    override async introspect() { return this.catalog(); }
+    constructor(private readonly catalog: () => Awaited<ReturnType<FakeConnector['introspect']>>) {
+      super();
+    }
+    override async introspect() {
+      return this.catalog();
+    }
   }
 
   it('empty catalog WITH warnings is surfaced, not treated as an empty database', async () => {
     const conn = new MaskingConnector(() => ({
-      ...CATALOG, tables: [], warnings: ['Could not read tables: permission denied'],
+      ...CATALOG,
+      tables: [],
+      warnings: ['Could not read tables: permission denied'],
     }));
     const engine = createAskSql({ connectors: [conn], model: model(['x']) });
     await expect(engine.catalog()).rejects.toMatchObject({ code: 'DB_QUERY_ERROR' });
@@ -286,7 +307,10 @@ describe('introspection masking', () => {
   it('a poisoned empty catalog is never cached - a recovered introspect is seen', async () => {
     let first = true;
     const conn = new MaskingConnector(() => {
-      if (first) { first = false; return { ...CATALOG, tables: [], warnings: ['transient failure'] }; }
+      if (first) {
+        first = false;
+        return { ...CATALOG, tables: [], warnings: ['transient failure'] };
+      }
       return CATALOG;
     });
     const engine = createAskSql({ connectors: [conn], model: model(['x']) });

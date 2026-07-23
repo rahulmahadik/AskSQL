@@ -18,10 +18,13 @@ import {
 } from './engine.js';
 import { DEFAULT_PORT } from './constants.js';
 
-
 /** Settings id: stable, unique, and safe to use as a secret key. */
 function makeId(name: string, taken: ReadonlySet<string>): string {
-  const base = name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'db';
+  const base =
+    name
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '_')
+      .replace(/^_+|_+$/g, '') || 'db';
   if (!taken.has(base)) return base;
   for (let i = 2; i < 500; i++) if (!taken.has(`${base}_${i}`)) return `${base}_${i}`;
   return `${base}_${Date.now()}`;
@@ -65,7 +68,7 @@ async function pickTarget(): Promise<vscode.ConfigurationTarget | undefined> {
       },
       {
         label: 'Workspace settings',
-        description: 'Saved in this project\'s .vscode/settings.json (shared if you commit it)',
+        description: "Saved in this project's .vscode/settings.json (shared if you commit it)",
         target: vscode.ConfigurationTarget.Workspace,
       },
     ],
@@ -123,6 +126,8 @@ export async function addConnection(secrets: vscode.SecretStorage): Promise<stri
       { label: 'PostgreSQL', value: 'postgres' as const },
       { label: 'MySQL / MariaDB', value: 'mysql' as const },
       { label: 'SQLite', value: 'sqlite' as const, description: 'a .db file' },
+      { label: 'Oracle', value: 'oracle' as const },
+      { label: 'MongoDB', value: 'mongodb' as const, description: 'a connection string' },
     ],
     { placeHolder: 'Which database?', ignoreFocusOut: true },
   );
@@ -145,29 +150,55 @@ export async function addConnection(secrets: vscode.SecretStorage): Promise<stri
     });
     if (!picked?.[0]) return undefined;
     conn = { id, name, engine: 'sqlite', file: picked[0].fsPath };
+  } else if (engine.value === 'mongodb') {
+    // MongoDB connects by URI (credentials live inside it), so the DSN is the path.
+    const dsn = await vscode.window.showInputBox({
+      prompt:
+        'Connection string, e.g. mongodb+srv://user:password@cluster.example.net or mongodb://user:password@host:27017',
+      password: true,
+      ignoreFocusOut: true,
+      validateInput: (v) => {
+        const t = v.trim();
+        if (!t) return 'This is required.';
+        const scheme = /^([a-zA-Z][\w+.-]*:)/.exec(t)?.[1]?.toLowerCase();
+        if (scheme !== 'mongodb:' && scheme !== 'mongodb+srv:')
+          return 'Expected a mongodb:// or mongodb+srv:// connection string.';
+        return undefined;
+      },
+    });
+    if (!dsn?.trim()) return undefined;
+    const database = await askRequired('Database name (the database to query)');
+    if (!database?.trim()) return undefined;
+    connectionString = dsn.trim();
+    conn = { id, name, engine: 'mongodb', database, usesConnectionString: true };
   } else {
-    // Two ways in: paste a full connection string (the fast path for a cloud
-    // database that hands you one), or fill in host/port/user/etc. by hand.
-    const method = await vscode.window.showQuickPick(
-      [
-        { label: 'Enter connection details', value: 'fields' as const },
-        {
-          label: 'Paste a connection string',
-          value: 'dsn' as const,
-          description: 'host, user, password and SSL in one line - e.g. from Supabase, Neon, RDS, PlanetScale',
-        },
-      ],
-      { placeHolder: `How do you want to connect to ${engine.label}?`, ignoreFocusOut: true },
-    );
+    // Oracle takes discrete fields only - its EZConnect string is unlike the URL
+    // DSNs and the fields cover the common case. Postgres/MySQL also accept a
+    // pasted cloud connection string, the fast path when a provider hands you one.
+    const method =
+      engine.value === 'oracle'
+        ? ({ value: 'fields' } as const)
+        : await vscode.window.showQuickPick(
+            [
+              { label: 'Enter connection details', value: 'fields' as const },
+              {
+                label: 'Paste a connection string',
+                value: 'dsn' as const,
+                description: 'host, user, password and SSL in one line - e.g. from Supabase, Neon, RDS, PlanetScale',
+              },
+            ],
+            { placeHolder: `How do you want to connect to ${engine.label}?`, ignoreFocusOut: true },
+          );
     if (!method) return undefined;
 
     if (method.value === 'dsn') {
+      // Only Postgres/MySQL reach here (Oracle is fields-only above).
       const schemes = engine.value === 'postgres' ? ['postgres:', 'postgresql:'] : ['mysql:', 'mariadb:'];
-      // Masked (it carries the password) + validated against the chosen engine.
       const dsn = await vscode.window.showInputBox({
-        prompt: engine.value === 'postgres'
-          ? 'Connection string, e.g. postgres://user:password@host:5432/dbname?sslmode=require'
-          : 'Connection string, e.g. mysql://user:password@host:3306/dbname',
+        prompt:
+          engine.value === 'postgres'
+            ? 'Connection string, e.g. postgres://user:password@host:5432/dbname?sslmode=require'
+            : 'Connection string, e.g. mysql://user:password@host:3306/dbname',
         password: true,
         ignoreFocusOut: true,
         validateInput: (v) => {
@@ -199,25 +230,58 @@ export async function addConnection(secrets: vscode.SecretStorage): Promise<stri
       });
       if (portStr === undefined) return undefined;
       const port = Number(portStr.trim());
-      const user = await ask('User', engine.value === 'postgres' ? 'postgres' : 'root');
+      const user = await ask(
+        'User',
+        engine.value === 'postgres' ? 'postgres' : engine.value === 'oracle' ? 'system' : 'root',
+      );
       if (user === undefined) return undefined;
       const database = await askRequired(
-        engine.value === 'postgres' ? 'Database name (the database to query)' : 'Database name (the schema to query)',
+        engine.value === 'postgres'
+          ? 'Database name (the database to query)'
+          : engine.value === 'oracle'
+            ? 'Service name (the Oracle service to query)'
+            : 'Database name (the schema to query)',
       );
       if (!database?.trim()) return undefined;
       password = await ask('Password (stored in your OS keychain, not in settings)', '', true);
       if (password === undefined) return undefined;
-      // Most cloud databases refuse a plain connection; local ones do not need SSL.
-      const sslPick = await vscode.window.showQuickPick(
-        [
-          { label: 'No SSL', description: 'Plain connection - fine for local or private-network databases', value: undefined },
-          { label: 'SSL, verify certificate', description: 'Encrypted and authenticated - use for managed cloud databases (RDS, Supabase, Neon, ...)', value: 'verify' as const },
-          { label: 'SSL, do not verify certificate', description: 'Encrypted but not authenticated - for self-signed or self-hosted servers', value: 'no-verify' as const },
-        ],
-        { placeHolder: 'SSL/TLS for this connection?', ignoreFocusOut: true },
-      );
-      if (!sslPick) return undefined;
-      conn = { id, name, engine: engine.value, host: host || 'localhost', port, user, database, ...(sslPick.value ? { ssl: sslPick.value } : {}) };
+      // The Oracle thin driver negotiates TLS through the connect descriptor, so it has
+      // no discrete SSL toggle here; the others ask (cloud databases usually require it).
+      if (engine.value === 'oracle') {
+        conn = { id, name, engine: 'oracle', host: host || 'localhost', port, user, database };
+      } else {
+        const sslPick = await vscode.window.showQuickPick(
+          [
+            {
+              label: 'No SSL',
+              description: 'Plain connection - fine for local or private-network databases',
+              value: undefined,
+            },
+            {
+              label: 'SSL, verify certificate',
+              description: 'Encrypted and authenticated - use for managed cloud databases (RDS, Supabase, Neon, ...)',
+              value: 'verify' as const,
+            },
+            {
+              label: 'SSL, do not verify certificate',
+              description: 'Encrypted but not authenticated - for self-signed or self-hosted servers',
+              value: 'no-verify' as const,
+            },
+          ],
+          { placeHolder: 'SSL/TLS for this connection?', ignoreFocusOut: true },
+        );
+        if (!sslPick) return undefined;
+        conn = {
+          id,
+          name,
+          engine: engine.value,
+          host: host || 'localhost',
+          port,
+          user,
+          database,
+          ...(sslPick.value ? { ssl: sslPick.value } : {}),
+        };
+      }
     }
   }
 
@@ -230,9 +294,7 @@ export async function addConnection(secrets: vscode.SecretStorage): Promise<stri
   // entry is inert; the reverse is not.
   if (password) await storePassword(secrets, conn, password);
   if (connectionString) await storeConnectionString(secrets, id, connectionString, connScope);
-  await vscode.workspace
-    .getConfiguration('asksql')
-    .update('connections', [...scopeValue(scope), conn], scope);
+  await vscode.workspace.getConfiguration('asksql').update('connections', [...scopeValue(scope), conn], scope);
 
   return id;
 }
@@ -254,18 +316,16 @@ export async function removeConnection(secrets: vscode.SecretStorage, id?: strin
 
   const conn = existing.find((c) => c.id === targetId);
   if (!conn) return false;
-  const yes = await vscode.window.showWarningMessage(
-    `Remove "${conn.name}" from AskSQL?`,
-    { modal: true },
-    'Remove',
-  );
+  const yes = await vscode.window.showWarningMessage(`Remove "${conn.name}" from AskSQL?`, { modal: true }, 'Remove');
   if (yes !== 'Remove') return false;
 
   const scopes = scopesDefining(targetId);
   for (const scope of scopes) {
-    await vscode.workspace
-      .getConfiguration('asksql')
-      .update('connections', scopeValue(scope).filter((c) => c.id !== targetId), scope);
+    await vscode.workspace.getConfiguration('asksql').update(
+      'connections',
+      scopeValue(scope).filter((c) => c.id !== targetId),
+      scope,
+    );
   }
   // One stable key per id, so this always finds the secrets. Nothing is left in
   // the OS keychain after a connection is removed - password (discrete mode) and

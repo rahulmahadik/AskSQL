@@ -4,7 +4,7 @@
  * Every failure in the system surfaces as an {@link AskSqlError} with a
  * stable machine `code`, a plain-language actionable `userMessage`
  *, a `retryable` hint for UIs, and a `detail` string that is for
- * logs/console ONLY - `toJSON` deliberately omits it so credentials,
+ * logs/console only - `toJSON` deliberately omits it so credentials,
  * hostnames and stack fragments can never leak through an API response
  * (by construction).
  */
@@ -73,7 +73,7 @@ const DEFAULT_MESSAGES: Readonly<Record<ErrorCode, string>> = {
 export interface AskSqlErrorOptions {
   /** Override the default plain-language message. Keep it actionable. */
   userMessage?: string;
-  /** Technical detail for logs/console only. NEVER shown to end users. */
+  /** Technical detail for logs/console only. Never shown to end users. */
   detail?: string;
   cause?: unknown;
   retryable?: boolean;
@@ -111,7 +111,7 @@ export class AskSqlError extends Error {
   }
 
   /**
-   * Wire-safe shape: code + userMessage + retryable ONLY. `detail`, `stack`
+   * Wire-safe shape: code + userMessage + retryable only. `detail`, `stack`
    * and `cause` are intentionally excluded.
    */
   toJSON(): { code: ErrorCode; userMessage: string; retryable: boolean } {

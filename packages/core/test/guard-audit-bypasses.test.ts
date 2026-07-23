@@ -100,9 +100,9 @@ describe('DuckDB network / external-read functions (high/medium)', () => {
 describe('MySQL executable-comment false positive fixed', () => {
   it('allows /*! inside a -- line comment', () => allow('SELECT * FROM users -- /*! INTO OUTFILE', MYSQL_DIALECT));
   it('allows /*! inside a # line comment', () => allow('SELECT * FROM users # /*! x', MYSQL_DIALECT));
-  it('still blocks a real executable comment', () => block("SELECT * FROM t /*!INTO OUTFILE '/tmp/x'*/", MYSQL_DIALECT));
+  it('still blocks a real executable comment', () =>
+    block("SELECT * FROM t /*!INTO OUTFILE '/tmp/x'*/", MYSQL_DIALECT));
 });
-
 
 // Third audit round (Fable) - string-exec + more file readers + LO reads.
 describe('DuckDB query() string-exec + spatial/aws (round 3)', () => {
@@ -124,7 +124,6 @@ describe('Postgres large-object READ aliases (round 3)', () => {
     'SELECT pg_catalog.lo_get(1)',
   ])('blocks %s', (sql) => block(sql));
 });
-
 
 // Fourth audit round (Fable) - file-reader class closed structurally + replication.
 describe('DuckDB read_/scan_ prefix rule closes the file-reader class (round 4)', () => {
@@ -148,7 +147,6 @@ describe('Postgres replication consume/advance + SQLite fileio (round 4)', () =>
     "SELECT name FROM zipfile('/tmp/x.zip')",
   ])('blocks sqlite %s', (sql) => block(sql, SQLITE_DIALECT));
 });
-
 
 // Fifth audit round (Fable) - prefix rules close pg_ls_ family; dialect-scoped duckdb settings.
 describe('round 5: prefix rules + dialect-scoped denials', () => {

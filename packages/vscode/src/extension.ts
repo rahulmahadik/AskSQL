@@ -1,15 +1,7 @@
 /**
- * AskSQL for VS Code.
- *
- * One surface, entirely ours:
- *  - the AskSQL panel (its own webview view, themed from VS Code's variables)
- *  - a TreeView schema explorer beneath it
- *  - generated SQL opens in a real .sql editor
- *
- * There is deliberately no chat participant. A participant can only live inside
- * VS Code's shared chat panel, which forces an `@asksql` mention, VS Code's own
- * model dropdown listing Copilot and Claude, and that panel's settings. None of
- * that is ours to restyle, so the product read as a guest in someone else's UI.
+ * AskSQL for VS Code: the AskSQL panel (its own webview view), a TreeView
+ * schema explorer, and generated SQL opening in a real .sql editor. No chat
+ * participant - one can only live inside VS Code's shared chat panel.
  *
  * The engine, the guard, and every credential stay in the extension host. The
  * webview renders and nothing more.
@@ -17,12 +9,19 @@
 
 import * as vscode from 'vscode';
 import type { ResultSet } from '@asksql/core';
-import { EngineManager, apiKeyKey, storePassword, passwordKey, connectionStringKey, connectionConfigs } from './engine.js';
+import {
+  EngineManager,
+  apiKeyKey,
+  storePassword,
+  passwordKey,
+  connectionStringKey,
+  connectionConfigs,
+} from './engine.js';
 import { ChatViewProvider } from './chatView.js';
 import { SchemaTreeProvider, type Node } from './tree.js';
 import { addConnection, removeConnection } from './wizard.js';
 import { selectProvider, selectApiKey } from './models.js';
-import { initLog, log } from './log.js';
+import { initLog, log, recentLogLines } from './log.js';
 import { userMessage } from './errors.js';
 
 let engines: EngineManager | undefined;
@@ -39,10 +38,7 @@ function guard<A extends unknown[]>(fn: (...args: A) => Promise<void> | void): (
   };
 }
 
-/**
- * Minimal RFC-4180 CSV. Deliberately local: the host has no UI, so pulling in
- * the React package just for a helper would drag React into this bundle.
- */
+/** Minimal RFC-4180 CSV. Local so this bundle does not pull in the React package. */
 function toCsv(res: ResultSet): string {
   const esc = (v: unknown): string => {
     if (v === null || v === undefined) return '';
@@ -55,10 +51,8 @@ function toCsv(res: ResultSet): string {
 }
 
 /**
- * Connect for real, read the schema, and report the outcome in plain language.
- *
- * Shared by "Add Connection" (which tests what it just saved) and the explicit
- * Test command, so both give the identical verdict.
+ * Connect for real, read the schema, and report the outcome. Shared by
+ * "Add Connection" and the Test command, so both give the identical verdict.
  */
 async function runConnectionTest(id: string): Promise<void> {
   const conn = connectionConfigs().find((c) => c.id === id);
@@ -98,16 +92,14 @@ export function activate(ctx: vscode.ExtensionContext): void {
     engines,
     tree,
     vscode.window.registerTreeDataProvider('asksql.schema', tree),
-    // retainContextWhenHidden: a conversation that vanishes when the panel is
-    // collapsed is not a conversation.
+    // retainContextWhenHidden: keep the conversation when the panel is collapsed.
     vscode.window.registerWebviewViewProvider('asksql.chat', chat, {
       webviewOptions: { retainContextWhenHidden: true },
     }),
 
     /**
      * SecretStorage is shared across windows, so a password changed in another
-     * window must invalidate the connectors this one is holding - otherwise this
-     * window keeps failing to authenticate until it is reloaded.
+     * window must invalidate the connectors this one is holding.
      */
     ctx.secrets.onDidChange(async (e) => {
       if (!e.key.startsWith('asksql.')) return;
@@ -118,218 +110,297 @@ export function activate(ctx: vscode.ExtensionContext): void {
 
     vscode.commands.registerCommand('asksql.refreshSchema', () => tree.refresh()),
 
-    /**
-     * Connect for real and read the schema, then say what happened.
-     *
-     * "It saved but the tree is empty" is the single hardest thing to diagnose
-     * from the outside, so make the extension answer it directly.
-     */
-    vscode.commands.registerCommand('asksql.testConnection', async (node?: Node) => {
-      const conns = connectionConfigs();
-      if (conns.length === 0) {
-        const add = await vscode.window.showWarningMessage('AskSQL: connect a database first.', 'Add Connection');
-        if (add) await vscode.commands.executeCommand('asksql.addConnection');
-        return;
-      }
-      let id = node?.kind === 'connection' ? node.conn.id : undefined;
-      if (!id) {
-        const pick = await vscode.window.showQuickPick(
-          conns.map((c) => ({ label: c.name, description: `${c.engine} (${c.scope} settings)`, id: c.id })),
-          { placeHolder: 'Test which connection?' },
-        );
-        if (!pick) return;
-        id = pick.id;
-      }
-      await runConnectionTest(id);
-      tree.refresh();
-    }),
+    /** Connect for real and read the schema, then say what happened. */
+    vscode.commands.registerCommand(
+      'asksql.testConnection',
+      guard(async (node?: Node) => {
+        const conns = connectionConfigs();
+        if (conns.length === 0) {
+          const add = await vscode.window.showWarningMessage('AskSQL: connect a database first.', 'Add Connection');
+          if (add) await vscode.commands.executeCommand('asksql.addConnection');
+          return;
+        }
+        let id = node?.kind === 'connection' ? node.conn.id : undefined;
+        if (!id) {
+          const pick = await vscode.window.showQuickPick(
+            conns.map((c) => ({ label: c.name, description: `${c.engine} (${c.scope} settings)`, id: c.id })),
+            { placeHolder: 'Test which connection?' },
+          );
+          if (!pick) return;
+          id = pick.id;
+        }
+        await runConnectionTest(id);
+        tree.refresh();
+      }),
+    ),
 
     /**
-     * Ask the configured provider one trivial question.
-     *
-     * Only meaningful for the bring-your-own-LLM path; the VS Code chat model
-     * needs no test because VS Code owns it and reports its own errors.
+     * Ask the configured provider one trivial question. Only meaningful for the
+     * bring-your-own-LLM path; VS Code owns and reports on its own chat models.
      */
-    vscode.commands.registerCommand('asksql.testProvider', async () => {
-      const provider = vscode.workspace.getConfiguration('asksql').get<string>('provider') ?? 'ollama';
-      const result = await vscode.window.withProgress(
-        { location: vscode.ProgressLocation.Notification, title: `AskSQL: testing ${provider}...` },
-        () => engines!.testProvider(),
-      );
-      if (result.ok) {
-        void vscode.window.showInformationMessage(`AskSQL: ${provider} answered "${result.reply}". It is working.`);
-      } else {
-        const pick = await vscode.window.showErrorMessage(
-          `AskSQL: ${provider} did not answer. ${result.message}`,
-          'Set up provider',
-          'Open Settings',
+    vscode.commands.registerCommand(
+      'asksql.testProvider',
+      guard(async () => {
+        const provider = vscode.workspace.getConfiguration('asksql').get<string>('provider') ?? 'ollama';
+        const result = await vscode.window.withProgress(
+          { location: vscode.ProgressLocation.Notification, title: `AskSQL: testing ${provider}...` },
+          () => engines!.testProvider(),
         );
-        // Re-run the guided setup (provider + API key + model) - the usual cause is a
-        // missing key or an unpicked model, and this fixes both in one flow.
-        if (pick === 'Set up provider') await vscode.commands.executeCommand('asksql.selectProvider');
-        if (pick === 'Open Settings') await vscode.commands.executeCommand('asksql.openSettings');
-      }
-    }),
+        if (result.ok) {
+          void vscode.window.showInformationMessage(`AskSQL: ${provider} answered "${result.reply}". It is working.`);
+        } else {
+          const pick = await vscode.window.showErrorMessage(
+            `AskSQL: ${provider} did not answer. ${result.message}`,
+            'Set up provider',
+            'Open Settings',
+          );
+          // Re-run the guided setup (provider + API key + model) in one flow.
+          if (pick === 'Set up provider') await vscode.commands.executeCommand('asksql.selectProvider');
+          if (pick === 'Open Settings') await vscode.commands.executeCommand('asksql.openSettings');
+        }
+      }),
+    ),
 
-    vscode.commands.registerCommand('asksql.addConnection', guard(async () => {
-      // The settings write fires onDidChangeConfiguration, which resets engines.
-      const id = await addConnection(ctx.secrets);
-      if (!id) return;
-      tree.refresh();
-      chat.refresh();
-      // Test immediately so a wrong password/host surfaces now, not on first query.
-      await runConnectionTest(id);
-    })),
+    vscode.commands.registerCommand(
+      'asksql.addConnection',
+      guard(async () => {
+        // The settings write fires onDidChangeConfiguration, which resets engines.
+        const id = await addConnection(ctx.secrets);
+        if (!id) return;
+        tree.refresh();
+        chat.refresh();
+        // Test immediately so a wrong password/host surfaces now, not on first query.
+        await runConnectionTest(id);
+      }),
+    ),
 
     // Invoked from the tree's context menu (node passed) or the palette (no arg).
-    vscode.commands.registerCommand('asksql.removeConnection', guard(async (node?: Node) => {
-      const id = node?.kind === 'connection' ? node.conn.id : undefined;
-      if (await removeConnection(ctx.secrets, id)) tree.refresh();
-    })),
+    vscode.commands.registerCommand(
+      'asksql.removeConnection',
+      guard(async (node?: Node) => {
+        const id = node?.kind === 'connection' ? node.conn.id : undefined;
+        if (await removeConnection(ctx.secrets, id)) tree.refresh();
+      }),
+    ),
 
     /**
-     * A clean slate. Connections live in settings and passwords/keys in the OS
-     * keychain, and both survive an extension uninstall by design - this is the way
-     * to actually clear them.
+     * A clean slate. Connections (settings) and passwords/keys (OS keychain)
+     * survive an extension uninstall; this is the way to actually clear them.
      */
-    vscode.commands.registerCommand('asksql.reset', guard(async () => {
-      const conns = connectionConfigs();
-      const yes = await vscode.window.showWarningMessage(
-        'Remove all AskSQL connections and keys?',
-        {
-          modal: true,
-          detail:
-            `This removes the ${conns.length} connection${conns.length === 1 ? '' : 's'} configured in this window from settings, deletes their saved database passwords and connection strings plus every AI provider API key from your OS keychain, and forgets the selected model. It cannot be undone.`,
-        },
-        'Remove everything',
-      );
-      if (yes !== 'Remove everything') return;
-      const cfg = vscode.workspace.getConfiguration('asksql');
-      await cfg.update('connections', undefined, vscode.ConfigurationTarget.Global);
-      if (vscode.workspace.workspaceFolders?.length) {
-        await cfg.update('connections', undefined, vscode.ConfigurationTarget.Workspace);
-      }
-      for (const c of conns) {
-        await ctx.secrets.delete(passwordKey(c.id));
-        await ctx.secrets.delete(connectionStringKey(c.id));
-      }
-      for (const p of ['ollama', 'openai', 'anthropic', 'google', 'groq', 'openai-compatible']) {
-        await ctx.secrets.delete(apiKeyKey(p));
-      }
-      await ctx.globalState.update('asksql.modelChoice', undefined);
-      // Settings + secret changes fire the reset listeners; refresh to be sure.
-      await engines?.reset();
-      tree.refresh();
-      chat.refresh();
-      void vscode.window.showInformationMessage('AskSQL: connections and keys removed.');
-    })),
+    vscode.commands.registerCommand(
+      'asksql.reset',
+      guard(async () => {
+        const conns = connectionConfigs();
+        const yes = await vscode.window.showWarningMessage(
+          'Remove all AskSQL connections and keys?',
+          {
+            modal: true,
+            detail: `This removes the ${conns.length} connection${conns.length === 1 ? '' : 's'} configured in this window from settings, deletes their saved database passwords and connection strings plus every AI provider API key from your OS keychain, and forgets the selected model. It cannot be undone.`,
+          },
+          'Remove everything',
+        );
+        if (yes !== 'Remove everything') return;
+        const cfg = vscode.workspace.getConfiguration('asksql');
+        await cfg.update('connections', undefined, vscode.ConfigurationTarget.Global);
+        if (vscode.workspace.workspaceFolders?.length) {
+          await cfg.update('connections', undefined, vscode.ConfigurationTarget.Workspace);
+        }
+        for (const c of conns) {
+          await ctx.secrets.delete(passwordKey(c.id));
+          await ctx.secrets.delete(connectionStringKey(c.id));
+        }
+        for (const p of ['ollama', 'openai', 'anthropic', 'google', 'groq', 'openai-compatible']) {
+          await ctx.secrets.delete(apiKeyKey(p));
+        }
+        await ctx.globalState.update('asksql.modelChoice', undefined);
+        // Settings + secret changes fire the reset listeners; refresh to be sure.
+        await engines?.reset();
+        tree.refresh();
+        chat.refresh();
+        void vscode.window.showInformationMessage('AskSQL: connections and keys removed.');
+      }),
+    ),
 
     // The unified "which model answers" picker (VS Code chat model or your provider).
-    vscode.commands.registerCommand('asksql.pickModel', guard(() => chat.pickModel())),
+    vscode.commands.registerCommand(
+      'asksql.pickModel',
+      guard(() => chat.pickModel()),
+    ),
 
-    vscode.commands.registerCommand('asksql.selectProvider', async () => {
-      await selectProvider(ctx.secrets);
-    }),
+    vscode.commands.registerCommand(
+      'asksql.selectProvider',
+      guard(async () => {
+        await selectProvider(ctx.secrets);
+      }),
+    ),
 
     vscode.commands.registerCommand('asksql.openSettings', () =>
       vscode.commands.executeCommand('workbench.action.openSettings', 'asksql'),
     ),
 
     /** Focus our own panel. Never opens VS Code's shared chat. */
-    vscode.commands.registerCommand('asksql.askInChat', async () => {
-      if (connectionConfigs().length === 0) {
-        const add = await vscode.window.showInformationMessage('AskSQL: connect a database first.', 'Add Connection');
-        if (add) await vscode.commands.executeCommand('asksql.addConnection');
-        return;
-      }
-      chat.focus();
-    }),
+    vscode.commands.registerCommand(
+      'asksql.askInChat',
+      guard(async () => {
+        if (connectionConfigs().length === 0) {
+          const add = await vscode.window.showInformationMessage('AskSQL: connect a database first.', 'Add Connection');
+          if (add) await vscode.commands.executeCommand('asksql.addConnection');
+          return;
+        }
+        chat.focus();
+      }),
+    ),
 
     /** Clearing throws away the conversation, so it asks first. */
-    vscode.commands.registerCommand('asksql.clearChat', async () => {
-      const yes = await vscode.window.showWarningMessage(
-        'Clear the AskSQL conversation?',
-        { modal: true, detail: 'The questions and results in the panel are removed. Your connections and settings are untouched.' },
-        'Clear',
-      );
-      if (yes === 'Clear') chat.clear();
-    }),
+    vscode.commands.registerCommand(
+      'asksql.clearChat',
+      guard(async () => {
+        const yes = await vscode.window.showWarningMessage(
+          'Clear the AskSQL conversation?',
+          {
+            modal: true,
+            detail: 'The questions and results in the panel are removed. Your connections and settings are untouched.',
+          },
+          'Clear',
+        );
+        if (yes === 'Clear') chat.clear();
+      }),
+    ),
+
+    /** Ask about the current editor selection: drop it into the chat input, ready to send. */
+    vscode.commands.registerCommand(
+      'asksql.askAboutSelection',
+      guard(async () => {
+        const editor = vscode.window.activeTextEditor;
+        const selection = editor?.document.getText(editor.selection).trim();
+        if (!selection) {
+          void vscode.window.showInformationMessage('AskSQL: select some text in the editor first.');
+          return;
+        }
+        if (connectionConfigs().length === 0) {
+          const add = await vscode.window.showInformationMessage('AskSQL: connect a database first.', 'Add Connection');
+          if (add) await vscode.commands.executeCommand('asksql.addConnection');
+          return;
+        }
+        chat.prefill(selection);
+      }),
+    ),
+
+    /** Bundle versions and recent (secret-free, length-capped) log lines for a bug report. */
+    vscode.commands.registerCommand(
+      'asksql.collectDiagnostics',
+      guard(async () => {
+        const provider = vscode.workspace.getConfiguration('asksql').get<string>('provider') ?? '(unset)';
+        const model = vscode.workspace.getConfiguration('asksql').get<string>('model')?.trim() || '(unset)';
+        const engines = connectionConfigs().map((c) => c.engine);
+        const report = [
+          'AskSQL diagnostics',
+          `Extension: ${ctx.extension.packageJSON.version}`,
+          `VS Code: ${vscode.version}`,
+          `OS: ${process.platform} ${process.arch}`,
+          `Node: ${process.versions.node}`,
+          `Provider: ${provider}   Model: ${model}`,
+          `Connections: ${engines.length}${engines.length ? ` (${engines.join(', ')})` : ''}`,
+          '',
+          'Recent AskSQL log lines:',
+          recentLogLines().join('\n') || '(none)',
+        ].join('\n');
+        await vscode.env.clipboard.writeText(report);
+        const doc = await vscode.workspace.openTextDocument({ content: report, language: 'plaintext' });
+        await vscode.window.showTextDocument(doc, { preview: false });
+        void vscode.window.showInformationMessage('AskSQL diagnostics copied to the clipboard.');
+      }),
+    ),
 
     /** Chat hands the generated SQL here so the user keeps it in a real editor. */
-    vscode.commands.registerCommand('asksql.openSqlInEditor', async (sql: string) => {
-      const doc = await vscode.workspace.openTextDocument({ content: sql, language: 'sql' });
-      await vscode.window.showTextDocument(doc, { preview: false });
-    }),
+    vscode.commands.registerCommand(
+      'asksql.openSqlInEditor',
+      guard(async (sql: string) => {
+        const doc = await vscode.workspace.openTextDocument({ content: sql, language: 'sql' });
+        await vscode.window.showTextDocument(doc, { preview: false });
+      }),
+    ),
 
-    vscode.commands.registerCommand('asksql.exportCsv', async (res: ResultSet) => {
-      const csv = toCsv(res);
-      const doc = await vscode.workspace.openTextDocument({ content: csv, language: 'csv' });
-      await vscode.window.showTextDocument(doc, { preview: false });
-    }),
+    vscode.commands.registerCommand(
+      'asksql.exportCsv',
+      guard(async (res: ResultSet) => {
+        const csv = toCsv(res);
+        const doc = await vscode.workspace.openTextDocument({ content: csv, language: 'csv' });
+        await vscode.window.showTextDocument(doc, { preview: false });
+      }),
+    ),
 
-    // Pick the provider the key is for (never assume the current one - that put
-    // keys in the wrong slot), then store it. secrets.onDidChange resets engines.
-    vscode.commands.registerCommand('asksql.setApiKey', guard(() => selectApiKey(ctx.secrets))),
+    // Pick the provider the key is for (never assume the current one), then
+    // store it. secrets.onDidChange resets engines.
+    vscode.commands.registerCommand(
+      'asksql.setApiKey',
+      guard(() => selectApiKey(ctx.secrets)),
+    ),
 
     /**
-     * Takes the clicked node when invoked from the tree's key icon. Asking
-     * "which database?" right after the user clicked one is both noise and a way
-     * to save the password against the wrong connection.
+     * Takes the clicked node when invoked from the tree's key icon, so the
+     * password is saved against the connection the user clicked.
      */
-    vscode.commands.registerCommand('asksql.setConnectionPassword', guard(async (node?: Node) => {
-      const conns = connectionConfigs();
-      if (conns.length === 0) {
-        const add = await vscode.window.showWarningMessage('AskSQL: connect a database first.', 'Add Connection');
-        if (add) await vscode.commands.executeCommand('asksql.addConnection');
-        return;
-      }
-      let target = node?.kind === 'connection' ? conns.find((c) => c.id === node.conn.id) : undefined;
-      if (!target) {
-        const pick = await vscode.window.showQuickPick(
-          conns.map((c) => ({ label: c.name, description: `${c.engine} (${c.id})`, id: c.id })),
-          { placeHolder: 'Which database?' },
-        );
-        if (!pick) return;
-        target = conns.find((c) => c.id === pick.id);
-      }
-      if (!target) return;
-      // A connection-string connection keeps its password inside the DSN (in the
-      // keychain), so there is no separate password to set. Say so instead of
-      // silently storing an unused one.
-      if (target.usesConnectionString) {
+    vscode.commands.registerCommand(
+      'asksql.setConnectionPassword',
+      guard(async (node?: Node) => {
+        const conns = connectionConfigs();
+        if (conns.length === 0) {
+          const add = await vscode.window.showWarningMessage('AskSQL: connect a database first.', 'Add Connection');
+          if (add) await vscode.commands.executeCommand('asksql.addConnection');
+          return;
+        }
+        let target = node?.kind === 'connection' ? conns.find((c) => c.id === node.conn.id) : undefined;
+        if (!target) {
+          const pick = await vscode.window.showQuickPick(
+            conns.map((c) => ({ label: c.name, description: `${c.engine} (${c.id})`, id: c.id })),
+            { placeHolder: 'Which database?' },
+          );
+          if (!pick) return;
+          target = conns.find((c) => c.id === pick.id);
+        }
+        if (!target) return;
+        // A connection-string connection keeps its password inside the DSN, so
+        // there is no separate password to set.
+        if (target.usesConnectionString) {
+          void vscode.window.showInformationMessage(
+            `"${target.name}" uses a connection string, so its password is part of that string. Re-add the connection to change it.`,
+          );
+          return;
+        }
+        // Show the endpoint and scope, so a connection injected by a workspace cannot
+        // phish the password for a different host behind a familiar display name.
+        const where =
+          target.engine === 'sqlite'
+            ? (target.file ?? '')
+            : `${target.host ?? ''}:${target.port ?? ''}/${target.database ?? ''}`;
+        const pw = await vscode.window.showInputBox({
+          prompt: `Password for ${target.name} - ${target.engine} at ${where} (${target.scope} settings). Stored in your OS keychain.`,
+          password: true,
+          ignoreFocusOut: true,
+        });
+        if (pw === undefined) return;
+        if (pw) await storePassword(ctx.secrets, target, pw);
+        else await ctx.secrets.delete(passwordKey(target.id));
+        // secrets.onDidChange resets the engines; nothing to do here but confirm.
         void vscode.window.showInformationMessage(
-          `"${target.name}" uses a connection string, so its password is part of that string. Re-add the connection to change it.`,
+          pw ? `AskSQL: password saved for ${target.name}.` : `AskSQL: password cleared for ${target.name}.`,
         );
-        return;
-      }
-      // Show the endpoint and scope, so a connection injected by a workspace cannot
-      // phish the password for a different host behind a familiar display name.
-      const where =
-        target.engine === 'sqlite'
-          ? (target.file ?? '')
-          : `${target.host ?? ''}:${target.port ?? ''}/${target.database ?? ''}`;
-      const pw = await vscode.window.showInputBox({
-        prompt: `Password for ${target.name} - ${target.engine} at ${where} (${target.scope} settings). Stored in your OS keychain.`,
-        password: true,
-        ignoreFocusOut: true,
-      });
-      if (pw === undefined) return;
-      if (pw) await storePassword(ctx.secrets, target, pw);
-      else await ctx.secrets.delete(passwordKey(target.id));
-      // secrets.onDidChange resets the engines; nothing to do here but confirm.
-      void vscode.window.showInformationMessage(
-        pw ? `AskSQL: password saved for ${target.name}.` : `AskSQL: password cleared for ${target.name}.`,
-      );
-    })),
+      }),
+    ),
 
-    // Stale credentials/models must never survive a settings change - but only the
-    // settings that connectors/engines actually depend on trigger a rebuild. Pure
-    // UI preferences (sqlDisplay, requireApproval) must not tear down live DB pools.
+    // Only settings that connectors/engines depend on trigger a rebuild; pure UI
+    // preferences (sqlDisplay, requireApproval) must not tear down live DB pools.
     vscode.workspace.onDidChangeConfiguration(async (e) => {
       if (!e.affectsConfiguration('asksql')) return;
-      const heavy = ['asksql.connections', 'asksql.provider', 'asksql.model', 'asksql.baseURL', 'asksql.maxRows', 'asksql.sampleColumnValues'].some(
-        (k) => e.affectsConfiguration(k),
-      );
+      const heavy = [
+        'asksql.connections',
+        'asksql.provider',
+        'asksql.model',
+        'asksql.baseURL',
+        'asksql.maxRows',
+        'asksql.sampleColumnValues',
+      ].some((k) => e.affectsConfiguration(k));
       if (heavy) {
         await engines?.reset();
         tree.refresh();

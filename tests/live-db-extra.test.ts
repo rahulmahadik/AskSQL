@@ -103,7 +103,7 @@ describe('cell shaping', () => {
 
   maybe('NULL vs empty-string are distinct values', async () => {
     // Row 'a' has note='' (empty), row with note='plain' is non-null, others NULL.
-    const res = await conn.execute("SELECT label, note FROM lab.events ORDER BY id");
+    const res = await conn.execute('SELECT label, note FROM lab.events ORDER BY id');
     const rowA = res.rows.find((r) => r[0] === 'a')!;
     expect(rowA[1]).toBe(''); // empty string, not null
     const rowNull = res.rows.find((r) => r[0] === null)!;
@@ -140,7 +140,10 @@ describe('result-shape edge cases', () => {
     // Every cell is a JSON-safe value (string/number/bool/null/binary object).
     for (const row of res.rows) {
       for (const cell of row) {
-        const ok = cell === null || ['string', 'number', 'boolean'].includes(typeof cell) || (typeof cell === 'object' && '__binary' in cell);
+        const ok =
+          cell === null ||
+          ['string', 'number', 'boolean'].includes(typeof cell) ||
+          (typeof cell === 'object' && '__binary' in cell);
         expect(ok).toBe(true);
       }
     }

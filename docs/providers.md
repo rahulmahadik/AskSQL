@@ -9,7 +9,7 @@ The `config` shape (all providers):
 
 ```ts
 interface ProviderConfig {
-  provider: 'openai' | 'anthropic' | 'google' | 'azure' | 'groq' | 'ollama' | 'openai-compatible';
+  provider: 'openai' | 'anthropic' | 'google' | 'azure' | 'groq' | 'nvidia' | 'ollama' | 'openai-compatible';
   model: string;          // model id, or (Azure) your deployment name
   apiKey?: string;
   baseURL?: string;       // for ollama / openai-compatible / Azure AI Foundry
@@ -41,6 +41,7 @@ Install only the SDK for the provider you use (they are optional peer deps):
 | `anthropic` | `apiKey` | console.anthropic.com (API keys) |
 | `google` (Gemini) | `apiKey` | Google AI Studio (API keys) |
 | `groq` | `apiKey` | console.groq.com (keys) |
+| `nvidia` | `apiKey` | build.nvidia.com (API keys) |
 | `ollama` (local) | nothing (default `baseURL`) | - |
 | `openai-compatible` | `baseURL` + usually `apiKey` | your endpoint's dashboard |
 | `azure` (classic) | `apiKey` + `resourceName` + deployment name | Azure Portal |
@@ -62,6 +63,9 @@ resolveModel({ provider: 'google', model: 'gemini-2.0-flash', apiKey });
 
 // Groq
 resolveModel({ provider: 'groq', model: 'llama-3.3-70b-versatile', apiKey });
+
+// NVIDIA (build.nvidia.com; OpenAI-compatible, endpoint pre-seeded for you)
+resolveModel({ provider: 'nvidia', model: 'meta/llama-3.3-70b-instruct', apiKey });
 ```
 
 ## Local model (Ollama)

@@ -34,7 +34,9 @@ interface QueryableClient {
 }
 
 /** Object-mode reader for a single sample SELECT (pool or dedicated client). */
-type SampleRunner = { query(text: string, params?: unknown[]): Promise<{ rows: Record<string, unknown>[] | unknown[][] }> };
+type SampleRunner = {
+  query(text: string, params?: unknown[]): Promise<{ rows: Record<string, unknown>[] | unknown[][] }>;
+};
 
 const SYSTEM_SCHEMAS = ['pg_catalog', 'information_schema', 'pg_toast'];
 
@@ -291,15 +293,19 @@ export async function introspectPostgres(
   );
 
   // ---- extensions ----
-  const extRows = await safe(
-    'extensions',
-    () => db.query(`SELECT extname FROM pg_extension ORDER BY extname`),
-    { rows: [] as Record<string, unknown>[] },
-  );
+  const extRows = await safe('extensions', () => db.query(`SELECT extname FROM pg_extension ORDER BY extname`), {
+    rows: [] as Record<string, unknown>[],
+  });
 
   // ---- assemble ----
   const volMap: Record<string, RoutineInfo['volatility']> = { i: 'immutable', s: 'stable', v: 'volatile' };
-  const relKind: Record<string, TableInfo['kind']> = { r: 'table', v: 'view', m: 'materialized_view', p: 'table', f: 'table' };
+  const relKind: Record<string, TableInfo['kind']> = {
+    r: 'table',
+    v: 'view',
+    m: 'materialized_view',
+    p: 'table',
+    f: 'table',
+  };
 
   const sampleColumnValues = opts?.sampleColumnValues ?? false;
   const sampleTargets: { schema: string; table: string; column: string; list: ColumnInfo[]; index: number }[] = [];
@@ -325,10 +331,19 @@ export async function introspectPostgres(
     // scan runs the defining query (side effects, cost) - and never system schemas.
     const relkind = str(r['relkind']);
     if (
-      sampleColumnValues && !enumVals && isSampleablePgType(dbType) &&
-      (relkind === 'r' || relkind === 'p') && !SYSTEM_SCHEMAS.includes(str(r['schema']))
+      sampleColumnValues &&
+      !enumVals &&
+      isSampleablePgType(dbType) &&
+      (relkind === 'r' || relkind === 'p') &&
+      !SYSTEM_SCHEMAS.includes(str(r['schema']))
     ) {
-      sampleTargets.push({ schema: str(r['schema']), table: str(r['table']), column: str(r['column']), list, index: list.length - 1 });
+      sampleTargets.push({
+        schema: str(r['schema']),
+        table: str(r['table']),
+        column: str(r['column']),
+        list,
+        index: list.length - 1,
+      });
     }
   }
 
@@ -424,7 +439,10 @@ export async function introspectPostgres(
       checks: checkByTable.get(key) ?? [],
       indexes: idxByTable.get(key) ?? [],
       comment: strOrNull(r['comment']),
-      rowEstimate: typeof r['row_estimate'] === 'number' ? Math.max(0, r['row_estimate'] as number) : Number(r['row_estimate']) || null,
+      rowEstimate:
+        typeof r['row_estimate'] === 'number'
+          ? Math.max(0, r['row_estimate'] as number)
+          : Number(r['row_estimate']) || null,
       isPartitioned: r['is_partitioned'] === true,
       partitionOf: strOrNull(r['partition_of']),
       definition: strOrNull(r['definition']),
@@ -434,9 +452,16 @@ export async function introspectPostgres(
 
   const triggers: TriggerInfo[] = trgRows.rows.map((r) => {
     const def = str(r['def']);
-    const timing = /\bBEFORE\b/i.test(def) ? 'BEFORE' : /\bAFTER\b/i.test(def) ? 'AFTER' : /\bINSTEAD OF\b/i.test(def) ? 'INSTEAD OF' : 'UNKNOWN';
+    const timing = /\bBEFORE\b/i.test(def)
+      ? 'BEFORE'
+      : /\bAFTER\b/i.test(def)
+        ? 'AFTER'
+        : /\bINSTEAD OF\b/i.test(def)
+          ? 'INSTEAD OF'
+          : 'UNKNOWN';
     const events: string[] = [];
-    for (const ev of ['INSERT', 'UPDATE', 'DELETE', 'TRUNCATE']) if (new RegExp(`\\b${ev}\\b`, 'i').test(def)) events.push(ev);
+    for (const ev of ['INSERT', 'UPDATE', 'DELETE', 'TRUNCATE'])
+      if (new RegExp(`\\b${ev}\\b`, 'i').test(def)) events.push(ev);
     return {
       name: str(r['name']),
       schema: str(r['schema']),
@@ -459,7 +484,11 @@ export async function introspectPostgres(
     securityDefiner: r['secdef'] === true,
   }));
 
-  const enums: EnumTypeInfo[] = [...enumsByName.values()].map((e) => ({ schema: e.schema, name: e.name, values: e.values }));
+  const enums: EnumTypeInfo[] = [...enumsByName.values()].map((e) => ({
+    schema: e.schema,
+    name: e.name,
+    values: e.values,
+  }));
   const sequences: SequenceInfo[] = seqRows.rows.map((r) => ({ schema: str(r['schema']), name: str(r['name']) }));
   const extensions = extRows.rows.map((r) => str(r['extname']));
 

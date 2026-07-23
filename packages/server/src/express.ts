@@ -11,7 +11,8 @@ import { AskSqlError } from '@asksql/core';
 import { AskSqlServer, isStream, type HandlerResponse } from './handler.js';
 import type { AskSqlServerConfig, ServerRequest } from './types.js';
 
-interface ExpressLikeReq {
+/** Minimal Express request shape the middleware reads; match it in a custom adapter. */
+export interface ExpressLikeReq {
   method: string;
   path?: string;
   originalUrl?: string;
@@ -21,14 +22,15 @@ interface ExpressLikeReq {
   body?: unknown;
   on(event: string, cb: (chunk?: unknown) => void): void;
 }
-interface ExpressLikeRes {
+/** Minimal Express response shape the middleware writes. */
+export interface ExpressLikeRes {
   statusCode: number;
   setHeader(k: string, v: string): void;
   write(chunk: string): void;
   end(body?: string): void;
   flushHeaders?(): void;
 }
-type Next = (err?: unknown) => void;
+export type Next = (err?: unknown) => void;
 
 export type ExpressMiddleware = (req: ExpressLikeReq, res: ExpressLikeRes, next: Next) => void;
 
@@ -43,10 +45,7 @@ export interface ExpressAdapterOptions {
   readonly allowHeaders?: readonly string[];
 }
 
-export function asksqlMiddleware(
-  config: AskSqlServerConfig,
-  adapter: ExpressAdapterOptions = {},
-): ExpressMiddleware {
+export function asksqlMiddleware(config: AskSqlServerConfig, adapter: ExpressAdapterOptions = {}): ExpressMiddleware {
   const server = new AskSqlServer(config);
 
   const applyCors = (req: ExpressLikeReq, res: ExpressLikeRes): void => {
@@ -60,12 +59,18 @@ export function asksqlMiddleware(
     let credentialed = false;
     if (adapter.cors === true) {
       allow = origin || '*';
-  } else if (typeof adapter.cors === 'string') {
-  if (adapter.cors === '*') allow = '*';
-  else if (adapter.cors === origin) { allow = origin; credentialed = true; }
-  } else if (Array.isArray(adapter.cors)) {
-  if (adapter.cors.includes(origin)) { allow = origin; credentialed = true; }
-  }
+    } else if (typeof adapter.cors === 'string') {
+      if (adapter.cors === '*') allow = '*';
+      else if (adapter.cors === origin) {
+        allow = origin;
+        credentialed = true;
+      }
+    } else if (Array.isArray(adapter.cors)) {
+      if (adapter.cors.includes(origin)) {
+        allow = origin;
+        credentialed = true;
+      }
+    }
     if (!allow) return;
     res.setHeader('Access-Control-Allow-Origin', allow);
     res.setHeader('Vary', 'Origin');
@@ -74,7 +79,7 @@ export function asksqlMiddleware(
       'Access-Control-Allow-Headers',
       (adapter.allowHeaders ?? ['Content-Type', 'Authorization', 'X-User']).join(', '),
     );
-  if (credentialed) res.setHeader('Access-Control-Allow-Credentials', 'true');
+    if (credentialed) res.setHeader('Access-Control-Allow-Credentials', 'true');
   };
 
   return (req, res, next) => {
@@ -90,11 +95,16 @@ export function asksqlMiddleware(
       // and run, using the caller's cookies. Requiring application/json forces a
       // preflight, which our CORS policy then decides on.
       if (req.method === 'POST') {
-        const ct = String(req.headers['content-type'] ?? '').split(';')[0]!.trim().toLowerCase();
+        const ct = String(req.headers['content-type'] ?? '')
+          .split(';')[0]!
+          .trim()
+          .toLowerCase();
         if (ct !== 'application/json') {
           res.statusCode = 415;
           res.setHeader('Content-Type', 'application/json');
-          res.end(JSON.stringify({ error: { code: 'INVALID_INPUT', userMessage: 'Send this request as application/json.' } }));
+          res.end(
+            JSON.stringify({ error: { code: 'INVALID_INPUT', userMessage: 'Send this request as application/json.' } }),
+          );
           return;
         }
       }
@@ -151,10 +161,25 @@ function toServerRequest(req: ExpressLikeReq, maxBodyBytes: number): ServerReque
     headers,
     json: async () => {
       // Prefer body-parser output when present; else read the raw stream.
-      if (req.body !== undefined && req.body !== null && req.body !== '') return req.body;
+      // An upstream express.json() bypasses readRawJson's size guard; re-check its serialized size.
+      if (req.body !== undefined && req.body !== null && req.body !== '') {
+        enforceBodyCap(req.body, maxBodyBytes);
+        return req.body;
+      }
       return await readRawJson(req, maxBodyBytes);
     },
   };
+}
+
+/** Reject a pre-parsed (upstream body-parser) body whose serialized size exceeds the cap. */
+function enforceBodyCap(body: unknown, maxBytes: number): void {
+  const raw = typeof body === 'string' ? body : JSON.stringify(body) ?? '';
+  if (Buffer.byteLength(raw, 'utf8') > maxBytes) {
+    throw new AskSqlError('INVALID_INPUT', {
+      userMessage: 'The request body is too large.',
+      detail: `body exceeded ${maxBytes} bytes`,
+    });
+  }
 }
 
 function readRawJson(req: ExpressLikeReq, maxBytes: number): Promise<unknown> {
@@ -163,20 +188,24 @@ function readRawJson(req: ExpressLikeReq, maxBytes: number): Promise<unknown> {
     let total = 0;
     let aborted = false;
     req.on('data', (c) => {
-        if (aborted) return;
-        const buf = Buffer.from(c as Buffer);
-        total += buf.length;
-        // Bound memory: reject once the body exceeds the configured cap instead
-        // of buffering an arbitrarily large request (memory DoS).
-        if (total > maxBytes) {
-          aborted = true;
-          reject(new AskSqlError('INVALID_INPUT', { userMessage: 'The request body is too large.', detail: `body exceeded ${maxBytes} bytes` }));
-          return;
-    }
-  chunks.push(buf);
-  });
+      if (aborted) return;
+      const buf = Buffer.from(c as Buffer);
+      total += buf.length;
+      // Reject once the body exceeds the cap instead of buffering an unbounded request.
+      if (total > maxBytes) {
+        aborted = true;
+        reject(
+          new AskSqlError('INVALID_INPUT', {
+            userMessage: 'The request body is too large.',
+            detail: `body exceeded ${maxBytes} bytes`,
+          }),
+        );
+        return;
+      }
+      chunks.push(buf);
+    });
     req.on('end', () => {
-        if (aborted) return;
+      if (aborted) return;
       const raw = Buffer.concat(chunks).toString('utf8').trim();
       if (!raw) return resolve({});
       try {

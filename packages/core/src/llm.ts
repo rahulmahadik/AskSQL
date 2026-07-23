@@ -162,10 +162,14 @@ export function classifyLlmError(err: unknown, callerAborted: boolean): AskSqlEr
   }
   // A wrong/unpulled model id is the most common first-setup mistake. Without this it
   // fell through to the generic status arm and read as a transient "try again" outage.
-  if (status === 404 || /\bmodel\b[^.]*(?:not found|does ?n[o']?t exist|unknown|unavailable)|no such model|try pulling/iu.test(msg)) {
+  if (
+    status === 404 ||
+    /\bmodel\b[^.]*(?:not found|does ?n[o']?t exist|unknown|unavailable)|no such model|try pulling/iu.test(msg)
+  ) {
     return new AskSqlError('CONFIG_ERROR', {
       detail: `model not found: ${msg.slice(0, 300)}`,
-      userMessage: 'That AI model was not found at this provider. Check the model name in your AskSQL configuration - the id must match exactly (for a local model, pull it first).',
+      userMessage:
+        'That AI model was not found at this provider. Check the model name in your AskSQL configuration - the id must match exactly (for a local model, pull it first).',
       cause: err,
     });
   }
@@ -231,7 +235,7 @@ async function callOnce(input: LlmCallInput, signal: AbortSignal, omitTemperatur
 
   // The AI SDK does not throw stream-phase failures into the consuming loop; it
   // routes them onto the stream as error parts and ends it. Consuming the
-  // FULL stream and throwing on the error part surfaces the real failure
+  // full stream and throwing on the error part surfaces the real failure
   // (quota, mid-stream 5xx, dropped socket) instead of letting it masquerade
   // as a truncated-but-successful completion - and stops token emission at
   // the exact point the provider failed.
@@ -296,15 +300,19 @@ export async function callModel(input: LlmCallInput): Promise<LlmCallResult> {
     let hardTimer: ReturnType<typeof setTimeout> | undefined;
     let abortReject: (() => void) | null = null;
     try {
-      // HARD timeout + caller-abort race: a provider or CustomModel that
-      // IGNORES cancellation still can't hang the caller - neither on timeout
+      // Hard timeout + caller-abort race: a provider or CustomModel that
+      // ignores cancellation still can't hang the caller - neither on timeout
       // nor when the caller aborts. (The signal is aborted too, best-effort.)
       const result = await Promise.race([
         callOnce(input, controller.signal, omitTemperature),
         new Promise<never>((_, reject) => {
           hardTimer = setTimeout(() => {
             timedOut = true;
-            reject(new AskSqlError('LLM_TIMEOUT', { detail: `hard timeout after ${timeoutMs}ms (model ignored cancellation)` }));
+            reject(
+              new AskSqlError('LLM_TIMEOUT', {
+                detail: `hard timeout after ${timeoutMs}ms (model ignored cancellation)`,
+              }),
+            );
           }, timeoutMs);
           // Node only; a browser timer id has no unref. Never keep the
           // process alive just for the safety-net timer.
@@ -324,7 +332,7 @@ export async function callModel(input: LlmCallInput): Promise<LlmCallResult> {
       }
       const callerAborted = input.signal?.aborted ?? false;
       // A provider that rejects `temperature` (reasoning models behind names
-      // the id-sniff can't see, e.g. Azure deployments) gets ONE re-send
+      // the id-sniff can't see, e.g. Azure deployments) gets one re-send
       // without it. Does not consume a retry attempt; the flag makes it
       // impossible to loop.
       if (!callerAborted && !omitTemperature && isUnsupportedTemperatureError(err)) {

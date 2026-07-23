@@ -13,11 +13,26 @@ function tbl(name: string, cols: string[], schema?: string): TableInfo {
     schema,
     kind: 'table',
     columns: cols.map((c) => ({ name: c, dbType: 'text', nullable: true })),
-    primaryKey: [], foreignKeys: [], uniques: [], checks: [], indexes: [], source: 'db',
+    primaryKey: [],
+    foreignKeys: [],
+    uniques: [],
+    checks: [],
+    indexes: [],
+    source: 'db',
   };
 }
 function cat(tables: TableInfo[]): SchemaCatalog {
-  return { engine: 'postgres', schemas: ['public'], tables, enums: [], sequences: [], triggers: [], routines: [], warnings: [], fetchedAt: 'now' };
+  return {
+    engine: 'postgres',
+    schemas: ['public'],
+    tables,
+    enums: [],
+    sequences: [],
+    triggers: [],
+    routines: [],
+    warnings: [],
+    fetchedAt: 'now',
+  };
 }
 const CAT = cat([
   tbl('services', ['service_id', 'service_name', 'service_price', 'is_active']),
@@ -54,7 +69,9 @@ describe('firstUnknownColumn - round 2: alias resolution', () => {
   });
   it('flags a column qualified to the wrong table in a join', () => {
     // canceled lives on appointments, not services -> s.canceled is wrong
-    expect(find('SELECT s.canceled FROM services s JOIN appointments a ON a.service_id = s.service_id')?.column).toBe('canceled');
+    expect(find('SELECT s.canceled FROM services s JOIN appointments a ON a.service_id = s.service_id')?.column).toBe(
+      'canceled',
+    );
   });
   it('passes every column correctly qualified across a 4-table join', () => {
     const sql = `SELECT c.first_name, e.last_name, s.service_name, a.start_time
@@ -72,13 +89,20 @@ describe('firstUnknownColumn - round 3: fail-open (never block a valid query)', 
     expect(find('SELECT service_name, made_up_col FROM services')?.column).toBe('made_up_col');
   });
   it('catches an unqualified invented column across a join when every table is known', () => {
-    expect(find('SELECT made_up_col FROM appointments JOIN services ON appointments.service_id = services.service_id')?.column).toBe('made_up_col');
+    expect(
+      find('SELECT made_up_col FROM appointments JOIN services ON appointments.service_id = services.service_id')
+        ?.column,
+    ).toBe('made_up_col');
   });
   it('fails open on an unqualified column when a joined table is not in the catalog', () => {
-    expect(find('SELECT made_up_col FROM services JOIN bookings ON services.service_id = bookings.service_id')).toBeNull();
+    expect(
+      find('SELECT made_up_col FROM services JOIN bookings ON services.service_id = bookings.service_id'),
+    ).toBeNull();
   });
   it('allows an unqualified column that belongs to the other joined table', () => {
-    expect(find('SELECT first_name FROM appointments JOIN employees ON appointments.employee_id = employees.employee_id')).toBeNull();
+    expect(
+      find('SELECT first_name FROM appointments JOIN employees ON appointments.employee_id = employees.employee_id'),
+    ).toBeNull();
   });
   it('does not flag a SELECT alias used in ORDER BY / HAVING', () => {
     expect(find('SELECT count(*) AS n FROM services ORDER BY n DESC')).toBeNull();
@@ -130,7 +154,7 @@ describe('firstUnknownColumn - round 5: robustness', () => {
     expect(find('SELECT S.Made_Up FROM Services S')?.column).toBe('made_up');
   });
   it('ignores system-catalog references', () => {
-    expect(find("SELECT information_schema.columns.column_name FROM information_schema.columns")).toBeNull();
+    expect(find('SELECT information_schema.columns.column_name FROM information_schema.columns')).toBeNull();
   });
   it('unions columns for a table name that exists in two schemas', () => {
     const c = cat([tbl('orders', ['id', 'a'], 'shop'), tbl('orders', ['id', 'b'], 'archive')]);
@@ -151,9 +175,11 @@ describe('firstUnknownColumn - round 5: robustness', () => {
 
 describe('firstUnknownColumn - round 7: adversarial / production hardening', () => {
   it('resolves self-joins per alias', () => {
-    const sql = 'SELECT e1.first_name, e2.last_name FROM employees e1 JOIN employees e2 ON e1.employee_id = e2.employee_id';
+    const sql =
+      'SELECT e1.first_name, e2.last_name FROM employees e1 JOIN employees e2 ON e1.employee_id = e2.employee_id';
     expect(find(sql)).toBeNull();
-    const bad = 'SELECT e1.first_name, e2.made_up FROM employees e1 JOIN employees e2 ON e1.employee_id = e2.employee_id';
+    const bad =
+      'SELECT e1.first_name, e2.made_up FROM employees e1 JOIN employees e2 ON e1.employee_id = e2.employee_id';
     expect(find(bad)?.column).toBe('made_up');
   });
   it('checks columns inside window functions and CASE expressions', () => {

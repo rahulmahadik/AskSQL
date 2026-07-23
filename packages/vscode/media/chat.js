@@ -1,14 +1,9 @@
 /*
- * AskSQL panel - rendering only.
+ * AskSQL panel - rendering only. It posts questions to the extension host and
+ * renders what comes back; it never sees a credential or builds SQL.
  *
- * This script never sees a credential, never touches a database, and never
- * builds SQL. It posts a question to the extension host and renders what comes
- * back.
- *
- * Every value from the database or the model is written with textContent, never
- * innerHTML. Row data is untrusted by definition (it is whatever is in the
- * user's tables), and a cell containing markup must render as text, not as
- * markup. There is no innerHTML in this file on purpose.
+ * Invariant: no innerHTML in this file. Row and model data is untrusted, so
+ * every value is written with textContent (or createElement/NS).
  */
 
 (function () {
@@ -37,6 +32,35 @@
     return n;
   };
 
+  // Inline markdown (**bold**, __bold__, `code`) as DOM nodes, never innerHTML:
+  // model text is untrusted, so every run is appended via textContent.
+  function mdInline(parent, text) {
+    const re = /\*\*(.+?)\*\*|(?<!\w)__(.+?)__(?!\w)|`([^`]+)`/gsu;
+    let last = 0;
+    let m;
+    while ((m = re.exec(text)) !== null) {
+      if (m.index > last) parent.appendChild(document.createTextNode(text.slice(last, m.index)));
+      if (m[3] !== undefined) parent.appendChild(el('code', null, m[3]));
+      else parent.appendChild(el('b', null, m[1] !== undefined ? m[1] : m[2]));
+      last = re.lastIndex;
+    }
+    if (last < text.length) parent.appendChild(document.createTextNode(text.slice(last)));
+  }
+
+  // A block of explanation text: strip a redundant leading "Explanation:" heading,
+  // render "- "/"* " lines as bullets, keep everything else as inline-markdown lines.
+  function renderMarkdown(cls, text) {
+    const box = el('div', cls);
+    const body = text.replace(/^\s*(\*\*|__)?\s*Explanation\s*(\*\*|__)?\s*:\s*/iu, '');
+    for (const line of body.split('\n')) {
+      const bullet = /^\s*[-*]\s+/u.test(line);
+      const row = el('div', bullet ? 'md-bullet' : null);
+      mdInline(row, bullet ? line.replace(/^\s*[-*]\s+/u, '') : line);
+      box.appendChild(row);
+    }
+    return box;
+  }
+
   // A copy glyph, built as an SVG element (theme-coloured via currentColor, no innerHTML).
   function copyIcon() {
     const NS = 'http://www.w3.org/2000/svg';
@@ -45,7 +69,10 @@
     svg.setAttribute('width', '13');
     svg.setAttribute('height', '13');
     svg.setAttribute('aria-hidden', 'true');
-    for (const [x, y] of [[3, 3], [5.5, 5.5]]) {
+    for (const [x, y] of [
+      [3, 3],
+      [5.5, 5.5],
+    ]) {
       const r = document.createElementNS(NS, 'rect');
       r.setAttribute('x', x);
       r.setAttribute('y', y);
@@ -63,21 +90,15 @@
   const nearBottom = () => $log.scrollHeight - $log.scrollTop - $log.clientHeight < 80;
   // Soft scroll: follow new content only when the user is already at the bottom,
   // so incoming results do not yank them away from something they scrolled up to read.
-  const scroll = () => { if (nearBottom()) $log.scrollTop = $log.scrollHeight; };
-  const scrollForce = () => { $log.scrollTop = $log.scrollHeight; };
+  const scroll = () => {
+    if (nearBottom()) $log.scrollTop = $log.scrollHeight;
+  };
+  const scrollForce = () => {
+    $log.scrollTop = $log.scrollHeight;
+  };
 
-  /**
-   * One button. While a turn runs it IS the cancel button - red, and the only
-   * thing you can press. A live "Ask" during processing invites a second
-   * question that would silently cancel the first.
-   */
-  /**
-   * The textarea stays editable during a turn so you can compose the next question
-   * while this one runs; only SUBMITTING is blocked until the turn finishes or is
-   * cancelled (see ask() and the Enter handler). The database picker still freezes -
-   * switching it mid-turn would answer against a database you are no longer looking
-   * at - and stays disabled when there is only one database to pick.
-   */
+  // The textarea stays editable during a turn (only submitting is blocked); the
+  // database picker freezes so a mid-turn switch cannot re-target the answer.
   function applyLock() {
     $conn.disabled = busy || connCount <= 1;
   }
@@ -125,15 +146,15 @@
 
   /** The SQL block, its explanation, and the Open-in-editor action. */
   function renderSql(m) {
-    // Capture THIS turn's SQL, connection, and element now, so the buttons act
-    // on this turn even after later turns change lastSql or the selected database.
+    // Capture this turn's SQL, connection, and element now, so the buttons act
+    // on this turn even after later turns change the selected database.
     const sql = m.sql;
     // The host says which connection this SQL ran against; the live dropdown is
     // only a fallback and can be re-pointed by a mid-turn state refresh.
-    const connId = m.connectionId || ($conn.value || undefined);
+    const connId = m.connectionId || $conn.value || undefined;
     const myTurn = turn;
     turn.appendChild(el('pre', 'sql', sql));
-    if (m.explanation) turn.appendChild(el('div', 'explain', m.explanation));
+    if (m.explanation) turn.appendChild(renderMarkdown('explain', m.explanation));
     if (m.autoLimited) turn.appendChild(el('div', 'note', 'A row limit was added automatically.'));
     const actions = el('div', 'actions');
     const open = el('button', 'secondary', 'Open SQL in editor');
@@ -143,7 +164,7 @@
     // English cannot work; a button can.
     const plan = el('button', 'secondary', 'Explain plan');
     plan.addEventListener('click', () => {
-      const planId = 'plan-' + (++planSeq);
+      const planId = 'plan-' + ++planSeq;
       planTurns.set(planId, myTurn);
       vscode.postMessage({ type: 'plan', sql, connectionId: connId, planId });
     });
@@ -155,9 +176,15 @@
       const approvalId = m.approvalId;
       const appr = el('div', 'actions approval');
       const run = el('button', null, 'Run');
-      run.addEventListener('click', () => { vscode.postMessage({ type: 'approve', ok: true, approvalId }); appr.remove(); });
+      run.addEventListener('click', () => {
+        vscode.postMessage({ type: 'approve', ok: true, approvalId });
+        appr.remove();
+      });
       const no = el('button', 'secondary', "Don't run");
-      no.addEventListener('click', () => { vscode.postMessage({ type: 'approve', ok: false, approvalId }); appr.remove(); });
+      no.addEventListener('click', () => {
+        vscode.postMessage({ type: 'approve', ok: false, approvalId });
+        appr.remove();
+      });
       appr.appendChild(run);
       appr.appendChild(no);
       turn.appendChild(appr);
@@ -167,10 +194,12 @@
   function newTurn(question, connection) {
     $empty.classList.add('hidden');
     turn = el('div', 'turn');
+    turn.appendChild(el('div', 'role', 'You'));
     turn.appendChild(el('div', 'q', question));
-    // With several databases configured, an answer with no attribution is a
-    // trap: it reads as if it came from whichever one you had in mind.
+    // With several databases configured, attribute the answer to its connection.
     if (connection) turn.appendChild(el('div', 'against', connection));
+    // Everything appended after this (SQL, result, explanation) is the answer.
+    turn.appendChild(el('div', 'role assistant', 'AskSQL'));
     $log.appendChild(turn);
     // Cap the log so a long session does not grow the DOM without bound.
     while ($log.children.length > 60) $log.removeChild($log.firstChild);
@@ -193,10 +222,9 @@
     $q.style.height = Math.min($q.scrollHeight, 128) + 'px';
   }
 
-  // Enter sends, Shift+Enter is a newline. isComposing guards IME input (a Japanese
-  // or Chinese composition ends on Enter and must not fire the question). While a
-  // turn is running Enter is swallowed - it neither submits (you can only submit
-  // once the turn ends or is cancelled) nor drops a stray newline into your draft.
+  // Enter sends, Shift+Enter is a newline. isComposing guards IME input (a
+  // composition ends on Enter and must not fire the question). While a turn is
+  // running, Enter is swallowed entirely.
   $q.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
       e.preventDefault();
@@ -241,7 +269,9 @@
       connCount = m.connections.length;
       // Mirror the selected option's tooltip onto the select, so the endpoint shows
       // on the closed control (native macOS select popups ignore option titles).
-      const reflectTitle = () => { $conn.title = ($conn.selectedOptions[0] && $conn.selectedOptions[0].title) || ''; };
+      const reflectTitle = () => {
+        $conn.title = ($conn.selectedOptions[0] && $conn.selectedOptions[0].title) || '';
+      };
       reflectTitle();
       $conn.onchange = reflectTitle;
       applyLock();
@@ -258,7 +288,16 @@
 
     if (m.type === 'copied') {
       const btn = $log.querySelector('button.iconbtn[data-result="' + m.resultId + '"]');
-      if (btn) { btn.classList.add('ok'); setTimeout(() => btn.classList.remove('ok'), 1000); }
+      if (btn) {
+        btn.classList.add('ok');
+        setTimeout(() => btn.classList.remove('ok'), 1000);
+      }
+      return;
+    }
+
+    if (m.type === 'prefill') {
+      $q.value = String(m.text ?? '');
+      $q.focus();
       return;
     }
 
@@ -279,7 +318,10 @@
       clearProgress();
       // Never lose the SQL: if the turn ended before the result rendered it
       // (an error, a refusal, a stop), show it now.
-      if (pendingSql && turn) { renderSql(pendingSql); pendingSql = null; }
+      if (pendingSql && turn) {
+        renderSql(pendingSql);
+        pendingSql = null;
+      }
       // The turn is over: any approval buttons still in the log are stale.
       for (const a of $log.querySelectorAll('.approval')) a.remove();
       setBusy(false);
@@ -295,7 +337,10 @@
       // no mapping is stale (the conversation was cleared) - drop it, never fall
       // back to the live turn, or a cleared plan attaches to an unrelated question.
       let t = turn;
-      if (m.planId) { t = planTurns.get(m.planId); if (!t) return; }
+      if (m.planId) {
+        t = planTurns.get(m.planId);
+        if (!t) return;
+      }
       const p = t.querySelector('.progress');
       if (p) p.remove();
       t.appendChild(el('div', 'progress', m.label));
@@ -305,7 +350,10 @@
 
     if (m.type === 'sql') {
       clearProgress();
-      if (m.placement === 'after') { pendingSql = m; return; }
+      if (m.placement === 'after') {
+        pendingSql = m;
+        return;
+      }
       renderSql(m);
       scroll();
       return;
@@ -335,7 +383,7 @@
           turn.appendChild(el('div', 'note', bits.join(', ') + '.'));
 
           const actions = el('div', 'actions');
-          // Bind THIS turn's result id, so the buttons act on this turn's rows.
+          // Bind this turn's result id, so the buttons act on this turn's rows.
           const rid = m.resultId;
           const copy = el('button', 'secondary iconbtn');
           copy.title = 'Copy table with headers';
@@ -356,7 +404,10 @@
           turn.appendChild(actions);
         }
       }
-      if (pendingSql) { renderSql(pendingSql); pendingSql = null; }
+      if (pendingSql) {
+        renderSql(pendingSql);
+        pendingSql = null;
+      }
       scroll();
       return;
     }
@@ -365,12 +416,39 @@
       // Render into the turn whose button was clicked. A stale planId (conversation
       // cleared) is dropped, not attached to the current turn.
       let t = turn;
-      if (m.planId) { t = planTurns.get(m.planId); planTurns.delete(m.planId); if (!t) return; }
+      if (m.planId) {
+        t = planTurns.get(m.planId);
+        planTurns.delete(m.planId);
+        if (!t) return;
+      }
       const p = t.querySelector('.progress');
       if (p) p.remove();
       t.appendChild(el('div', 'note', 'Query plan, straight from the database:'));
       t.appendChild(renderTable(m.columns, m.rows));
-      if (m.rowCount > m.shown) t.appendChild(el('div', 'note', `Plan has ${m.rowCount} lines, showing the first ${m.shown}.`));
+      if (m.rowCount > m.shown)
+        t.appendChild(el('div', 'note', `Plan has ${m.rowCount} lines, showing the first ${m.shown}.`));
+      scroll();
+      return;
+    }
+
+    if (m.type === 'schemaAnswer') {
+      clearProgress();
+      turn.appendChild(renderMarkdown('explain', m.answer));
+      if (m.unknownReferences && m.unknownReferences.length) {
+        const names = m.unknownReferences.join(', ');
+        turn.appendChild(
+          el(
+            'div',
+            'note',
+            m.isSchemaChange
+              ? 'Proposed names not in your current schema: ' + names + '. AskSQL is read-only and ran nothing.'
+              : 'Heads up: this mentioned names not in your schema (' + names + '), so treat those with caution.',
+          ),
+        );
+      }
+      turn.appendChild(
+        el('div', 'note', 'Generated from your schema by the model - no query was run, so treat it as guidance.'),
+      );
       scroll();
       return;
     }
@@ -391,11 +469,16 @@
     if (m.type === 'error') {
       clearProgress();
       // Show the query that failed above the failure, not below it.
-      if (pendingSql) { renderSql(pendingSql); pendingSql = null; }
+      if (pendingSql) {
+        renderSql(pendingSql);
+        pendingSql = null;
+      }
       const box = el('div', m.guard ? 'err guard' : 'err', m.message);
       turn.appendChild(box);
       if (m.guard) {
-        turn.appendChild(el('div', 'note', 'AskSQL only runs read-only queries, so this was refused before it reached the database.'));
+        turn.appendChild(
+          el('div', 'note', 'AskSQL only runs read-only queries, so this was refused before it reached the database.'),
+        );
       }
       if (m.suggestedSql) {
         turn.appendChild(el('div', 'note', 'A corrected query is suggested:'));

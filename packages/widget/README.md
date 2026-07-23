@@ -1,12 +1,14 @@
 # @asksql/widget
 
-The vanilla-JavaScript embed for [AskSQL](https://github.com/rahulmahadik/AskSQL) — ask a database
+The vanilla-JavaScript embed for [AskSQL](https://github.com/rahulmahadik/AskSQL): ask a database
 questions in plain language from any web page, React or not. The chat renders inside a **shadow root**,
 so your page's CSS and the widget's CSS never collide.
 
+![AskSQL widget: a CSV queried entirely in the browser with DuckDB-WASM, question to SQL to results, nothing leaving the tab](https://github.com/rahulmahadik/AskSQL/raw/HEAD/docs/screenshots/07-browser-duckdb.png)
+
 ## Use it with a script tag
 
-The browser build is self-contained (React and react-dom are bundled in — nothing else to load):
+The browser build is self-contained (React and react-dom are bundled in, nothing else to load):
 
 ```html
 <div id="asksql"></div>
@@ -39,7 +41,7 @@ const widget = mount({ target: '#asksql', serverUrl: '/asksql' });
 ## What it needs
 
 The widget talks to an **[`@asksql/server`](https://www.npmjs.com/package/@asksql/server)** sidecar at
-`serverUrl` — that is where your database connections and model credentials live. Nothing sensitive is
+`serverUrl`: that is where your database connections and model credentials live. Nothing sensitive is
 shipped to the browser. If the widget cannot reach the server it reports a network/CORS error rather
 than failing silently; make sure `serverUrl` is reachable from the page and that the server allows the
 page's origin (CORS).

@@ -37,6 +37,10 @@ export interface SqliteStatement {
   raw?(toggle?: boolean): SqliteStatement;
   /** Result-column metadata in order; `.name` is the (alias-aware) output name. */
   columns?(): { name: string }[];
+  /** better-sqlite3: read INTEGER columns as BigInt so 64-bit values keep full precision. */
+  safeIntegers?(toggle?: boolean): SqliteStatement;
+  /** node:sqlite: the equivalent BigInt read toggle. */
+  setReadBigInts?(readBigInts: boolean): void;
 }
 
 /** Minimal driver surface satisfied by better-sqlite3 and node:sqlite. */
@@ -93,7 +97,7 @@ export class SqliteConnector implements Connector {
     this.id = config.id;
     this.name = config.name;
     // Display hint: the file's base name (a passed-in handle has no name).
-    this.database = config.file ? (config.file.split(/[\\/]/).pop() || undefined) : undefined;
+    this.database = config.file ? config.file.split(/[\\/]/).pop() || undefined : undefined;
     this.db = config.database ?? null;
   }
 
@@ -150,7 +154,9 @@ export class SqliteConnector implements Connector {
 
   private rows(sql: string, params: unknown[] = []): Record<string, unknown>[] {
     try {
-      return this.handle().prepare(sql).all(...params) as Record<string, unknown>[];
+      return this.handle()
+        .prepare(sql)
+        .all(...params) as Record<string, unknown>[];
     } catch (err) {
       throw AskSqlError.from(err, 'DB_QUERY_ERROR');
     }
@@ -191,7 +197,13 @@ export class SqliteConnector implements Connector {
       const ddl = o['sql'] == null ? null : String(o['sql']);
       if (type === 'trigger') {
         const def = ddl ?? '';
-        const timing = /\bBEFORE\b/i.test(def) ? 'BEFORE' : /\bAFTER\b/i.test(def) ? 'AFTER' : /\bINSTEAD OF\b/i.test(def) ? 'INSTEAD OF' : 'UNKNOWN';
+        const timing = /\bBEFORE\b/i.test(def)
+          ? 'BEFORE'
+          : /\bAFTER\b/i.test(def)
+            ? 'AFTER'
+            : /\bINSTEAD OF\b/i.test(def)
+              ? 'INSTEAD OF'
+              : 'UNKNOWN';
         const events: string[] = [];
         for (const ev of ['INSERT', 'UPDATE', 'DELETE']) if (new RegExp(`\\b${ev}\\b`, 'i').test(def)) events.push(ev);
         const tblMatch = /\bON\s+["'`]?(\w+)["'`]?/i.exec(def);
@@ -230,7 +242,10 @@ export class SqliteConnector implements Connector {
           }
         });
       }
-      const primaryKey = cols.filter((c) => Number(c['pk']) > 0).sort((a, b) => Number(a['pk']) - Number(b['pk'])).map((c) => String(c['name']));
+      const primaryKey = cols
+        .filter((c) => Number(c['pk']) > 0)
+        .sort((a, b) => Number(a['pk']) - Number(b['pk']))
+        .map((c) => String(c['name']));
       const foreignKeys: ForeignKeyInfo[] = groupFks(fks);
       const indexes: IndexInfo[] = idxList.map((ix) => {
         const idxName = String(ix['name']);
@@ -279,6 +294,9 @@ export class SqliteConnector implements Connector {
     let valueRows: unknown[][];
     try {
       const stmt = this.handle().prepare(sql);
+      // Read integers as BigInt so 64-bit values aren't truncated to a lossy JS number; shapeSqliteValue narrows safe ones back.
+      stmt.safeIntegers?.(true);
+      stmt.setReadBigInts?.(true);
       const meta = typeof stmt.columns === 'function' ? stmt.columns() : null;
       if (meta && typeof stmt.raw === 'function') {
         // Positional rows keep duplicate column names distinct (object rows collapse them).
@@ -290,7 +308,9 @@ export class SqliteConnector implements Connector {
         colNames = meta ? meta.map((c) => String(c.name)) : objRows.length > 0 ? Object.keys(objRows[0]!) : [];
         valueRows = objRows.map((r) => colNames.map((name) => r[name]));
         if (meta && new Set(colNames).size !== colNames.length) {
-          warnings.push('Two result columns share a name, so only one value is shown for them. Add column aliases (AS) to tell them apart.');
+          warnings.push(
+            'Two result columns share a name, so only one value is shown for them. Add column aliases (AS) to tell them apart.',
+          );
         }
       }
     } catch (err) {
@@ -302,7 +322,11 @@ export class SqliteConnector implements Connector {
           cause: err,
         });
       }
-      throw new AskSqlError('DB_QUERY_ERROR', { userMessage: `The query failed: ${msg.slice(0, 200)}`, detail: msg, cause: err });
+      throw new AskSqlError('DB_QUERY_ERROR', {
+        userMessage: `The query failed: ${msg.slice(0, 200)}`,
+        detail: msg,
+        cause: err,
+      });
     }
 
     const truncated = valueRows.length > maxRows;
@@ -345,8 +369,13 @@ function groupFks(fks: Record<string, unknown>[]): ForeignKeyInfo[] {
   return [...byId.values()].map((g) => ({ columns: g.cols, refTable: g.table, refColumns: g.refCols }));
 }
 
+const MIN_SAFE_BIGINT = BigInt(Number.MIN_SAFE_INTEGER);
+const MAX_SAFE_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
+/** A BigInt that round-trips through a JS number losslessly. */
+const fitsJsNumber = (v: bigint): boolean => v >= MIN_SAFE_BIGINT && v <= MAX_SAFE_BIGINT;
+
 function inferKind(sample: unknown): ResultColumn['kind'] {
-  if (typeof sample === 'bigint') return 'bigint';
+  if (typeof sample === 'bigint') return fitsJsNumber(sample) ? 'number' : 'bigint';
   if (typeof sample === 'number') return 'number';
   if (typeof sample === 'boolean') return 'boolean';
   if (sample instanceof Uint8Array || Buffer.isBuffer(sample)) return 'binary';
@@ -356,7 +385,8 @@ function inferKind(sample: unknown): ResultColumn['kind'] {
 
 function shapeSqliteValue(v: unknown): CellValue {
   if (v === null || v === undefined) return null;
-  if (typeof v === 'bigint') return v.toString();
+  // Narrow to number when it fits; keep a genuine 64-bit value as a string so precision is not lost.
+  if (typeof v === 'bigint') return fitsJsNumber(v) ? Number(v) : v.toString();
   if (Buffer.isBuffer(v) || v instanceof Uint8Array) {
     const buf = Buffer.from(v as Uint8Array);
     return { __binary: { bytes: buf.length, hexPreview: buf.subarray(0, 16).toString('hex') } };

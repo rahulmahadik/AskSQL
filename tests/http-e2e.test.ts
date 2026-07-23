@@ -15,7 +15,8 @@ const PG_URL = process.env['ASKSQL_PG_URL'] ?? 'postgres://postgres:root@localho
 
 const mockModel: CustomModel = async ({ prompt }) => {
   // Answer the two questions the test asks, grounded in the shop schema.
-  if (/how many customers/i.test(prompt)) return '```sql\nSELECT count(*) AS n FROM shop.customers\n```\nCounts customers.';
+  if (/how many customers/i.test(prompt))
+    return '```sql\nSELECT count(*) AS n FROM shop.customers\n```\nCounts customers.';
   return '```sql\nSELECT full_name FROM shop.customers ORDER BY full_name\n```\nAll customer names.';
 };
 

@@ -11,6 +11,12 @@ React components and hooks for [AskSQL](https://github.com/rahulmahadik/AskSQL):
 
 Light and dark themes, CSS-variable theming, CSP nonce support.
 
+![AskSQL React chat: a plain-language question turned into SQL, with the results and a chart below it](https://github.com/rahulmahadik/AskSQL/raw/HEAD/docs/screenshots/02-results-table-light.png)
+
+Turn on `answerSchemaQuestions` and questions that aren't a data query - "how are the tables related?", "summarize this database", even "how would I add an index?" - get a grounded, read-only explanation from the schema instead of an error. No query is run, and names it can't find are flagged:
+
+![AskSQL React chat answering "How are the tables related?" with a plain-language explanation of the foreign-key relationships - no query, no results table](https://github.com/rahulmahadik/AskSQL/raw/HEAD/docs/screenshots/10-schema-answer-light.png)
+
 ```bash
 npm i @asksql/core @asksql/react
 ```
@@ -60,7 +66,7 @@ function MyUi() {
 
 ## Reaching the server
 
-When the sidecar is unreachable — wrong `baseUrl`, server down, or a **CORS** rejection — the transport
+When the sidecar is unreachable (wrong `baseUrl`, server down, or a **CORS** rejection), the transport
 surfaces a typed error with `code: 'NETWORK_ERROR'` and an actionable `userMessage`, distinct from an
 HTTP error the server returned. The components render it inline; with the hook, read it from the turn's
 `error.userMessage`. If you see `NETWORK_ERROR` in the browser, check that `baseUrl` is correct and that

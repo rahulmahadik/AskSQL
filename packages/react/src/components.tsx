@@ -4,7 +4,7 @@
  * empty + error states; light/dark via CSS variables.
  */
 
-import { useEffect, useMemo, useRef, useState, type JSX } from 'react';
+import { useEffect, useMemo, useRef, useState, type JSX, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import type { ResultSet } from '@asksql/core';
 import { formatCell, toCsv } from './format.js';
 import { ensureStyles } from './styles.js';
@@ -12,6 +12,40 @@ import { useAskSql, type Turn } from './useAskSql.js';
 import { ResultChart, isChartable } from './ResultChart.js';
 import { useSavedQueries } from './saved.js';
 import type { ConnectionSummary, Transport } from './client.js';
+
+/** Split one line into **bold** / `code` / plain runs. Text-only, no dangerouslySetInnerHTML. */
+function inlineMarkdown(line: string): JSX.Element[] {
+  const re = /\*\*(.+?)\*\*|(?<!\w)__(.+?)__(?!\w)|`([^`]+)`/gsu;
+  const out: JSX.Element[] = [];
+  let last = 0;
+  let m: RegExpExecArray | null;
+  let key = 0;
+  while ((m = re.exec(line)) !== null) {
+    if (m.index > last) out.push(<span key={key++}>{line.slice(last, m.index)}</span>);
+    if (m[3] !== undefined) out.push(<code key={key++}>{m[3]}</code>);
+    else out.push(<strong key={key++}>{m[1] ?? m[2]}</strong>);
+    last = re.lastIndex;
+  }
+  if (last < line.length) out.push(<span key={key++}>{line.slice(last)}</span>);
+  return out;
+}
+
+/** Render explanation markdown: drop a redundant leading "Explanation:", bullets for "- "/"* " lines. */
+function Markdown({ text, className }: { text: string; className?: string }): JSX.Element {
+  const body = text.replace(/^\s*(\*\*|__)?\s*Explanation\s*(\*\*|__)?\s*:\s*/iu, '');
+  return (
+    <div className={className}>
+      {body.split('\n').map((line, i) => {
+        const bullet = /^\s*[-*]\s+/u.test(line);
+        return (
+          <div key={i} className={bullet ? 'asksql-md-bullet' : undefined}>
+            {inlineMarkdown(bullet ? line.replace(/^\s*[-*]\s+/u, '') : line)}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 export interface AskSqlChatProps {
   readonly transport: Transport;
@@ -25,6 +59,8 @@ export interface AskSqlChatProps {
   readonly nonce?: string;
   /** Show a connection picker when the sidecar exposes more than one. */
   readonly showConnectionPicker?: boolean;
+  /** Answer questions that aren't a data query in plain language from the schema. Off by default. */
+  readonly answerSchemaQuestions?: boolean;
 }
 
 export function AskSqlChat(props: AskSqlChatProps): JSX.Element {
@@ -33,32 +69,36 @@ export function AskSqlChat(props: AskSqlChatProps): JSX.Element {
   const [activeConn, setActiveConn] = useState<string | undefined>(props.connectionId);
 
   useEffect(() => {
-      if (props.showConnectionPicker === false) return;
-      let alive = true;
-      props.transport
+    if (props.showConnectionPicker === false) return;
+    let alive = true;
+    props.transport
       .listConnections()
       .then((c) => {
-          if (!alive) return;
-          setConnections(c);
-          if (!props.connectionId && c.length > 0) setActiveConn(c[0]!.id);
-  })
-.catch(() => {
-    /* picker just stays hidden if listing fails */
-  });
-return () => {
-  alive = false;
-  };
+        if (!alive) return;
+        setConnections(c);
+        if (!props.connectionId && c.length > 0) setActiveConn(c[0]!.id);
+      })
+      .catch(() => {
+        /* picker just stays hidden if listing fails */
+      });
+    return () => {
+      alive = false;
+    };
   }, [props.transport, props.connectionId, props.showConnectionPicker]);
 
-const { turns, busy, ask, run, editSql, planFor, cancel } = useAskSql({
+  const { turns, busy, ask, run, editSql, planFor, cancel } = useAskSql({
     transport: props.transport,
     connectionId: activeConn ?? props.connectionId,
     requireApproval: props.requireApproval,
+    answerSchemaQuestions: props.answerSchemaQuestions,
   });
-const { save } = useSavedQueries();
+  const { save } = useSavedQueries();
   const [text, setText] = useState('');
   const threadRef = useRef<HTMLDivElement>(null);
   const showPicker = (props.showConnectionPicker ?? true) && connections.length > 1;
+  // Gate EXPLAIN on the active connection's capability; unknown (no report) -> allow.
+  const activeCaps = connections.find((c) => c.id === (activeConn ?? props.connectionId))?.capabilities;
+  const canPlan = activeCaps?.supportsExplain ?? true;
 
   useEffect(() => {
     threadRef.current?.scrollTo({ top: threadRef.current.scrollHeight });
@@ -75,34 +115,51 @@ const { save } = useSavedQueries();
 
   return (
     <div className="asksql-root asksql-chat" {...(themeAttr ? { 'data-asksql-theme': themeAttr } : {})}>
-    {showPicker && (
+      {showPicker && (
         <div className="asksql-picker">
-        <label>
-        Database{' '}
-        <select value={activeConn} onChange={(e) => setActiveConn(e.target.value)} aria-label="Choose database connection">
-        {connections.map((c) => (
-              <option key={c.id} value={c.id}>{c.name} ({[c.engine, c.database].filter(Boolean).join(' · ')})</option>
-    ))}
-</select>
-</label>
-</div>
-  )}
+          <label>
+            Database{' '}
+            <select
+              value={activeConn}
+              onChange={(e) => setActiveConn(e.target.value)}
+              aria-label="Choose database connection"
+            >
+              {connections.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name} ({[c.engine, c.database].filter(Boolean).join(' · ')})
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+      )}
       <div className="asksql-thread" ref={threadRef}>
         {turns.length === 0 ? (
-          <EmptyState suggestions={props.suggestions} onPick={(s) => { setText(''); void ask(s); }} />
+          <EmptyState
+            suggestions={props.suggestions}
+            onPick={(s) => {
+              setText('');
+              void ask(s);
+            }}
+          />
         ) : (
-        turns.map((t) => (
+          turns.map((t) => (
             <TurnView
-            key={t.id}
-            turn={t}
-            onRun={() => void run(t.id)}
-            onEdit={(sql) => editSql(t.id, sql)}
-            onPlan={() => void planFor(t.id)}
-            onSave={() => t.sql && save({ name: t.question.slice(0, 60), question: t.question, sql: t.sql, connectionId: activeConn })}
-            busy={busy}
-            requireApproval={props.requireApproval}
+              key={t.id}
+              turn={t}
+              onRun={() => void run(t.id)}
+              onRetry={() => (t.sql ? void run(t.id) : void ask(t.question))}
+              onEdit={(sql) => editSql(t.id, sql)}
+              onPlan={() => void planFor(t.id)}
+              onSave={() =>
+                t.sql &&
+                save({ name: t.question.slice(0, 60), question: t.question, sql: t.sql, connectionId: activeConn })
+              }
+              busy={busy}
+              canPlan={canPlan}
+              requireApproval={props.requireApproval}
             />
-        ))
+          ))
         )}
       </div>
       <div className="asksql-input">
@@ -117,19 +174,28 @@ const { save } = useSavedQueries();
             }
           }}
           aria-label="Ask a question about your data"
-          disabled={busy}
         />
         {busy ? (
-          <button className="asksql-btn" onClick={cancel} aria-label="Cancel">Stop</button>
+          <button className="asksql-btn" onClick={cancel} aria-label="Cancel">
+            Stop
+          </button>
         ) : (
-          <button className="asksql-btn asksql-btn-primary" onClick={submit} disabled={!text.trim()} aria-label="Send">Ask</button>
+          <button className="asksql-btn asksql-btn-primary" onClick={submit} disabled={!text.trim()} aria-label="Send">
+            Ask
+          </button>
         )}
       </div>
     </div>
   );
 }
 
-function EmptyState({ suggestions, onPick }: { suggestions?: readonly string[]; onPick: (s: string) => void }): JSX.Element {
+function EmptyState({
+  suggestions,
+  onPick,
+}: {
+  suggestions?: readonly string[];
+  onPick: (s: string) => void;
+}): JSX.Element {
   return (
     <div className="asksql-empty">
       <h3>Ask your database anything</h3>
@@ -137,7 +203,9 @@ function EmptyState({ suggestions, onPick }: { suggestions?: readonly string[]; 
       {suggestions && suggestions.length > 0 && (
         <div className="asksql-actions" style={{ justifyContent: 'center', marginTop: 12 }}>
           {suggestions.map((s) => (
-            <button key={s} className="asksql-btn" onClick={() => onPick(s)}>{s}</button>
+            <button key={s} className="asksql-btn" onClick={() => onPick(s)}>
+              {s}
+            </button>
           ))}
         </div>
       )}
@@ -145,74 +213,178 @@ function EmptyState({ suggestions, onPick }: { suggestions?: readonly string[]; 
   );
 }
 
-function TurnView({ turn, onRun, onEdit, onPlan, onSave, busy, requireApproval }: { turn: Turn; onRun: () => void; onEdit: (sql: string) => void; onPlan: () => void; onSave: () => void; busy: boolean; requireApproval?: boolean }): JSX.Element {
+function TurnView({
+  turn,
+  onRun,
+  onRetry,
+  onEdit,
+  onPlan,
+  onSave,
+  busy,
+  canPlan,
+  requireApproval,
+}: {
+  turn: Turn;
+  onRun: () => void;
+  onRetry: () => void;
+  onEdit: (sql: string) => void;
+  onPlan: () => void;
+  onSave: () => void;
+  busy: boolean;
+  canPlan: boolean;
+  requireApproval?: boolean;
+}): JSX.Element {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
   const [saved, setSaved] = useState(false);
   return (
     <div className="asksql-turn">
+      <div className="asksql-role">You</div>
       <div className="asksql-q">{turn.question}</div>
+      <div className="asksql-role asksql-role-assistant">AskSQL</div>
       <div className="asksql-a">
         {turn.phase === 'thinking' && (
-          <div className="asksql-stage"><span className="asksql-spinner" />{stageLabel(turn.stage)}</div>
+          <div className="asksql-stage">
+            <span className="asksql-spinner" />
+            {stageLabel(turn.stage)}
+          </div>
         )}
         {turn.sql && (
           <>
-          {editing ? (
+            {editing ? (
               <div className="asksql-sqlblock">
-              <div className="asksql-sqlhead"><span>Edit SQL</span></div>
-              <textarea
-              className="asksql-sqledit"
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              spellCheck={false}
-              aria-label="Edit SQL"
-              />
-              <div className="asksql-actions" style={{ padding: 8 }}>
-              <button className="asksql-btn asksql-btn-primary" onClick={() => { onEdit(draft); setEditing(false); }}>Save</button>
-              <button className="asksql-btn" onClick={() => setEditing(false)}>Cancel</button>
+                <div className="asksql-sqlhead">
+                  <span>Edit SQL</span>
+                </div>
+                <textarea
+                  className="asksql-sqledit"
+                  value={draft}
+                  onChange={(e) => setDraft(e.target.value)}
+                  spellCheck={false}
+                  aria-label="Edit SQL"
+                />
+                <div className="asksql-actions" style={{ padding: 8 }}>
+                  <button
+                    className="asksql-btn asksql-btn-primary"
+                    onClick={() => {
+                      onEdit(draft);
+                      setEditing(false);
+                    }}
+                  >
+                    Save
+                  </button>
+                  <button className="asksql-btn" onClick={() => setEditing(false)}>
+                    Cancel
+                  </button>
+                </div>
               </div>
-              </div>
-          ) : (
-            <SqlBlock sql={turn.sql} />
-        )}
-    {turn.explanation && !editing && <div className="asksql-explain">{turn.explanation}</div>}
-            {turn.autoLimited && <div className="asksql-warn">A row limit was added automatically - export to get everything.</div>}
-            {!editing && (turn.phase === 'sql_ready' || turn.phase === 'done' || turn.phase === 'error') && (
+            ) : (
+              <SqlBlock sql={turn.sql} />
+            )}
+            {turn.explanation && !editing && <Markdown className="asksql-explain" text={turn.explanation} />}
+            {turn.autoLimited && (
+              <div className="asksql-warn">A row limit was added automatically - export to get everything.</div>
+            )}
+            {!editing &&
+              (turn.phase === 'sql_ready' ||
+                turn.phase === 'done' ||
+                turn.phase === 'error' ||
+                turn.phase === 'stopped') && (
               <div className="asksql-actions">
                 {turn.phase === 'sql_ready' && requireApproval && (
-                  <button className="asksql-btn asksql-btn-primary" onClick={onRun} disabled={busy}>Run query</button>
+                  <button className="asksql-btn asksql-btn-primary" onClick={onRun} disabled={busy}>
+                    Run query
+                  </button>
                 )}
-                <button className="asksql-btn" onClick={() => { setDraft(turn.sql!); setEditing(true); }} disabled={busy}>Edit</button>
-                <button className="asksql-btn" onClick={onPlan} disabled={busy || turn.planning}>{turn.planning ? 'Explaining...' : 'Plan'}</button>
-                <button className="asksql-btn" onClick={() => { onSave(); setSaved(true); setTimeout(() => setSaved(false), 1200); }}>{saved ? 'Saved' : 'Save'}</button>
+                <button
+                  className="asksql-btn"
+                  onClick={() => {
+                    setDraft(turn.sql!);
+                    setEditing(true);
+                  }}
+                  disabled={busy}
+                >
+                  Edit
+                </button>
+                {canPlan && (
+                  <button className="asksql-btn" onClick={onPlan} disabled={busy || turn.planning}>
+                    {turn.planning ? 'Explaining...' : 'Plan'}
+                  </button>
+                )}
+                <button
+                  className="asksql-btn"
+                  onClick={() => {
+                    onSave();
+                    setSaved(true);
+                    setTimeout(() => setSaved(false), 1200);
+                  }}
+                >
+                  {saved ? 'Saved' : 'Save'}
+                </button>
+              </div>
+            )}
+            {turn.plan && (
+              <div className="asksql-sqlblock">
+                <div className="asksql-sqlhead">
+                  <span>Query plan</span>
                 </div>
-        )}
-    {turn.plan && (
-        <div className="asksql-sqlblock">
-        <div className="asksql-sqlhead"><span>Query plan</span></div>
-        <pre className="asksql-sqlcode">{turn.plan}</pre>
+                <pre className="asksql-sqlcode">{turn.plan}</pre>
               </div>
             )}
             {turn.phase === 'running' && (
-              <div className="asksql-stage"><span className="asksql-spinner" />Running...</div>
+              <div className="asksql-stage">
+                <span className="asksql-spinner" />
+                Running...
+              </div>
             )}
           </>
         )}
         {turn.result && <ResultTable result={turn.result} />}
+        {turn.schemaAnswer && (
+          <>
+            <Markdown className="asksql-explain" text={turn.schemaAnswer.answer} />
+            {turn.schemaAnswer.unknownReferences.length > 0 && (
+              <div className="asksql-warn">
+                {turn.schemaAnswer.isSchemaChange
+                  ? `Proposed names not in your current schema: ${turn.schemaAnswer.unknownReferences.join(', ')}. AskSQL is read-only and ran nothing.`
+                  : `Heads up: this mentioned names not in your schema (${turn.schemaAnswer.unknownReferences.join(', ')}), so treat those with caution.`}
+              </div>
+            )}
+            <div className="asksql-note">
+              Generated from your schema by the model - no query was run, so treat it as guidance.
+            </div>
+          </>
+        )}
         {turn.error && (
           <div className="asksql-error" role="alert">
             {turn.error.userMessage}
-            {turn.error.retryable && <> <button className="asksql-btn" style={{ marginLeft: 8 }} onClick={onRun} disabled={busy}>Retry</button></>}
+            {turn.error.retryable && (
+              <>
+                {' '}
+                <button className="asksql-btn" style={{ marginLeft: 8 }} onClick={onRetry} disabled={busy}>
+                  Retry
+                </button>
+              </>
+            )}
             {turn.suggestedSql && (
               <div style={{ marginTop: 8 }}>
-                <div className="asksql-meta" style={{ marginBottom: 4 }}>A corrected query is suggested:</div>
+                <div className="asksql-meta" style={{ marginBottom: 4 }}>
+                  A corrected query is suggested:
+                </div>
                 <SqlBlock sql={turn.suggestedSql} />
-                <button className="asksql-btn asksql-btn-primary" style={{ marginTop: 6 }} disabled={busy} onClick={() => onEdit(turn.suggestedSql!)}>Apply suggested fix</button>
+                <button
+                  className="asksql-btn asksql-btn-primary"
+                  style={{ marginTop: 6 }}
+                  disabled={busy}
+                  onClick={() => onEdit(turn.suggestedSql!)}
+                >
+                  Apply suggested fix
+                </button>
               </div>
             )}
           </div>
         )}
+        {turn.phase === 'stopped' && <div className="asksql-note">Stopped.</div>}
       </div>
     </div>
   );
@@ -220,13 +392,20 @@ function TurnView({ turn, onRun, onEdit, onPlan, onSave, busy, requireApproval }
 
 function stageLabel(stage?: string): string {
   switch (stage) {
-    case 'catalog': return 'Reading schema...';
-    case 'prune': return 'Finding relevant tables...';
-    case 'llm': return 'Writing SQL...';
-    case 'repair': return 'Refining SQL...';
-    case 'guard': return 'Checking safety...';
-    case 'done': return 'Ready';
-    default: return 'Thinking...';
+    case 'catalog':
+      return 'Reading schema...';
+    case 'prune':
+      return 'Finding relevant tables...';
+    case 'llm':
+      return 'Writing SQL...';
+    case 'repair':
+      return 'Refining SQL...';
+    case 'guard':
+      return 'Checking safety...';
+    case 'done':
+      return 'Ready';
+    default:
+      return 'Thinking...';
   }
 }
 
@@ -248,7 +427,9 @@ export function SqlBlock({ sql }: { sql: string }): JSX.Element {
           {copied ? 'Copied' : 'Copy'}
         </button>
       </div>
-      <pre className="asksql-sqlcode"><code>{sql}</code></pre>
+      <pre className="asksql-sqlcode">
+        <code>{sql}</code>
+      </pre>
     </div>
   );
 }
@@ -273,41 +454,61 @@ export function ResultTable({ result }: { result: ResultSet }): JSX.Element {
 
   return (
     <div>
-    {view === 'chart' && chartable ? (
+      {view === 'chart' && chartable ? (
         <ResultChart result={result} />
-    ) : (
-      <div className="asksql-tablewrap">
-        <table className="asksql-table">
-          <thead>
-            <tr>
-              {result.columns.map((c, i) => (
-                <th key={`${c.name}-${i}`}>{c.name}<small>{c.kind}</small></th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {result.rows.map((row, ri) => (
-              <tr key={ri}>
-                {row.map((cell, ci) => {
-                  const d = formatCell(cell, result.columns[ci]);
-                  return <td key={ci} className={`asksql-cell-${d.kind}`} title={d.title}>{d.text}</td>;
-                })}
+      ) : (
+        <div className="asksql-tablewrap">
+          <table className="asksql-table">
+            <thead>
+              <tr>
+                {result.columns.map((c, i) => (
+                  <th key={`${c.name}-${i}`}>
+                    {c.name}
+                    <small>{c.kind}</small>
+                  </th>
+                ))}
               </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-  )}
+            </thead>
+            <tbody>
+              {result.rows.map((row, ri) => (
+                <tr key={ri}>
+                  {row.map((cell, ci) => {
+                    const d = formatCell(cell, result.columns[ci]);
+                    return (
+                      <td key={ci} className={`asksql-cell-${d.kind}`} title={d.title}>
+                        {d.text}
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
       <div className="asksql-meta">
-        <span>{result.rowCount} row{result.rowCount === 1 ? '' : 's'}{result.truncated ? ' (truncated)' : ''}</span>
+        <span>
+          {result.rowCount} row{result.rowCount === 1 ? '' : 's'}
+          {result.truncated ? ' (truncated)' : ''}
+        </span>
         <span>{result.durationMs} ms</span>
         {chartable && (
-            <button className="asksql-btn" style={{ padding: '2px 8px', fontSize: 12 }} onClick={() => setView((v) => (v === 'table' ? 'chart' : 'table'))}>
+          <button
+            className="asksql-btn"
+            style={{ padding: '2px 8px', fontSize: 12 }}
+            onClick={() => setView((v) => (v === 'table' ? 'chart' : 'table'))}
+          >
             {view === 'table' ? 'Chart' : 'Table'}
-            </button>
-  )}
-        <button className="asksql-btn" style={{ padding: '2px 8px', fontSize: 12 }} onClick={download}>Export CSV</button>
-        {result.warnings.map((w, i) => <span key={i} className="asksql-warn">{w}</span>)}
+          </button>
+        )}
+        <button className="asksql-btn" style={{ padding: '2px 8px', fontSize: 12 }} onClick={download}>
+          Export CSV
+        </button>
+        {result.warnings.map((w, i) => (
+          <span key={i} className="asksql-warn">
+            {w}
+          </span>
+        ))}
       </div>
     </div>
   );
@@ -329,9 +530,14 @@ export interface AskSqlBubbleProps extends AskSqlChatProps {
 let bubbleMounted = false;
 
 /** Compute corner-anchored inline styles for the button and the panel. */
-function bubblePlacement(position: BubblePosition, offset: AskSqlBubbleProps['offset'], zIndex: number, buttonPx: number) {
-  const x = typeof offset === 'number' ? offset : offset?.x ?? 24;
-  const y = typeof offset === 'number' ? offset : offset?.y ?? 24;
+function bubblePlacement(
+  position: BubblePosition,
+  offset: AskSqlBubbleProps['offset'],
+  zIndex: number,
+  buttonPx: number,
+) {
+  const x = typeof offset === 'number' ? offset : (offset?.x ?? 24);
+  const y = typeof offset === 'number' ? offset : (offset?.y ?? 24);
   const [vert, horiz] = position.split('-') as ['top' | 'bottom', 'left' | 'right'];
   const btn: Record<string, string | number> = { position: 'fixed', zIndex, [vert]: y, [horiz]: x };
   // Panel opens from the same corner, offset past the button.
@@ -339,16 +545,22 @@ function bubblePlacement(position: BubblePosition, offset: AskSqlBubbleProps['of
   return { btn, panel };
 }
 
+const FOCUSABLE = 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
+
 export function AskSqlBubble(props: AskSqlBubbleProps): JSX.Element | null {
   useEffect(() => ensureStyles(undefined, props.nonce), [props.nonce]);
   const [open, setOpen] = useState(false);
   const [duplicate, setDuplicate] = useState(false);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const wasOpen = useRef(false);
 
   useEffect(() => {
-      // Single-instance guard.
+    // Single-instance guard.
     if (bubbleMounted) {
       setDuplicate(true);
-      if (typeof console !== 'undefined') console.warn('[asksql] Multiple <AskSqlBubble/> mounted; only the first renders.');
+      if (typeof console !== 'undefined')
+        console.warn('[asksql] Multiple <AskSqlBubble/> mounted; only the first renders.');
       return;
     }
     bubbleMounted = true;
@@ -357,23 +569,76 @@ export function AskSqlBubble(props: AskSqlBubbleProps): JSX.Element | null {
     };
   }, []);
 
+  // Move focus into the dialog on open; restore it to the trigger on close.
+  useEffect(() => {
+    if (open) panelRef.current?.focus();
+    else if (wasOpen.current) triggerRef.current?.focus();
+    wasOpen.current = open;
+  }, [open]);
+
+  // Trap Tab within the dialog and close on Escape.
+  const onPanelKeyDown = (e: ReactKeyboardEvent) => {
+    if (e.key === 'Escape') {
+      e.stopPropagation();
+      setOpen(false);
+      return;
+    }
+    if (e.key !== 'Tab' || !panelRef.current) return;
+    const items = Array.from(panelRef.current.querySelectorAll<HTMLElement>(FOCUSABLE)).filter(
+      (el) => !el.hasAttribute('disabled'),
+    );
+    if (items.length === 0) return;
+    const first = items[0]!;
+    const last = items[items.length - 1]!;
+    const active = document.activeElement;
+    if (e.shiftKey && (active === first || active === panelRef.current)) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && active === last) {
+      e.preventDefault();
+      first.focus();
+    }
+  };
+
   if (duplicate) return null;
 
   const themeAttr = props.theme && props.theme !== 'auto' ? props.theme : undefined;
-  const { btn, panel } = bubblePlacement(props.position ?? 'bottom-right', props.offset, props.zIndex ?? 2147483000, 56);
+  const { btn, panel } = bubblePlacement(
+    props.position ?? 'bottom-right',
+    props.offset,
+    props.zIndex ?? 2147483000,
+    56,
+  );
 
   return (
     <div className="asksql-root" {...(themeAttr ? { 'data-asksql-theme': themeAttr } : {})}>
       {!open && (
-          <button className="asksql-bubble-btn" style={btn} onClick={() => setOpen(true)} aria-label="Open database chat">
+        <button
+          ref={triggerRef}
+          className="asksql-bubble-btn"
+          style={btn}
+          onClick={() => setOpen(true)}
+          aria-label="Open database chat"
+        >
           {props.icon ?? '💬'}
         </button>
       )}
       {open && (
-          <div className="asksql-bubble-panel" style={panel} role="dialog" aria-label={props.title ?? 'Database chat'}>
+        <div
+          ref={panelRef}
+          className="asksql-bubble-panel"
+          style={panel}
+          role="dialog"
+          aria-modal="true"
+          aria-label={props.title ?? 'Database chat'}
+          tabIndex={-1}
+          onKeyDown={onPanelKeyDown}
+        >
           <div className="asksql-bubble-head">
             <span>{props.title ?? 'Ask your database'}</span>
-            <button onClick={() => setOpen(false)} aria-label="Close">×</button>
+            <button onClick={() => setOpen(false)} aria-label="Close">
+              ×
+            </button>
           </div>
           <div style={{ flex: 1, minHeight: 0 }}>
             <AskSqlChat {...props} />

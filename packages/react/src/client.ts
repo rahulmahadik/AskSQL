@@ -11,12 +11,7 @@
  * agnostic.
  */
 
-import type {
-  AskSqlEngine,
-  ExecuteOptions,
-  ResultSet,
-  SchemaCatalog,
-} from '@asksql/core';
+import type { AskSqlEngine, CapabilityFlags, ExecuteOptions, ResultSet, SchemaAnswer, SchemaCatalog } from '@asksql/core';
 
 export interface ConnectionSummary {
   readonly id: string;
@@ -24,6 +19,8 @@ export interface ConnectionSummary {
   readonly engine: string;
   /** The connected database / file name, for display. */
   readonly database?: string;
+  /** Dialect capabilities (e.g. supportsExplain); absent when the sidecar doesn't report them. */
+  readonly capabilities?: CapabilityFlags;
 }
 
 export interface ChatEvent {
@@ -51,6 +48,8 @@ export interface Transport {
   chat(params: AskParams): AsyncIterable<ChatEvent>;
   execute(sql: string, opts?: ExecuteOptions & { connectionId?: string; question?: string }): Promise<ResultSet>;
   explain(sql: string, connectionId?: string): Promise<string>;
+  /** Grounded plain-language answer about the schema (never runs a query). */
+  explainSchema(question: string, connectionId?: string): Promise<SchemaAnswer>;
 }
 
 // ---------------------------------------------------------------------------
@@ -108,22 +107,23 @@ export class HttpTransport implements Transport {
   private url(path: string, query?: Record<string, string | undefined>): string {
     const base = this.opts.baseUrl.replace(/\/$/, '');
     const qs = query
-      ? '?' + Object.entries(query).filter(([, v]) => v !== undefined).map(([k, v]) => `${k}=${encodeURIComponent(v!)}`).join('&')
+      ? '?' +
+        Object.entries(query)
+          .filter(([, v]) => v !== undefined)
+          .map(([k, v]) => `${k}=${encodeURIComponent(v!)}`)
+          .join('&')
       : '';
     return `${base}${path}${qs}`;
   }
 
   private headers(json = true): Record<string, string> {
-    return {...(json ? { 'Content-Type': 'application/json' } : {}),...(this.opts.headers ?? {}) };
+    return { ...(json ? { 'Content-Type': 'application/json' } : {}), ...(this.opts.headers ?? {}) };
   }
 
   /**
-   * fetch rejects (rather than returning a non-ok Response) only for
-   * transport-level failures: the server is unreachable, the baseUrl is wrong,
-   * or CORS blocked the request before any response existed. Left raw, those
-   * surface as a bare `TypeError: Failed to fetch` that looks identical to a
-   * 5xx. Turn them into a typed NETWORK_ERROR with an actionable message; a user
-   * abort is passed through untouched.
+   * fetch rejects only for transport-level failures (server unreachable, bad
+   * baseUrl, CORS). Map those to a typed NETWORK_ERROR with an actionable
+   * message; a user abort passes through untouched.
    */
   private async doFetch(url: string, init?: RequestInit): Promise<Response> {
     try {
@@ -145,7 +145,13 @@ export class HttpTransport implements Transport {
     if (!res.ok) {
       const err = (body['error'] as { userMessage?: string; code?: string; retryable?: boolean }) ?? {};
       const suggestedSql = typeof body['suggestedSql'] === 'string' ? (body['suggestedSql'] as string) : undefined;
-      throw new TransportError(err.code ?? 'HTTP_ERROR', err.userMessage ?? `Request failed (${res.status}).`, res.status, suggestedSql, err.retryable);
+      throw new TransportError(
+        err.code ?? 'HTTP_ERROR',
+        err.userMessage ?? `Request failed (${res.status}).`,
+        res.status,
+        suggestedSql,
+        err.retryable,
+      );
     }
     return body as T;
   }
@@ -157,7 +163,9 @@ export class HttpTransport implements Transport {
   }
 
   async schema(connectionId?: string, refresh?: boolean): Promise<SchemaCatalog> {
-    const res = await this.doFetch(this.url('/schema', { connectionId, refresh: refresh ? '1' : undefined }), { headers: this.headers(false) });
+    const res = await this.doFetch(this.url('/schema', { connectionId, refresh: refresh ? '1' : undefined }), {
+      headers: this.headers(false),
+    });
     const body = await this.unwrap<{ catalog: SchemaCatalog }>(res);
     return body.catalog;
   }
@@ -175,7 +183,7 @@ export class HttpTransport implements Transport {
     }
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
-    const parser = new SseParser;
+    const parser = new SseParser();
     for (;;) {
       const { value, done } = await reader.read();
       if (done) break;
@@ -206,6 +214,15 @@ export class HttpTransport implements Transport {
     const body = await this.unwrap<{ explanation: string }>(res);
     return body.explanation;
   }
+
+  async explainSchema(question: string, connectionId?: string): Promise<SchemaAnswer> {
+    const res = await this.doFetch(this.url('/explainSchema'), {
+      method: 'POST',
+      headers: this.headers(),
+      body: JSON.stringify({ question, connectionId }),
+    });
+    return this.unwrap<SchemaAnswer>(res);
+  }
 }
 
 export class TransportError extends Error {
@@ -230,7 +247,13 @@ export class LocalTransport implements Transport {
   constructor(private readonly engine: AskSqlEngine) {}
 
   async listConnections(): Promise<ConnectionSummary[]> {
-    return this.engine.connectors.map((c) => ({ id: c.id, name: c.name, engine: c.engine, database: c.database }));
+    return this.engine.connectors.map((c) => ({
+      id: c.id,
+      name: c.name,
+      engine: c.engine,
+      database: c.database,
+      capabilities: c.capabilities,
+    }));
   }
   schema(connectionId?: string, refresh?: boolean): Promise<SchemaCatalog> {
     return this.engine.catalog(connectionId, { refresh: refresh ?? false });
@@ -261,7 +284,12 @@ export class LocalTransport implements Transport {
       })
       .catch((err: unknown) => {
         const e = err as { code?: string; userMessage?: string; retryable?: boolean };
-        push({ type: 'error', code: e.code ?? 'LLM_UNAVAILABLE', userMessage: e.userMessage ?? 'Something went wrong.', retryable: e.retryable ?? false });
+        push({
+          type: 'error',
+          code: e.code ?? 'LLM_UNAVAILABLE',
+          userMessage: e.userMessage ?? 'Something went wrong.',
+          retryable: e.retryable ?? false,
+        });
         push({ type: 'done' });
         done = true;
         notify?.();
@@ -282,5 +310,8 @@ export class LocalTransport implements Transport {
   }
   explain(sql: string, connectionId?: string): Promise<string> {
     return this.engine.explain(sql, { connectionId });
+  }
+  explainSchema(question: string, connectionId?: string): Promise<SchemaAnswer> {
+    return this.engine.explainSchema(question, { connectionId });
   }
 }

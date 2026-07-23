@@ -1,14 +1,10 @@
 /**
  * Server sidecar contract. The host app owns identity; AskSQL enforces
- * scope. Credentials live ONLY here - never serialized to a
+ * scope. Credentials live only here - never serialized to a
  * client-visible response.
  */
 
-import type {
-  AskSqlConfig,
-  Connector,
-  HistoryEntry,
-} from '@asksql/core';
+import type { AskSqlConfig, Connector, HistoryEntry } from '@asksql/core';
 
 /** Result of the host's auth hook. */
 export interface AuthContext {
@@ -20,7 +16,7 @@ export interface AuthContext {
 /**
  * The host resolves identity from its own session/JWT and returns the
  * caller's scope. Throwing (or returning null) denies the request - the
- * server NEVER fails open to all connections.
+ * server never fails open to all connections.
  */
 export type AuthHook = (req: ServerRequest) => Promise<AuthContext | null> | AuthContext | null;
 

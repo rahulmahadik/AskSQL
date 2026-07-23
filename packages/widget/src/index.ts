@@ -10,13 +10,7 @@
 
 import { createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import {
-  AskSqlBubble,
-  AskSqlChat,
-  HttpTransport,
-  ASKSQL_CSS,
-  type AskSqlChatProps,
-} from '@asksql/react';
+import { AskSqlBubble, AskSqlChat, HttpTransport, ASKSQL_CSS, type AskSqlChatProps } from '@asksql/react';
 
 export interface MountOptions {
   /** CSS selector or element to mount into. Defaults to document.body (bubble). */
@@ -60,10 +54,10 @@ export function mount(options: MountOptions): WidgetHandle {
   host.appendChild(mountPoint);
   const shadow = mountPoint.attachShadow({ mode: 'closed' });
 
-// Inject styles INTO the shadow root only, so nothing leaks either
-// direction. We do NOT call ensureStyles(document) here - that would append
-// a <style> to the host page's <head>, defeating the shadow isolation this
-// whole module exists to provide.
+  // Inject styles INTO the shadow root only, so nothing leaks either
+  // direction. We do NOT call ensureStyles(document) here - that would append
+  // a <style> to the host page's <head>, defeating the shadow isolation this
+  // whole module exists to provide.
   const style = document.createElement('style');
   if (options.nonce) style.setAttribute('nonce', options.nonce);
   style.textContent = ASKSQL_CSS;
@@ -92,7 +86,7 @@ export function mount(options: MountOptions): WidgetHandle {
           position: options.position,
           offset: options.offset,
           zIndex: options.zIndex,
-});
+        });
   root.render(el);
 
   return {

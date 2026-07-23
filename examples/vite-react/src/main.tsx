@@ -15,7 +15,8 @@ function App() {
       <div style={{ flex: 1, minHeight: 0 }}>
         <AskSqlChat
           transport={transport}
-          suggestions={['How many customers are there?', 'Total revenue from paid orders', 'Orders per customer']}
+          answerSchemaQuestions
+          suggestions={['How many customers are there?', 'How are the tables related?', 'Summarize this database']}
         />
       </div>
       {/* The same engine, as a floating chat-head you can drop on any page. */}
