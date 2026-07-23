@@ -1,5 +1,13 @@
 # @asksql/mcp
 
+## 0.1.6
+
+### Patch Changes
+
+- Internal refactors and minor fixes: the MySQL connector's schema introspection and value shaping now live in dedicated modules, consistent with the other connectors; plus small SQLite, widget, and MCP cleanups.
+- Updated dependencies [4294cdc]
+  - @asksql/core@0.3.2
+
 ## 0.1.5
 
 ### Patch Changes

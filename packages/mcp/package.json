@@ -1,6 +1,6 @@
 {
   "name": "@asksql/mcp",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Model Context Protocol server for AskSQL: exposes list-connections / schema / query / run as MCP tools so AI agents can safely query registered databases (read-only, guarded).",
   "type": "module",
   "main": "./dist/index.js",

@@ -1,6 +1,6 @@
 {
   "name": "@asksql/mysql",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "MySQL connector for AskSQL. information_schema introspection + read-only session enforcement.",
   "type": "module",
   "main": "./dist/index.js",

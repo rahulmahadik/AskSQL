@@ -1,6 +1,6 @@
 {
   "name": "@asksql/oracle",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Oracle Database connector for AskSQL. Data-dictionary schema introspection (tables, views, columns, primary/foreign keys, comments) + read-only transaction enforcement. Uses the oracledb driver in pure-JS Thin mode (no Instant Client).",
   "type": "module",
   "main": "./dist/index.js",
