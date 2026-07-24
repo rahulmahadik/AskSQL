@@ -1,0 +1,204 @@
+package com.rahulmahadik.asksql.ide.engine
+
+import com.rahulmahadik.asksql.ide.model.SchemaCatalog
+import net.sf.jsqlparser.expression.ExpressionVisitorAdapter
+import net.sf.jsqlparser.parser.CCJSqlParserUtil
+import net.sf.jsqlparser.schema.Column
+import net.sf.jsqlparser.statement.select.ParenthesedSelect
+import net.sf.jsqlparser.statement.select.PlainSelect
+import net.sf.jsqlparser.statement.select.Select
+import net.sf.jsqlparser.statement.select.SetOperationList
+import net.sf.jsqlparser.util.TablesNamesFinder
+
+/**
+ * The hallucination floor: catches references to tables/columns absent from the real schema before
+ * the query reaches the database, so the repair loop can re-prompt. Fails open on every ambiguity.
+ */
+object HallucinationChecks {
+
+    data class UnknownColumn(val table: String, val column: String, val available: List<String>)
+
+    private val SYSTEM_SCHEMAS = setOf("information_schema", "pg_catalog", "mysql", "performance_schema", "sys")
+    private val CTE_NAME = Regex("""([A-Za-z_][A-Za-z0-9_]*)\s+as\s*\(""", RegexOption.IGNORE_CASE)
+    private val WITH_BLOCK = Regex("""\bwith\s+(?:recursive\s+)?([\s\S]*?)\bselect\b""", RegexOption.IGNORE_CASE)
+
+    private fun collectCteNames(sql: String): Set<String> {
+        val block = WITH_BLOCK.find(sql)?.groupValues?.get(1) ?: return emptySet()
+        return CTE_NAME.findAll(block).map { it.groupValues[1].lowercase() }.toSet()
+    }
+
+    /** JSqlParser preserves quote characters in identifiers (`"Users"`, `` `name` ``); must be undone before comparing against the catalog's bare names. */
+    private fun unquoteSegment(segment: String): String {
+        val s = segment.trim()
+        return if (s.length >= 2 && ((s[0] == '"' && s.last() == '"') || (s[0] == '`' && s.last() == '`'))) {
+            s.substring(1, s.length - 1)
+        } else {
+            s
+        }
+    }
+
+    private fun unquoteDotted(raw: String): String = raw.split('.').joinToString(".") { unquoteSegment(it) }
+
+    /**
+     * @param tables the base relations the guard already found via
+     *   `TablesNamesFinder` (avoids asking the caller to re-parse just for this).
+     */
+    fun firstUnknownTable(sql: String, catalog: SchemaCatalog, tables: List<String>): String? {
+        val known = mutableSetOf<String>()
+        for (t in catalog.tables) {
+            known += t.name.lowercase()
+            if (t.schema != null) known += "${t.schema.lowercase()}.${t.name.lowercase()}"
+        }
+        val cteNames = collectCteNames(sql)
+
+        for (entry in tables) {
+            // TablesNamesFinder yields "schema.table" or "table" with quote characters preserved;
+            // unquote each dot-segment before normalizing case.
+            val parts = entry.split(".").map { unquoteSegment(it).lowercase() }
+            val schema = if (parts.size > 1) parts[parts.size - 2] else null
+            val name = parts.last()
+            if (name.isBlank()) continue
+            if (cteNames.contains(name)) continue
+            val qualified = if (schema != null) "$schema.$name" else name
+            if (known.contains(qualified) || known.contains(name)) continue
+            if (schema != null && SYSTEM_SCHEMAS.contains(schema)) continue
+            if (name.startsWith("sqlite_") || name.startsWith("pg_")) continue
+            return if (schema != null) "$schema.$name" else name
+        }
+        return null
+    }
+
+    fun firstUnknownColumn(sql: String, catalog: SchemaCatalog): UnknownColumn? {
+        val statement = try {
+            CCJSqlParserUtil.parse(sql)
+        } catch (e: Exception) {
+            return null // the guard already parsed it; never double-block here
+        }
+        if (statement !is Select) return null
+
+        val byTable = mutableMapOf<String, MutableSet<String>>()
+        for (t in catalog.tables) {
+            val set = byTable.getOrPut(t.name.lowercase()) { mutableSetOf() }
+            for (c in t.columns) set += c.name.lowercase()
+        }
+
+        val cteNames = collectCteNames(sql)
+        val aliases = Regex("""\bas\s+["'`]?([A-Za-z_][A-Za-z0-9_]*)["'`]?""", RegexOption.IGNORE_CASE)
+            .findAll(sql).map { it.groupValues[1].lowercase() }.toSet()
+        val tableAliases = collectTableAliases(statement)
+
+        val hasSubquery = Regex("""\(\s*select\b""", RegexOption.IGNORE_CASE).containsMatchIn(sql)
+        var attributable = !hasSubquery
+
+        val queryTables = mutableListOf<String>()
+        val tableNames = try {
+            TablesNamesFinder<Void>().getTables(statement as net.sf.jsqlparser.statement.Statement).toList()
+        } catch (e: Exception) {
+            attributable = false
+            emptyList()
+        }
+        for (raw in tableNames) {
+            val name = raw.lowercase().substringAfterLast('.')
+            if (name.isBlank()) continue
+            if (cteNames.contains(name) || SYSTEM_SCHEMAS.contains(name)) continue
+            if (byTable.containsKey(name)) queryTables += name else attributable = false
+        }
+
+        val columnRefs = mutableListOf<Pair<String?, String>>()
+        val visitor = object : ExpressionVisitorAdapter<Void>() {
+            override fun <S> visit(column: Column, context: S): Void? {
+                val tableName = column.table?.name?.let { unquoteDotted(it) }?.lowercase()
+                val colName = column.columnName?.let { unquoteSegment(it) }?.lowercase()
+                if (colName != null) columnRefs += tableName to colName
+                return super.visit(column, context)
+            }
+        }
+        try {
+            visitAllExpressions(statement, visitor)
+        } catch (e: Exception) {
+            return null
+        }
+
+        for ((table, column) in columnRefs) {
+            if (column.isBlank() || column == "*") continue
+
+            if (table == null) {
+                if (!attributable || aliases.contains(column) || queryTables.isEmpty()) continue
+                if (queryTables.any { byTable[it]?.contains(column) == true }) continue
+                val available = queryTables.flatMap { byTable[it].orEmpty() }.toSortedSet()
+                return UnknownColumn(queryTables.first(), column, available.toList())
+            }
+
+            // `column.table.name` is whatever the query wrote, often an alias ("c" for
+            // "customers c"), so it must be resolved before the catalog lookup or fails open.
+            val bareTable = table.substringAfterLast('.')
+            val resolvedTable = tableAliases[bareTable] ?: bareTable
+            if (cteNames.contains(resolvedTable) || SYSTEM_SCHEMAS.contains(resolvedTable)) continue
+            val known = byTable[resolvedTable] ?: continue // derived/subquery alias or unknown table; fail open
+            if (known.contains(column)) continue
+            return UnknownColumn(resolvedTable, column, known.toSortedSet().toList())
+        }
+        return null
+    }
+
+    /** Maps every table alias in the statement (FROM and JOIN items, at any nesting level) to its real, lowercased table name. */
+    private fun collectTableAliases(select: Select): Map<String, String> {
+        val aliases = mutableMapOf<String, String>()
+
+        fun recordIfTable(fromItem: net.sf.jsqlparser.statement.select.FromItem?) {
+            val table = fromItem as? net.sf.jsqlparser.schema.Table ?: return
+            val aliasName = table.alias?.name?.let { unquoteSegment(it) }?.lowercase() ?: return
+            aliases[aliasName] = unquoteDotted(table.name).lowercase().substringAfterLast('.')
+        }
+
+        fun walk(s: Select) {
+            s.withItemsList?.forEach { w ->
+                val body = w.parenthesedStatement
+                if (body is Select) walk(body)
+            }
+            when (s) {
+                is PlainSelect -> {
+                    recordIfTable(s.fromItem)
+                    (s.fromItem as? ParenthesedSelect)?.select?.let { walk(it) }
+                    s.joins?.forEach { j ->
+                        recordIfTable(j.rightItem)
+                        (j.rightItem as? ParenthesedSelect)?.select?.let { walk(it) }
+                    }
+                }
+                is SetOperationList -> s.selects.forEach { walk(it) }
+                is ParenthesedSelect -> walk(s.select)
+                else -> Unit
+            }
+        }
+        walk(select)
+        return aliases
+    }
+
+    /** Walks every SELECT item / WHERE / HAVING / GROUP BY / ORDER BY / join-on expression in the statement tree. */
+    private fun visitAllExpressions(statement: net.sf.jsqlparser.statement.Statement, visitor: ExpressionVisitorAdapter<Void>) {
+        if (statement !is Select) return
+        visitSelect(statement, visitor)
+    }
+
+    private fun visitSelect(select: Select, visitor: ExpressionVisitorAdapter<Void>) {
+        select.withItemsList?.forEach { w ->
+            val body = w.parenthesedStatement
+            if (body is Select) visitSelect(body, visitor)
+        }
+        when (select) {
+            is PlainSelect -> {
+                select.selectItems?.forEach { it.expression?.accept(visitor) }
+                select.where?.accept(visitor)
+                select.groupBy?.groupByExpressionList?.forEach { it.accept(visitor) }
+                select.having?.accept(visitor)
+                select.orderByElements?.forEach { it.expression?.accept(visitor) }
+                select.joins?.forEach { j -> j.onExpressions?.forEach { it.accept(visitor) } }
+            }
+            is SetOperationList -> {
+                select.selects.forEach { s -> visitSelect(s, visitor) }
+            }
+            is ParenthesedSelect -> visitSelect(select.select, visitor)
+            else -> Unit
+        }
+    }
+}

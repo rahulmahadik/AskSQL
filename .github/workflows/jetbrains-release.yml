@@ -1,0 +1,68 @@
+name: JetBrains Plugin Release
+
+on:
+  push:
+    tags:
+      - 'jetbrains-v*'
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: jetbrains-publish
+    permissions:
+      contents: write
+    defaults:
+      run:
+        working-directory: packages/jetbrains
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Verify release tag is on main and matches the plugin version
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+        run: |
+          if [ "$REF_TYPE" != "tag" ]; then
+            echo "::error::This workflow must be dispatched against a jetbrains-v* TAG (use the 'Use workflow from' tag picker), not a branch — otherwise there is no tag to attach the signed zip to after Marketplace publish."
+            exit 1
+          fi
+          git fetch origin main --quiet
+          if ! git merge-base --is-ancestor "${{ github.sha }}" origin/main; then
+            echo "::error::Tag $REF_NAME (${{ github.sha }}) is not on main; refusing to publish."
+            exit 1
+          fi
+          tag_version="${REF_NAME#jetbrains-v}"
+          plugin_version="$(grep -m1 '^pluginVersion' gradle.properties | cut -d= -f2 | tr -d '[:space:]')"
+          if [ "$tag_version" != "$plugin_version" ]; then
+            echo "::error::Tag $REF_NAME (version $tag_version) does not match gradle.properties pluginVersion ($plugin_version); refusing to publish a mismatched version."
+            exit 1
+          fi
+          echo "Release tag $REF_NAME is on main; proceeding."
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: gradle/actions/setup-gradle@v6
+
+      - name: Build, sign, and verify
+        run: ./gradlew buildPlugin signPlugin verifyPlugin --stacktrace
+        env:
+          ASKSQL_VERIFY_FULL: "true" # verify the full cross-IDE matrix at release (per-push CI verifies IC floor+latest only)
+          CERTIFICATE_CHAIN: ${{ secrets.JETBRAINS_CERTIFICATE_CHAIN }}
+          PRIVATE_KEY: ${{ secrets.JETBRAINS_PRIVATE_KEY }}
+          PRIVATE_KEY_PASSWORD: ${{ secrets.JETBRAINS_PRIVATE_KEY_PASSWORD }}
+
+      - name: Publish to JetBrains Marketplace
+        run: ./gradlew publishPlugin --stacktrace
+        env:
+          PUBLISH_TOKEN: ${{ secrets.JETBRAINS_PUBLISH_TOKEN }}
+
+      - name: Attach signed zip to the GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: packages/jetbrains/build/distributions/*-signed.zip
+          fail_on_unmatched_files: true

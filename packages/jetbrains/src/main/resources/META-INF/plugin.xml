@@ -1,0 +1,94 @@
+<idea-plugin>
+    <id>com.rahulmahadik.asksql</id>
+    <name>AskSQL</name>
+    <vendor email="rahultkiet@gmail.com" url="https://github.com/rahulmahadik/AskSQL">Rahul Mahadik</vendor>
+
+    <description><![CDATA[
+        <p><img src="https://github.com/rahulmahadik/AskSQL/raw/HEAD/packages/jetbrains/images/schema-and-chat.png" alt="AskSQL in a JetBrains IDE: the schema tree above the chat panel, a plain-language question turned into SQL with results" width="600"/></p>
+        <p>AI database chat inside your IDE. Ask a question in plain language, review the generated
+        SQL, approve it, and get results.</p>
+        <ul>
+            <li><b>Read-only by design.</b> An AST-based SQL guard plus an enforced read-only database
+                session block anything that is not a SELECT.</li>
+            <li><b>Bring your own model.</b> OpenAI, Anthropic, Google Gemini, Groq, NVIDIA, Azure
+                AI Foundry (via an OpenAI-compatible endpoint), or a local model through Ollama or
+                LM Studio (no API key needed).</li>
+            <li><b>Six databases.</b> Postgres, MySQL, SQLite, DuckDB, Oracle, and MongoDB.</li>
+            <li><b>Or no database at all.</b> Point it at CSV, TSV, JSON, Parquet or Excel files and ask
+                questions about them directly, joining across files. No server to install.</li>
+            <li><b>Private by default.</b> Zero telemetry. Only schema and small samples of low-cardinality
+                values reach the model; secrets live in your OS keychain.</li>
+            <li><b>Every JetBrains IDE.</b> IntelliJ IDEA, DataGrip, PyCharm, WebStorm, GoLand, PhpStorm,
+                Rider, CLion, RubyMine, RustRover, and Android Studio (2025.2 and newer).</li>
+        </ul>
+        <p>Source and issues: <a href="https://github.com/rahulmahadik/AskSQL">github.com/rahulmahadik/AskSQL</a></p>
+    ]]></description>
+
+    <!-- Platform-only dependency: installs in every JetBrains IDE, not only IntelliJ IDEA. -->
+    <depends>com.intellij.modules.platform</depends>
+
+    <!-- Optional DataGrip/Ultimate datasource import; DataSourceImporter uses pure reflection,
+         so com.intellij.database is never needed on the compile classpath. -->
+    <depends optional="true" config-file="asksql-database.xml">com.intellij.database</depends>
+
+    <resource-bundle>messages.AskSqlBundle</resource-bundle>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <toolWindow
+            id="AskSQL"
+            anchor="right"
+            factoryClass="com.rahulmahadik.asksql.ide.ui.AskSqlToolWindowFactory"
+            icon="/icons/toolWindowAskSql.svg"/>
+
+        <notificationGroup id="AskSQL" displayType="BALLOON"/>
+
+        <applicationService serviceImplementation="com.rahulmahadik.asksql.ide.settings.AskSqlAppSettings"/>
+        <projectService serviceImplementation="com.rahulmahadik.asksql.ide.settings.AskSqlProjectSettings"/>
+        <projectService serviceImplementation="com.rahulmahadik.asksql.ide.db.ConnectionRegistry"/>
+        <projectService serviceImplementation="com.rahulmahadik.asksql.ide.db.MongoClientRegistry"/>
+        <projectService serviceImplementation="com.rahulmahadik.asksql.ide.AskSqlEngineService"/>
+
+        <applicationConfigurable
+            parentId="tools"
+            instance="com.rahulmahadik.asksql.ide.settings.AskSqlConfigurable"
+            id="com.rahulmahadik.asksql.settings.app"
+            displayName="AskSQL"/>
+        <projectConfigurable
+            parentId="com.rahulmahadik.asksql.settings.app"
+            instance="com.rahulmahadik.asksql.ide.settings.ConnectionsConfigurable"
+            id="com.rahulmahadik.asksql.settings.connections"
+            displayName="AskSQL Connections"/>
+
+    </extensions>
+
+    <applicationListeners>
+        <listener class="com.rahulmahadik.asksql.ide.AskSqlProjectCloseListener"
+                  topic="com.intellij.openapi.project.ProjectCloseListener"/>
+    </applicationListeners>
+
+    <actions resource-bundle="messages.AskSqlBundle">
+        <!-- Also shown as the AskSQL tool window's title-bar icons (see AskSqlToolWindowFactory.init).
+             Explicit text/description/icon: the bundle's action.* keys use a different casing and never resolved. -->
+        <group id="AskSQL.ToolbarActions">
+            <action id="AskSQL.AddConnection" class="com.rahulmahadik.asksql.ide.actions.AddConnectionAction"
+                    text="Add Connection" description="Add a new AskSQL database connection" icon="AllIcons.General.Add"/>
+            <action id="AskSQL.TrySampleData" class="com.rahulmahadik.asksql.ide.actions.TrySampleDataAction"
+                    text="Try with Sample Data" description="Create a small demo SQLite database, no setup required"/>
+            <action id="AskSQL.UploadFileToDuckDb" class="com.rahulmahadik.asksql.ide.actions.UploadFileToDuckDbAction"
+                    text="Query CSV, Excel or Parquet Files" description="Ask questions about data files without a database server. Loads CSV, TSV, JSON, Parquet, Excel or .sql files as tables, using DuckDB under the hood." icon="AllIcons.ToolbarDecorator.Import"/>
+            <action id="AskSQL.ClearChat" class="com.rahulmahadik.asksql.ide.actions.ClearChatAction"
+                    text="Clear Conversation" description="Clear the chat history and follow-up context" icon="AllIcons.Actions.GC"/>
+            <action id="AskSQL.RefreshSchema" class="com.rahulmahadik.asksql.ide.actions.RefreshSchemaAction"
+                    text="Refresh Schema" description="Re-introspect every connection's schema" icon="AllIcons.Actions.Refresh"/>
+            <action id="AskSQL.OpenSettings" class="com.rahulmahadik.asksql.ide.actions.OpenSettingsAction"
+                    text="AskSQL Settings" description="Open AskSQL's settings (connections, AI provider/model)" icon="AllIcons.General.Settings"/>
+            <action id="AskSQL.CollectDiagnostics" class="com.rahulmahadik.asksql.ide.actions.CollectDiagnosticsAction"/>
+        </group>
+
+        <action id="AskSQL.AskAboutSelection"
+                class="com.rahulmahadik.asksql.ide.actions.AskAboutSelectionAction"
+                text="Ask AskSQL About Selection">
+            <add-to-group group-id="EditorPopupMenu" anchor="last"/>
+        </action>
+    </actions>
+</idea-plugin>

@@ -1,6 +1,7 @@
 node_modules/
 dist/
 coverage/
+docs/api/
 *.log
 *.tgz
 .env
@@ -20,3 +21,4 @@ internal/
 
 # Claude Code local settings (personal, never commit)
 .claude/settings.local.json
+.claude/settings.json

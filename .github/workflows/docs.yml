@@ -7,9 +7,9 @@ name: API Docs
 
 on:
   push:
-    # develop is the default branch (github-pages env allows it); it's fast-forwarded to main
-    # after every release, so the docs track the released code.
-    branches: [develop, main]
+    # Deploy only from develop: it's the default branch the github-pages env allows, and it's
+    # fast-forwarded to main after every release, so the docs still track the released code.
+    branches: [develop]
     paths:
       - 'packages/*/src/**'
       - 'typedoc.json'

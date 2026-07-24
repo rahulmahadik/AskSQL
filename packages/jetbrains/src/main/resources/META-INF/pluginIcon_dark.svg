@@ -1,0 +1,13 @@
+<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="askSqlGradDark" x1="0" y1="0" x2="16" y2="16" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#5A8DF7"/>
+      <stop offset="1" stop-color="#3574F0"/>
+    </linearGradient>
+  </defs>
+  <rect width="16" height="16" rx="3.5" fill="url(#askSqlGradDark)"/>
+  <path d="M4 6.6C4 5.16 5.4 4 8 4s4 1.16 4 2.6-1.4 2.6-4 2.6-4-1.16-4-2.6Z" fill="#ffffff" fill-opacity="0.95"/>
+  <path d="M4 6.6v2.8c0 1.44 1.4 2.6 4 2.6s4-1.16 4-2.6V6.6" stroke="#ffffff" stroke-opacity="0.95" stroke-width="1.1" fill="none" stroke-linecap="round"/>
+  <circle cx="11.6" cy="11.6" r="2.6" fill="#ffffff"/>
+  <text x="11.6" y="12.55" font-family="Arial, sans-serif" font-size="3.1" font-weight="700" fill="#183A82" text-anchor="middle">?</text>
+</svg>
