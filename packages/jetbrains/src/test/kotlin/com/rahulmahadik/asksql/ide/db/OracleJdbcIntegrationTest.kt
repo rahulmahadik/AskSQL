@@ -68,6 +68,8 @@ class OracleJdbcIntegrationTest {
                         """.trimIndent(),
                     )
                     st.execute("INSERT INTO customers (name, balance) VALUES ('Ava', 123456789012)")
+                    // Settle delayed block cleanout on this writable session so later read-only reads don't hit ORA-01466.
+                    st.executeQuery("SELECT COUNT(*) FROM customers").use { it.next() }
                 }
             }
         }
@@ -137,6 +139,8 @@ class OracleJdbcIntegrationTest {
             }
             driver.connect(container.jdbcUrl, props)!!.use { writer ->
                 writer.createStatement().use { it.execute("INSERT INTO customers (name, balance) VALUES ('Ben', 1)") }
+                // Plain read forces delayed block cleanout; a read-only transaction cannot clean and hits ORA-01466.
+                writer.createStatement().use { st -> st.executeQuery("SELECT COUNT(*) FROM customers").use { it.next() } }
             }
 
             val after = JdbcExecutor.execute(readerConnection, "SELECT COUNT(*) AS n FROM customers", maxRows = 1, timeoutMs = 5000, EngineKind.ORACLE)

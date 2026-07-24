@@ -40,7 +40,7 @@ class EdgeCaseAccuracyEvalTest {
     companion object {
         private const val MODEL = "qwen2.5:14b-instruct"
         private const val OLLAMA_BASE_URL = "http://localhost:11434/v1"
-        private const val REPORT_DIR = "/private/tmp/claude-501/-Users-rahul-Documents-workspace-rahul-AskSQL/9c69c1b2-1851-43c1-a723-8ca6b7b2e6e6/scratchpad"
+        private val REPORT_DIR = System.getProperty("java.io.tmpdir")
     }
 
     /**
@@ -175,6 +175,7 @@ class EdgeCaseAccuracyEvalTest {
 
     @Test
     fun `duckdb edge cases`() = runTest(timeout = 40.minutes) {
+        assumeTrue("Ollama not reachable", reachable(11434))
         val dbFile = File.createTempFile("asksql-edge", ".duckdb"); dbFile.delete()
         DriverProvisioner.duckDbDriver().connect("jdbc:duckdb:${dbFile.path}", Properties())!!.use { conn ->
             conn.createStatement().use { st ->

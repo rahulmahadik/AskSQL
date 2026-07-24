@@ -36,7 +36,7 @@ class FailedQuestionsRetestTest {
 
     companion object {
         private const val OLLAMA_BASE_URL = "http://localhost:11434/v1"
-        private const val REPORT_DIR = "/private/tmp/claude-501/-Users-rahul-Documents-workspace-rahul-AskSQL/9c69c1b2-1851-43c1-a723-8ca6b7b2e6e6/scratchpad"
+        private val REPORT_DIR = System.getProperty("java.io.tmpdir")
     }
 
     data class Case(val question: String, val truthSql: String)
@@ -168,6 +168,7 @@ class FailedQuestionsRetestTest {
 
     @Test
     fun `retest the failed duckdb question with untried local models`() = runTest(timeout = 60.minutes) {
+        assumeTrue("Ollama not reachable", runCatching { Socket("localhost", 11434).use { true } }.getOrDefault(false))
         val models = listOf("qwen2.5-coder:14b-instruct", "qwen2.5:14b-instruct")
         val report = StringBuilder()
         val dbFile = File.createTempFile("asksql-retest", ".duckdb")

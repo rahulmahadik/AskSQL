@@ -22,7 +22,10 @@ class MySqlSslIntegrationTest {
 
     @Before
     fun startContainer() {
-        container = MySQLContainer("mysql:8.4").withCommand("--require-secure-transport=ON")
+        // sslMode=REQUIRED makes Testcontainers' own readiness probe (mysql-connector-j) negotiate TLS too.
+        container = MySQLContainer("mysql:8.4")
+            .withCommand("--require-secure-transport=ON")
+            .withUrlParam("sslMode", "REQUIRED")
         container.start()
     }
 
