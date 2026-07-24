@@ -193,26 +193,17 @@ tasks {
     }
 
     test {
-        // Testcontainers tests need a Docker daemon, so `test` stays fast and hermetic;
-        // `integrationTest` (below) is the explicit, Docker-gated target.
+        // Unit tests by default; -PintegrationTests=true runs the integration category through this same task.
+        val integration = providers.gradleProperty("integrationTests").orNull == "true"
         useJUnit {
-            excludeCategories("com.rahulmahadik.asksql.ide.test.IntegrationTest")
+            if (integration) {
+                includeCategories("com.rahulmahadik.asksql.ide.test.IntegrationTest")
+            } else {
+                excludeCategories("com.rahulmahadik.asksql.ide.test.IntegrationTest")
+            }
         }
         systemProperty("idea.force.use.core.classloader", "true")
         maxHeapSize = "2g"
-    }
-
-    register<Test>("integrationTest") {
-        group = "verification"
-        description = "Runs tests backed by a real external dependency: Testcontainers (needs Docker) or a locally-running LLM server."
-        testClassesDirs = sourceSets["test"].output.classesDirs
-        // Reuses `test`'s classpath: IPGP wires the IntelliJ Platform jars onto the `test` task
-        // specifically, not onto the source set's own runtime classpath.
-        classpath = test.get().classpath
-        useJUnit {
-            includeCategories("com.rahulmahadik.asksql.ide.test.IntegrationTest")
-        }
-        shouldRunAfter(test)
     }
 
     // Regenerates the golden guard/prompt parity vectors from the published @asksql/core (see tools/parity/).

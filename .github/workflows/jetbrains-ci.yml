@@ -83,7 +83,7 @@ jobs:
           distribution: temurin
           java-version: 21
       - uses: gradle/actions/setup-gradle@v6
-      - run: ./gradlew integrationTest --stacktrace
+      - run: ./gradlew test -PintegrationTests=true --stacktrace
 
   parity:
     needs: isolation-guard

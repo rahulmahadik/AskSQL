@@ -84,8 +84,8 @@ Excel or Parquet Files** above to load data files, not the wizard's file browser
 - JDK 21 (auto-provisioned by the Gradle toolchain via the foojay resolver if not
   already installed; no manual setup needed).
 - Docker, only if you want to run the Testcontainers-backed integration tests
-  (`./gradlew integrationTest`). Everything else (build, unit tests, `runIde`) needs
-  no Docker.
+  (`./gradlew test -PintegrationTests=true`). Everything else (build, unit tests,
+  `runIde`) needs no Docker.
 - Node.js 18+, only for `./gradlew parityVectors` (see below). Never required to build
   or run the plugin itself.
 
@@ -94,7 +94,7 @@ Excel or Parquet Files** above to load data files, not the wizard's file browser
 ```bash
 ./gradlew runIde          # launches a sandboxed IDE with the plugin installed
 ./gradlew test            # fast unit tests (guard, prompts, catalog pruning, ...)
-./gradlew integrationTest # Testcontainers-backed JDBC tests (needs Docker)
+./gradlew test -PintegrationTests=true # Testcontainers-backed tests (needs Docker)
 ./gradlew buildPlugin     # produces build/distributions/*.zip
 ./gradlew verifyPlugin    # IntelliJ Plugin Verifier against the configured IDE matrix
 ```
