@@ -1,0 +1,69 @@
+package com.rahulmahadik.asksql.ide.engine
+
+import com.google.gson.JsonParser
+import com.rahulmahadik.asksql.ide.model.Dialects
+import org.junit.Assert.assertEquals
+import org.junit.Test
+import java.io.File
+
+/**
+ * Asserts [Prompts] output is BYTE-IDENTICAL to the published `@asksql/core` fixture
+ * (`tools/parity/vectors/prompts.json`): upstream prompt quality is inherited only if the strings are identical.
+ */
+class PromptParityTest {
+
+    private fun loadVectors(): Map<String, String> {
+        val candidates = listOf(
+            File("tools/parity/vectors/prompts.json"),
+            File("../tools/parity/vectors/prompts.json"),
+            File(System.getProperty("user.dir"), "tools/parity/vectors/prompts.json"),
+        )
+        val file = candidates.firstOrNull { it.exists() }
+            ?: error("prompts.json golden vectors not found - run `./gradlew parityVectors` first")
+        val obj = JsonParser.parseString(file.readText()).asJsonObject
+        return obj.entrySet().associate { it.key to it.value.asString }
+    }
+
+    private val schemaText = listOf(
+        "TABLE users [~1200 rows]",
+        " id integer PK NOT NULL",
+        " name text NOT NULL",
+        " email text",
+        "TABLE orders [~5400 rows]",
+        " id integer PK NOT NULL",
+        " user_id integer FK->users.id NOT NULL",
+        " total_cents integer NOT NULL",
+        "RELATIONSHIPS (join paths):",
+        " orders.user_id = users.id",
+    ).joinToString("\n")
+
+    @Test
+    fun `system prompt matches published core byte for byte`() {
+        val vectors = loadVectors()
+        val actual = Prompts.buildSqlSystem(Dialects.POSTGRES, 1000)
+        assertEquals(vectors.getValue("system"), actual)
+    }
+
+    @Test
+    fun `user prompt matches published core byte for byte`() {
+        val vectors = loadVectors()
+        val actual = Prompts.buildSqlUser(
+            question = "top 5 customers by total spend",
+            schemaText = schemaText,
+        )
+        assertEquals(vectors.getValue("user"), actual)
+    }
+
+    @Test
+    fun `repair prompt matches published core byte for byte`() {
+        val vectors = loadVectors()
+        val actual = Prompts.buildRepairUser(
+            question = "top 5 customers by total spend",
+            failedSql = "SELECT * FROM userz",
+            failure = "Table \"userz\" does not exist in the schema. Use only tables from the <schema> block.",
+            schemaText = schemaText,
+            dialect = Dialects.POSTGRES,
+        )
+        assertEquals(vectors.getValue("repair"), actual)
+    }
+}

@@ -1,0 +1,15 @@
+build/
+.gradle/
+.intellijPlatform/
+.kotlin/
+out/
+*.iml
+.idea/
+
+# Generated at build time by the buildSidecar-equivalent (none for this
+# in-process plugin) and by the license-report task.
+THIRD-PARTY-NOTICES.txt
+
+# Parity tooling is plain Node - its own node_modules never joins the pnpm
+# workspace (no package.json above tools/parity/).
+tools/parity/node_modules/

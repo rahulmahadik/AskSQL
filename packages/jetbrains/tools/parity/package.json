@@ -1,0 +1,13 @@
+{
+  "name": "asksql-jetbrains-parity-tools",
+  "private": true,
+  "version": "0.0.0",
+  "description": "CI-only golden-vector generator: runs a SQL/prompt corpus through the published @asksql/core so the Kotlin guard/prompt port can be diffed against it. Never runs on an end user's machine.",
+  "type": "module",
+  "scripts": {
+    "export": "node export-vectors.mjs"
+  },
+  "dependencies": {
+    "@asksql/core": "0.3.1"
+  }
+}

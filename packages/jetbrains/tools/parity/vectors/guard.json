@@ -1,0 +1,326 @@
+[
+  {
+    "sql": "SELECT id, name FROM users",
+    "engine": "postgres",
+    "allowed": true,
+    "ruleId": null,
+    "finalSql": "SELECT id, name FROM users\nLIMIT 1000",
+    "autoLimited": true,
+    "loweredLimit": false
+  },
+  {
+    "sql": "SELECT * FROM users LIMIT 10",
+    "engine": "postgres",
+    "allowed": true,
+    "ruleId": null,
+    "finalSql": "SELECT * FROM users LIMIT 10",
+    "autoLimited": false,
+    "loweredLimit": false
+  },
+  {
+    "sql": "SELECT * FROM users LIMIT 999999",
+    "engine": "postgres",
+    "allowed": true,
+    "ruleId": null,
+    "finalSql": "SELECT * FROM \"users\" LIMIT 1000",
+    "autoLimited": false,
+    "loweredLimit": true
+  },
+  {
+    "sql": "INSERT INTO users (name) VALUES ('x')",
+    "engine": "postgres",
+    "allowed": false,
+    "ruleId": "statement_not_allowed:insert",
+    "finalSql": null,
+    "autoLimited": null,
+    "loweredLimit": null
+  },
+  {
+    "sql": "UPDATE users SET name = 'x' WHERE id = 1",
+    "engine": "postgres",
+    "allowed": false,
+    "ruleId": "statement_not_allowed:update",
+    "finalSql": null,
+    "autoLimited": null,
+    "loweredLimit": null
+  },
+  {
+    "sql": "DELETE FROM users WHERE id = 1",
+    "engine": "postgres",
+    "allowed": false,
+    "ruleId": "statement_not_allowed:delete",
+    "finalSql": null,
+    "autoLimited": null,
+    "loweredLimit": null
+  },
+  {
+    "sql": "DROP TABLE users",
+    "engine": "postgres",
+    "allowed": false,
+    "ruleId": "statement_not_allowed:drop",
+    "finalSql": null,
+    "autoLimited": null,
+    "loweredLimit": null
+  },
+  {
+    "sql": "CREATE TABLE evil (id int)",
+    "engine": "postgres",
+    "allowed": false,
+    "ruleId": "statement_not_allowed:create",
+    "finalSql": null,
+    "autoLimited": null,
+    "loweredLimit": null
+  },
+  {
+    "sql": "TRUNCATE users",
+    "engine": "postgres",
+    "allowed": false,
+    "ruleId": "statement_not_allowed:truncate",
+    "finalSql": null,
+    "autoLimited": null,
+    "loweredLimit": null
+  },
+  {
+    "sql": "SELECT 1; DROP TABLE users;",
+    "engine": "postgres",
+    "allowed": false,
+    "ruleId": "multi_statement",
+    "finalSql": null,
+    "autoLimited": null,
+    "loweredLimit": null
+  },
+  {
+    "sql": "SELECT 1; -- innocuous\nDROP TABLE users",
+    "engine": "postgres",
+    "allowed": false,
+    "ruleId": "multi_statement",
+    "finalSql": null,
+    "autoLimited": null,
+    "loweredLimit": null
+  },
+  {
+    "sql": "WITH recent AS (SELECT id FROM orders WHERE created_at > now() - interval '1 day') SELECT * FROM recent",
+    "engine": "postgres",
+    "allowed": true,
+    "ruleId": null,
+    "finalSql": "WITH recent AS (SELECT id FROM orders WHERE created_at > now() - interval '1 day') SELECT * FROM recent\nLIMIT 1000",
+    "autoLimited": true,
+    "loweredLimit": false
+  },
+  {
+    "sql": "SELECT pg_sleep(10)",
+    "engine": "postgres",
+    "allowed": false,
+    "ruleId": "function_denied:pg_sleep",
+    "finalSql": null,
+    "autoLimited": null,
+    "loweredLimit": null
+  },
+  {
+    "sql": "SELECT * FROM dblink('host=evil.example', 'SELECT 1') AS t(x int)",
+    "engine": "postgres",
+    "allowed": false,
+    "ruleId": "parse_failed",
+    "finalSql": null,
+    "autoLimited": null,
+    "loweredLimit": null
+  },
+  {
+    "sql": "SELECT query_to_xml('SELECT pg_sleep(60)', true, false, '')",
+    "engine": "postgres",
+    "allowed": false,
+    "ruleId": "function_denied:query_to_xml",
+    "finalSql": null,
+    "autoLimited": null,
+    "loweredLimit": null
+  },
+  {
+    "sql": "SELECT * FROM accounts WHERE id = 1 FOR UPDATE",
+    "engine": "postgres",
+    "allowed": false,
+    "ruleId": "locking_clause",
+    "finalSql": null,
+    "autoLimited": null,
+    "loweredLimit": null
+  },
+  {
+    "sql": "SELECT * INTO new_table FROM accounts",
+    "engine": "postgres",
+    "allowed": false,
+    "ruleId": "select_into",
+    "finalSql": null,
+    "autoLimited": null,
+    "loweredLimit": null
+  },
+  {
+    "sql": "EXPLAIN SELECT * FROM users",
+    "engine": "postgres",
+    "allowed": true,
+    "ruleId": null,
+    "finalSql": "EXPLAIN SELECT * FROM users",
+    "autoLimited": false,
+    "loweredLimit": false
+  },
+  {
+    "sql": "EXPLAIN DELETE FROM users",
+    "engine": "postgres",
+    "allowed": false,
+    "ruleId": "statement_not_allowed:delete",
+    "finalSql": null,
+    "autoLimited": null,
+    "loweredLimit": null
+  },
+  {
+    "sql": "SELECT load_file('/etc/passwd')",
+    "engine": "mysql",
+    "allowed": false,
+    "ruleId": "function_denied:load_file",
+    "finalSql": null,
+    "autoLimited": null,
+    "loweredLimit": null
+  },
+  {
+    "sql": "SELECT sleep(5)",
+    "engine": "mysql",
+    "allowed": false,
+    "ruleId": "function_denied:sleep",
+    "finalSql": null,
+    "autoLimited": null,
+    "loweredLimit": null
+  },
+  {
+    "sql": "SELECT 1 /*!50000,(SELECT sleep(5))*/",
+    "engine": "mysql",
+    "allowed": false,
+    "ruleId": "mysql_executable_comment",
+    "finalSql": null,
+    "autoLimited": null,
+    "loweredLimit": null
+  },
+  {
+    "sql": "SHOW TABLES",
+    "engine": "mysql",
+    "allowed": true,
+    "ruleId": null,
+    "finalSql": "SHOW TABLES",
+    "autoLimited": false,
+    "loweredLimit": false
+  },
+  {
+    "sql": "SELECT * FROM accounts INTO OUTFILE '/tmp/dump.csv'",
+    "engine": "mysql",
+    "allowed": false,
+    "ruleId": "into_outfile",
+    "finalSql": null,
+    "autoLimited": null,
+    "loweredLimit": null
+  },
+  {
+    "sql": "PRAGMA table_info(users)",
+    "engine": "sqlite",
+    "allowed": true,
+    "ruleId": null,
+    "finalSql": "PRAGMA table_info(users)",
+    "autoLimited": false,
+    "loweredLimit": false
+  },
+  {
+    "sql": "PRAGMA journal_mode = WAL",
+    "engine": "sqlite",
+    "allowed": false,
+    "ruleId": "pragma_denied",
+    "finalSql": null,
+    "autoLimited": null,
+    "loweredLimit": null
+  },
+  {
+    "sql": "SELECT load_extension('/tmp/evil.so')",
+    "engine": "sqlite",
+    "allowed": false,
+    "ruleId": "function_denied:load_extension",
+    "finalSql": null,
+    "autoLimited": null,
+    "loweredLimit": null
+  },
+  {
+    "sql": "SELECT http_get('http://169.254.169.254/latest/meta-data/')",
+    "engine": "duckdb",
+    "allowed": false,
+    "ruleId": "function_denied:http_get",
+    "finalSql": null,
+    "autoLimited": null,
+    "loweredLimit": null
+  },
+  {
+    "sql": "SELECT * FROM read_csv('/etc/passwd')",
+    "engine": "duckdb",
+    "allowed": false,
+    "ruleId": "function_denied:read_csv",
+    "finalSql": null,
+    "autoLimited": null,
+    "loweredLimit": null
+  },
+  {
+    "sql": "SELECT * FROM '/etc/passwd.csv'",
+    "engine": "duckdb",
+    "allowed": false,
+    "ruleId": "file_relation",
+    "finalSql": null,
+    "autoLimited": null,
+    "loweredLimit": null
+  },
+  {
+    "sql": "SELECT * FROM 'http://evil.example/data.parquet'",
+    "engine": "duckdb",
+    "allowed": false,
+    "ruleId": "file_relation",
+    "finalSql": null,
+    "autoLimited": null,
+    "loweredLimit": null
+  },
+  {
+    "sql": "SELECT pg_sleep(1)",
+    "engine": "duckdb",
+    "allowed": false,
+    "ruleId": "function_denied:pg_sleep",
+    "finalSql": null,
+    "autoLimited": null,
+    "loweredLimit": null
+  },
+  {
+    "sql": "SELECT nextval('users_id_seq')",
+    "engine": "postgres",
+    "allowed": false,
+    "ruleId": "function_denied:nextval",
+    "finalSql": null,
+    "autoLimited": null,
+    "loweredLimit": null
+  },
+  {
+    "sql": "SELECT a.id, b.name FROM a JOIN b ON a.id = b.a_id WHERE a.status = 'active' GROUP BY a.id, b.name HAVING count(*) > 1 ORDER BY a.id",
+    "engine": "postgres",
+    "allowed": true,
+    "ruleId": null,
+    "finalSql": "SELECT a.id, b.name FROM a JOIN b ON a.id = b.a_id WHERE a.status = 'active' GROUP BY a.id, b.name HAVING count(*) > 1 ORDER BY a.id\nLIMIT 1000",
+    "autoLimited": true,
+    "loweredLimit": false
+  },
+  {
+    "sql": "SELECT * FROM (SELECT id FROM users WHERE age > 18) AS adults",
+    "engine": "postgres",
+    "allowed": true,
+    "ruleId": null,
+    "finalSql": "SELECT * FROM (SELECT id FROM users WHERE age > 18) AS adults\nLIMIT 1000",
+    "autoLimited": true,
+    "loweredLimit": false
+  },
+  {
+    "sql": "SELECT * FROM users WHERE id IN (SELECT user_id FROM orders)",
+    "engine": "postgres",
+    "allowed": true,
+    "ruleId": null,
+    "finalSql": "SELECT * FROM users WHERE id IN (SELECT user_id FROM orders)\nLIMIT 1000",
+    "autoLimited": true,
+    "loweredLimit": false
+  }
+]

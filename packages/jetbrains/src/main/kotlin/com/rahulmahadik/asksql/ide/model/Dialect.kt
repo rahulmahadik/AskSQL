@@ -1,0 +1,119 @@
+package com.rahulmahadik.asksql.ide.model
+
+/**
+ * Built-in engine identifiers: core's `EngineKind` as a closed enum rather than an open string
+ * union, since every engine-specific code path is written against these exact members.
+ */
+enum class EngineKind {
+    POSTGRES,
+    MYSQL,
+    SQLITE,
+    DUCKDB,
+    ORACLE,
+    MONGODB,
+    ;
+
+    val wireName: String
+        get() = name.lowercase()
+
+    /** False only for [MONGODB]; routes around JDBC/SQL-specific code instead of each call site re-deriving it. */
+    val isSql: Boolean
+        get() = this != MONGODB
+
+    companion object {
+        fun fromWireName(value: String): EngineKind =
+            entries.firstOrNull { it.wireName == value.lowercase() }
+                ?: throw IllegalArgumentException("Unknown engine: $value")
+    }
+}
+
+/** Pagination form the model should use in generated SQL. */
+enum class LimitStyle { LIMIT, TOP, FETCH }
+
+/**
+ * Everything the prompt builder and guard need to know about a SQL dialect.
+ * Behavior differences flow through here rather than engine-specific `if`s elsewhere (core's `DialectInfo` equivalent).
+ */
+data class DialectInfo(
+    val engine: EngineKind,
+    /** Identifier quote character used when generating SQL hints. */
+    val quoteChar: Char,
+    /** Human-readable dialect label injected into prompts, e.g. "PostgreSQL 16". */
+    val promptLabel: String,
+    val limitStyle: LimitStyle,
+    val promptNotes: List<String> = emptyList(),
+)
+
+// promptNotes are ported verbatim from `@asksql/core`'s `dialects.ts`; PromptParityTest
+// asserts them byte-identical against the published package. Never paraphrase these strings.
+object Dialects {
+    val POSTGRES = DialectInfo(
+        engine = EngineKind.POSTGRES,
+        quoteChar = '"',
+        promptLabel = "PostgreSQL",
+        limitStyle = LimitStyle.LIMIT,
+        promptNotes = listOf(
+            "Quote mixed-case or reserved identifiers with double quotes.",
+            "Use ILIKE for case-insensitive text matching.",
+            "Use date_trunc / interval arithmetic for date math (e.g. now - interval '30 days').",
+        ),
+    )
+
+    val MYSQL = DialectInfo(
+        engine = EngineKind.MYSQL,
+        quoteChar = '`',
+        promptLabel = "MySQL",
+        limitStyle = LimitStyle.LIMIT,
+        promptNotes = listOf(
+            "Quote identifiers with backticks when needed.",
+            "Use DATE_SUB / DATE_ADD / DATE_FORMAT for date math.",
+        ),
+    )
+
+    val SQLITE = DialectInfo(
+        engine = EngineKind.SQLITE,
+        quoteChar = '"',
+        promptLabel = "SQLite",
+        limitStyle = LimitStyle.LIMIT,
+        promptNotes = listOf(
+            "Use date/datetime/strftime for date math (e.g. date('now','-30 days')).",
+            "There are no schemas; refer to tables by bare name.",
+        ),
+    )
+
+    val DUCKDB = DialectInfo(
+        engine = EngineKind.DUCKDB,
+        quoteChar = '"',
+        promptLabel = "DuckDB",
+        limitStyle = LimitStyle.LIMIT,
+        promptNotes = listOf(
+            "DuckDB follows PostgreSQL syntax for queries.",
+            "Uploaded files are already registered as tables - query them by table name, never by file path.",
+        ),
+    )
+
+    // Oracle has no upstream `@asksql/core` counterpart; these notes are original to this
+    // plugin, and PromptParityTest's byte-identical check does not cover them.
+    val ORACLE = DialectInfo(
+        engine = EngineKind.ORACLE,
+        quoteChar = '"',
+        promptLabel = "Oracle",
+        limitStyle = LimitStyle.FETCH,
+        promptNotes = listOf(
+            "Use FETCH FIRST n ROWS ONLY for row limits, never LIMIT.",
+            "Use TO_DATE / TO_CHAR / SYSDATE and interval arithmetic for date math.",
+            "Unquoted identifiers are case-insensitive and stored upper-case; double-quote to preserve case.",
+            "Select a literal value from the DUAL table (e.g. SELECT 1 FROM DUAL), not bare SELECT 1.",
+            "There is no boolean type; comparisons return no directly selectable boolean.",
+        ),
+    )
+
+    fun of(engine: EngineKind): DialectInfo = when (engine) {
+        EngineKind.POSTGRES -> POSTGRES
+        EngineKind.MYSQL -> MYSQL
+        EngineKind.SQLITE -> SQLITE
+        EngineKind.DUCKDB -> DUCKDB
+        EngineKind.ORACLE -> ORACLE
+        EngineKind.MONGODB -> error("MongoDB has no SQL dialect - routed to MongoEnginePipeline before this is ever called")
+    }
+}

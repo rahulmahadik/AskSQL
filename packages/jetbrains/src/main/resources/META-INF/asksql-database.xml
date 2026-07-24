@@ -1,0 +1,14 @@
+<idea-plugin>
+    <!--
+        Loaded only when com.intellij.database is present (DataGrip, IDEA
+        Ultimate, PyCharm Professional, ...). Currently empty: the DataGrip
+        datasource-import integration (see
+        com.rahulmahadik.asksql.ide.integrations.database.DataSourceImporter)
+        is invoked directly from AskSQL's own "Add Connection" wizard via
+        reflection rather than through a com.intellij.database extension
+        point, so no extension is declared here yet. Reserved for a future
+        DataSourceImporter extension-point registration if one becomes
+        useful (e.g. a "credentials changed" listener).
+    -->
+    <extensions defaultExtensionNs="com.intellij"/>
+</idea-plugin>

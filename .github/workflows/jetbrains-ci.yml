@@ -1,0 +1,126 @@
+name: JetBrains Plugin CI
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'packages/jetbrains/**'
+      - '.github/workflows/jetbrains-ci.yml'
+      - 'pnpm-workspace.yaml'
+      - '.changeset/config.json'
+  pull_request:
+    paths:
+      - 'packages/jetbrains/**'
+      - '.github/workflows/jetbrains-ci.yml'
+      - 'pnpm-workspace.yaml'
+      - '.changeset/config.json'
+
+jobs:
+  isolation-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Verify packages/jetbrains stays outside the pnpm workspace
+        run: |
+          set -e
+          if [ -f packages/jetbrains/package.json ]; then
+            echo "::error::packages/jetbrains/package.json must not exist — it would join the pnpm workspace glob."
+            exit 1
+          fi
+          # pnpm-workspace.yaml's 'packages/*' glob is single-level, so a
+          # nested manifest like packages/jetbrains/tools/parity/package.json
+          # is correctly outside it — a two-level (or deeper) pattern would
+          # pull that in. This checks the invariant directly instead of just
+          # trusting the current glob depth.
+          if grep -qE '^\s*-\s*.packages/\*\*' pnpm-workspace.yaml; then
+            echo "::error::pnpm-workspace.yaml's packages glob went recursive (packages/**) — this would pull packages/jetbrains/tools/parity's own package.json into the workspace."
+            exit 1
+          fi
+          # This check is scoped to what jetbrains isolation actually needs
+          # (no npm package of ITS OWN ever gets changesets-ignored as a
+          # workaround for not being a workspace member) — NOT a blanket
+          # "ignore must be empty forever" rule. That broader rule used to
+          # live here but coupled jetbrains CI's health to unrelated
+          # vscode-side changeset config, which is a legitimate, separate
+          # package's own business.
+          if jq -e '.ignore // [] | any(test("jetbrains"; "i"))' .changeset/config.json > /dev/null; then
+            echo "::error::.changeset/config.json 'ignore' references a jetbrains package — packages/jetbrains must stay invisible to changesets via having no package.json, never via an ignore entry."
+            exit 1
+          fi
+          echo "Isolation checks passed."
+
+  build-and-test:
+    needs: isolation-guard
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/jetbrains
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: gradle/actions/setup-gradle@v6
+      - run: ./gradlew test buildPlugin verifyPlugin --stacktrace
+      - name: Upload plugin zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: asksql-jetbrains-plugin
+          path: packages/jetbrains/build/distributions/*.zip
+          if-no-files-found: error
+
+  integration-test:
+    needs: isolation-guard
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/jetbrains
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: gradle/actions/setup-gradle@v6
+      - run: ./gradlew integrationTest --stacktrace
+
+  parity:
+    needs: isolation-guard
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/jetbrains/tools/parity
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - run: npm install --no-audit --no-fund
+      - run: node export-vectors.mjs
+      - name: Fail if generated vectors differ from committed ones
+        run: |
+          git diff --exit-code -- vectors/ || {
+            echo "::error::Golden parity vectors changed — a new @asksql/core release altered guard/prompt behavior. Port the change, regenerate, and commit the new vectors."
+            exit 1
+          }
+
+  root-monorepo-unaffected:
+    needs: isolation-guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: pnpm install must be byte-identical to before this change
+        run: |
+          pnpm install --frozen-lockfile
+          git diff --exit-code -- pnpm-lock.yaml || {
+            echo "::error::pnpm-lock.yaml changed — packages/jetbrains must be invisible to the pnpm workspace."
+            exit 1
+          }
+      - run: pnpm build
+      - run: pnpm test
