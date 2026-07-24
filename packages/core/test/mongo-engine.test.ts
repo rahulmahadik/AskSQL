@@ -81,6 +81,18 @@ describe('mongo engine happy path', () => {
     expect(out).toEqual(RESULT);
     expect(conn.aggregateCalls[0]!.collection).toBe('orders');
   });
+
+  it('execute re-guards a hand-edited pipeline and blocks a write stage', async () => {
+    const conn = new FakeMongo();
+    const engine = createMongoAskSql({ connector: conn, model: model(['']) });
+    await expect(engine.execute('[{"$out": "evil"}]', 'orders')).rejects.toMatchObject({ code: 'GUARD_BLOCKED' });
+    expect(conn.aggregateCalls).toHaveLength(0);
+  });
+
+  it('execute rejects an unknown collection', async () => {
+    const engine = createMongoAskSql({ connector: new FakeMongo(), model: model(['']) });
+    await expect(engine.execute('[{"$match": {}}]', 'does_not_exist')).rejects.toMatchObject({ code: 'DB_QUERY_ERROR' });
+  });
 });
 
 describe('mongo engine floors and repair', () => {

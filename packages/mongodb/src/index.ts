@@ -31,6 +31,8 @@ export interface MongodbConnectorConfig {
   readonly database: string;
   readonly user?: string;
   readonly password?: string;
+  /** Auth database for separate user/password. Defaults to `admin` (root/Atlas users live there), not the query database. */
+  readonly authSource?: string;
   /**
    * Opt-in: attach a small set of distinct example values to low-cardinality
    * fields during introspection, so the model sees the real codes a field holds.
@@ -103,7 +105,7 @@ export class MongodbConnector implements MongoConnector {
     };
     if (this.config.user && this.config.password) {
       opts['auth'] = { username: this.config.user, password: this.config.password };
-      opts['authSource'] = this.config.database || 'admin';
+      opts['authSource'] = this.config.authSource || 'admin';
     }
     const client = new MongoClient(this.config.connectionString, opts);
     try {
@@ -113,7 +115,7 @@ export class MongodbConnector implements MongoConnector {
       await client.db(this.config.database).command({ ping: 1 });
     } catch (err) {
       await client.close().catch(() => {});
-      throw mapConnectError(err);
+      throw mapConnectError(err, /mongodb\+srv|mongodb\.net/i.test(this.config.connectionString));
     }
     this.client = client;
   }
@@ -215,13 +217,26 @@ function errCode(err: unknown): number | string | undefined {
   return (err as { code?: number | string })?.code;
 }
 
-function mapConnectError(err: unknown): AskSqlError {
+function mapConnectError(err: unknown, isAtlas: boolean): AskSqlError {
   const code = errCode(err);
   const msg = err instanceof Error ? err.message : String(err);
-  if (code === 18 || /authentication failed|auth(?:entication)? error|not authorized/i.test(msg)) {
-    return new AskSqlError('DB_AUTH', { detail: msg, cause: err });
+  if (code === 18 || /authentication failed|auth(?:entication)? error|not authorized|bad auth/i.test(msg)) {
+    return new AskSqlError('DB_AUTH', {
+      userMessage:
+        'MongoDB rejected the credentials. Check the username and password - and remove any placeholder angle brackets (< >) around the password in the connection string.',
+      detail: msg,
+      cause: err,
+    });
   }
-  return new AskSqlError('DB_UNREACHABLE', { detail: msg, cause: err });
+  // Any connect failure to an Atlas cluster (srv / *.mongodb.net) - server-selection timeout, DNS, or a
+  // TLS handshake alert - is almost always the IP allow-list, so point there.
+  return new AskSqlError('DB_UNREACHABLE', {
+    userMessage: isAtlas
+      ? 'Could not reach the MongoDB Atlas cluster. Add your current IP under Atlas -> Network Access (or 0.0.0.0/0 to test), and confirm the cluster is running.'
+      : 'Could not reach the MongoDB server. Check the host/port and that it is running.',
+    detail: msg,
+    cause: err,
+  });
 }
 
 function mapQueryError(err: unknown): AskSqlError {
