@@ -126,17 +126,20 @@ intellijPlatform {
             // artifacts; build numbers pin the exact floor/latest builds.
             create(IntelliJPlatformType.IntellijIdeaCommunity, "252.28539.54")  // 2025.2.6.2 (compatibility floor)
             create(IntelliJPlatformType.IntellijIdeaCommunity, "253.28294.334") // 2025.3 (IC's own latest stable)
-            // Every major IntelliJ-Platform IDE (Fleet excluded: it uses a different plugin model).
-            // These publish Maven artifacts under the marketing version only.
-            create(IntelliJPlatformType.IntellijIdeaUltimate, "2026.1.4")
-            create(IntelliJPlatformType.Rider, "2026.1.4")
-            create(IntelliJPlatformType.PyCharmProfessional, "2026.1.4")
-            create(IntelliJPlatformType.GoLand, "2026.1.4")
-            create(IntelliJPlatformType.WebStorm, "2026.1.4")
-            create(IntelliJPlatformType.PhpStorm, "2026.1.4")
-            create(IntelliJPlatformType.CLion, "2026.1.4")
-            create(IntelliJPlatformType.RubyMine, "2026.1.4")
-            create(IntelliJPlatformType.RustRover, "2026.1.4")
+            // Full cross-IDE matrix only when ASKSQL_VERIFY_FULL=true (the release workflow sets it); per-push CI verifies the IC floor+latest above to avoid ~10 cold IDE downloads.
+            if (providers.environmentVariable("ASKSQL_VERIFY_FULL").orNull == "true") {
+                // Every major IntelliJ-Platform IDE (Fleet excluded: it uses a different plugin model).
+                // These publish Maven artifacts under the marketing version only.
+                create(IntelliJPlatformType.IntellijIdeaUltimate, "2026.1.4")
+                create(IntelliJPlatformType.Rider, "2026.1.4")
+                create(IntelliJPlatformType.PyCharmProfessional, "2026.1.4")
+                create(IntelliJPlatformType.GoLand, "2026.1.4")
+                create(IntelliJPlatformType.WebStorm, "2026.1.4")
+                create(IntelliJPlatformType.PhpStorm, "2026.1.4")
+                create(IntelliJPlatformType.CLion, "2026.1.4")
+                create(IntelliJPlatformType.RubyMine, "2026.1.4")
+                create(IntelliJPlatformType.RustRover, "2026.1.4")
+            }
             // DataGrip omitted: IPGP 2.18.1's releases-API lookup for product code "DB" is broken upstream.
             // Android Studio isn't on the JetBrains releases API; verify against a local install
             // only when present, so verifyPlugin doesn't fail outright on CI runners.
@@ -200,6 +203,9 @@ tasks {
         useJUnit {
             includeCategories("com.rahulmahadik.asksql.ide.test.IntegrationTest")
         }
+        // Same platform test JVM setup as `test`; the copied classpath alone omits the core classloader the IntelliJ Platform's bundled classes (JNA) need on Linux CI.
+        systemProperty("idea.force.use.core.classloader", "true")
+        maxHeapSize = "2g"
         shouldRunAfter(test)
     }
 

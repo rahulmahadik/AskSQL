@@ -96,6 +96,8 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 22
+          # setup-node@v5 defaults package-manager-cache:true, which detects the repo-root pnpm and runs it; this isolated npm-only dir has no pnpm installed.
+          package-manager-cache: false
       - run: npm install --no-audit --no-fund
       - run: node export-vectors.mjs
       - name: Fail if generated vectors differ from committed ones
