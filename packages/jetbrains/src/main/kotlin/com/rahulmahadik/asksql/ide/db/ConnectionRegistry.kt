@@ -3,6 +3,7 @@ package com.rahulmahadik.asksql.ide.db
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.project.Project
+import com.rahulmahadik.asksql.ide.model.EngineKind
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
@@ -75,7 +76,13 @@ class ConnectionRegistry(private val project: Project, private val scope: Corout
                 slots.remove(descriptor.id, slot)
                 throw e
             }
-            if (isValid(connection)) return slot to connection
+            // DuckDB's isValid() runs a real SELECT; take JdbcExecutor's per-connection lock like any statement.
+            val valid = if (descriptor.engine == EngineKind.DUCKDB) {
+                JdbcExecutor.withConnectionLock(connection) { isValid(connection) }
+            } else {
+                isValid(connection)
+            }
+            if (valid) return slot to connection
 
             // Only remove it if it's still this exact stale instance; if another caller already
             // replaced it, adopt theirs instead.

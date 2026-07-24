@@ -39,6 +39,10 @@ object JdbcExecutor {
         perConnectionLocks.remove(connection)
     }
 
+    /** Runs [action] under the per-connection lock; every statement on a DuckDB connection must go through this, including [ConnectionRegistry]'s validity probe. */
+    suspend fun <T> withConnectionLock(connection: Connection, action: suspend () -> T): T =
+        perConnectionLocks.computeIfAbsent(connection) { Mutex() }.withLock { action() }
+
     suspend fun execute(connection: Connection, sql: String, maxRows: Int, timeoutMs: Long, engine: EngineKind): AskSqlResultSet =
         withContext(Dispatchers.IO) {
           suspend fun onStatement(): AskSqlResultSet =
@@ -93,7 +97,7 @@ object JdbcExecutor {
                     // re-armed before every query with explicit transaction control (autocommit
                     // would leave it ambiguous whether the arm and the query share one transaction),
                     // toggled locally per call so other code sharing this connection is unaffected.
-                    perConnectionLocks.getOrPut(connection) { Mutex() }.withLock {
+                    withConnectionLock(connection) {
                         val hadAutoCommit = connection.autoCommit
                         connection.autoCommit = false
                         try {
@@ -114,7 +118,7 @@ object JdbcExecutor {
 
             // DuckDB's JDBC connection rejects concurrent statements (pgjdbc/mariadb serialize internally); serialize per connection.
             if (engine == EngineKind.DUCKDB) {
-                perConnectionLocks.getOrPut(connection) { Mutex() }.withLock { onStatement() }
+                withConnectionLock(connection) { onStatement() }
             } else {
                 onStatement()
             }
