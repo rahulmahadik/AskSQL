@@ -10,6 +10,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
 import org.junit.After
@@ -68,8 +69,10 @@ class OracleJdbcIntegrationTest {
                         """.trimIndent(),
                     )
                     st.execute("INSERT INTO customers (name, balance) VALUES ('Ava', 123456789012)")
-                    // Settle delayed block cleanout on this writable session so later read-only reads don't hit ORA-01466.
-                    st.executeQuery("SELECT COUNT(*) FROM customers").use { it.next() }
+                    // ORA-01466 guard: a read-only snapshot taken within Oracle's coarse (~3s) SCN-to-time rounding of the CREATE reads as pre-DDL; wait out the window on the DB clock.
+                    while (st.executeQuery("SELECT COUNT(*) FROM user_objects WHERE last_ddl_time > SYSDATE - INTERVAL '10' SECOND").use { it.next(); it.getInt(1) } > 0) {
+                        delay(500)
+                    }
                 }
             }
         }
@@ -139,8 +142,6 @@ class OracleJdbcIntegrationTest {
             }
             driver.connect(container.jdbcUrl, props)!!.use { writer ->
                 writer.createStatement().use { it.execute("INSERT INTO customers (name, balance) VALUES ('Ben', 1)") }
-                // Plain read forces delayed block cleanout; a read-only transaction cannot clean and hits ORA-01466.
-                writer.createStatement().use { st -> st.executeQuery("SELECT COUNT(*) FROM customers").use { it.next() } }
             }
 
             val after = JdbcExecutor.execute(readerConnection, "SELECT COUNT(*) AS n FROM customers", maxRows = 1, timeoutMs = 5000, EngineKind.ORACLE)
