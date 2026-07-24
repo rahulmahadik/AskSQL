@@ -84,6 +84,9 @@ jobs:
           java-version: 21
       - uses: gradle/actions/setup-gradle@v6
       - run: ./gradlew test -PintegrationTests=true --stacktrace
+        env:
+          # Rootful Docker on the runner; skip the rootless strategy, whose JNA collides with the IntelliJ Platform's bundled jnidispatch.
+          TESTCONTAINERS_DOCKER_CLIENT_STRATEGY: org.testcontainers.dockerclient.UnixSocketClientProviderStrategy
 
   parity:
     needs: isolation-guard

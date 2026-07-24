@@ -203,8 +203,6 @@ tasks {
             }
         }
         systemProperty("idea.force.use.core.classloader", "true")
-        // Testcontainers' JNA must use its own bundled jnidispatch, not the runner's incompatible system one.
-        systemProperty("jna.nosys", "true")
         maxHeapSize = "2g"
     }
 
