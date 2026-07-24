@@ -29,17 +29,19 @@ object JdbcExecutor {
 
     private const val HEX_PREVIEW_BYTES = 32
 
-    // Makes Oracle's arm-then-query pair atomic per connection against ConnectionRegistry's
-    // concurrent-lease sharing. Unbounded but tiny: one entry per Connection ever seen, not per query.
-    private val oracleReadOnlyLocks = ConcurrentHashMap<Connection, Mutex>()
+    // Serializes per-connection query work against ConnectionRegistry's concurrent-lease sharing where
+    // the driver needs it: Oracle's arm-then-query pair, and DuckDB (its connection rejects concurrent
+    // statements). Unbounded but tiny: one entry per Connection ever seen, not per query.
+    private val perConnectionLocks = ConcurrentHashMap<Connection, Mutex>()
 
-    /** Called by [ConnectionRegistry] right before it closes a [Connection] for good; without this, every Oracle connection this plugin ever opened pins a tiny (but permanent) entry here for the life of the IDE process. */
+    /** Called by [ConnectionRegistry] right before it closes a [Connection] for good; without this, every connection this plugin ever opened pins a tiny (but permanent) entry here for the life of the IDE process. */
     fun forgetConnection(connection: Connection) {
-        oracleReadOnlyLocks.remove(connection)
+        perConnectionLocks.remove(connection)
     }
 
     suspend fun execute(connection: Connection, sql: String, maxRows: Int, timeoutMs: Long, engine: EngineKind): AskSqlResultSet =
         withContext(Dispatchers.IO) {
+          suspend fun onStatement(): AskSqlResultSet =
             // .use{} (not a manual close-on-error-only): a Statement left open after a successful
             // query leaks a server-side cursor, and on Oracle that exhausts open_cursors after a
             // few hundred queries.
@@ -91,7 +93,7 @@ object JdbcExecutor {
                     // re-armed before every query with explicit transaction control (autocommit
                     // would leave it ambiguous whether the arm and the query share one transaction),
                     // toggled locally per call so other code sharing this connection is unaffected.
-                    oracleReadOnlyLocks.getOrPut(connection) { Mutex() }.withLock {
+                    perConnectionLocks.getOrPut(connection) { Mutex() }.withLock {
                         val hadAutoCommit = connection.autoCommit
                         connection.autoCommit = false
                         try {
@@ -108,6 +110,13 @@ object JdbcExecutor {
                 } else {
                     runAndBuild()
                 }
+            }
+
+            // DuckDB's JDBC connection rejects concurrent statements (pgjdbc/mariadb serialize internally); serialize per connection.
+            if (engine == EngineKind.DUCKDB) {
+                perConnectionLocks.getOrPut(connection) { Mutex() }.withLock { onStatement() }
+            } else {
+                onStatement()
             }
         }
 
