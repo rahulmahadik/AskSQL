@@ -183,6 +183,15 @@ tasks {
         }
     }
 
+    // Print the full exception chain in CI logs; the default truncates at the first cause.
+    withType<Test>().configureEach {
+        testLogging {
+            showCauses = true
+            showStackTraces = true
+            exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+        }
+    }
+
     test {
         // Testcontainers tests need a Docker daemon, so `test` stays fast and hermetic;
         // `integrationTest` (below) is the explicit, Docker-gated target.
@@ -203,9 +212,6 @@ tasks {
         useJUnit {
             includeCategories("com.rahulmahadik.asksql.ide.test.IntegrationTest")
         }
-        // Same platform test JVM setup as `test`; the copied classpath alone omits the core classloader the IntelliJ Platform's bundled classes (JNA) need on Linux CI.
-        systemProperty("idea.force.use.core.classloader", "true")
-        maxHeapSize = "2g"
         shouldRunAfter(test)
     }
 
