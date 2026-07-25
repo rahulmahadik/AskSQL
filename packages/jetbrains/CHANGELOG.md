@@ -5,7 +5,7 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-## [0.1.0] - 2026-07-18
+## [0.1.0] - 2026-07-25
 
 First release. Chat and Schema tool windows, pure Kotlin/JVM engine (JSqlParser guard, JDBC
 connectivity for Postgres/MySQL/SQLite/DuckDB/Oracle, MongoDB via a separate `MongoEnginePipeline`,
