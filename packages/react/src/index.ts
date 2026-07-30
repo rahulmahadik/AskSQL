@@ -12,7 +12,7 @@ export { SchemaBrowser, type SchemaBrowserProps } from './SchemaBrowser.js';
 export { ResultChart, isChartable } from './ResultChart.js';
 export { inferChart, type ChartSpec, type ChartKind, type ChartSeries } from './chart.js';
 export { SavedQueryStore, useSavedQueries, type SavedQuery, type KeyValueStore } from './saved.js';
-export { useAskSql, type Turn, type TurnPhase, type UseAskSqlResult, type UseAskSqlOptions } from './useAskSql.js';
+export { useAskSql, formatPlan, type Turn, type TurnPhase, type UseAskSqlResult, type UseAskSqlOptions } from './useAskSql.js';
 export {
   HttpTransport,
   LocalTransport,

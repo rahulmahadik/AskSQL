@@ -10,7 +10,6 @@ import { formatCell, toCsv } from './format.js';
 import { ensureStyles } from './styles.js';
 import { useAskSql, type Turn } from './useAskSql.js';
 import { ResultChart, isChartable } from './ResultChart.js';
-import { useSavedQueries } from './saved.js';
 import type { ConnectionSummary, Transport } from './client.js';
 
 /** Split one line into **bold** / `code` / plain runs. Text-only, no dangerouslySetInnerHTML. */
@@ -76,6 +75,17 @@ export interface AskSqlChatProps {
   readonly showConnectionPicker?: boolean;
   /** Answer questions that aren't a data query in plain language from the schema. Off by default. */
   readonly answerSchemaQuestions?: boolean;
+  /** Where the SQL block renders relative to results (default 'before'). Forced to 'before' when `requireApproval` is on - a query can't be approved unseen. */
+  readonly sqlDisplayPlacement?: 'before' | 'after';
+  /**
+   * Asked automatically whenever this changes to a new non-empty value (e.g.
+   * a question seeded from outside the component, such as a browser
+   * extension's "ask about selection"). Setting the same value twice in a
+   * row asks it only once; the existing transcript is preserved either way.
+   */
+  readonly initialQuestion?: string;
+  /** Called when initialQuestion is actually asked, so the host can clear its state (enabling the same text to seed again later). */
+  readonly onInitialQuestionConsumed?: () => void;
 }
 
 export function AskSqlChat(props: AskSqlChatProps): JSX.Element {
@@ -107,7 +117,6 @@ export function AskSqlChat(props: AskSqlChatProps): JSX.Element {
     requireApproval: props.requireApproval,
     answerSchemaQuestions: props.answerSchemaQuestions,
   });
-  const { save } = useSavedQueries();
   const [text, setText] = useState('');
   const threadRef = useRef<HTMLDivElement>(null);
   const showPicker = (props.showConnectionPicker ?? true) && connections.length > 1;
@@ -118,6 +127,23 @@ export function AskSqlChat(props: AskSqlChatProps): JSX.Element {
   useEffect(() => {
     threadRef.current?.scrollTo({ top: threadRef.current.scrollHeight });
   }, [turns]);
+
+  const lastAskedInitial = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    const q = props.initialQuestion?.trim();
+    if (!q) {
+      // Host cleared it: forget the last value so the same text can seed again.
+      lastAskedInitial.current = undefined;
+      return;
+    }
+    if (q === lastAskedInitial.current) return;
+    // Mid-stream: leave it unrecorded - the busy flip re-runs this effect, so
+    // the question is asked when the stream ends instead of silently dropped.
+    if (busy) return;
+    lastAskedInitial.current = q;
+    void ask(q);
+    props.onInitialQuestionConsumed?.();
+  }, [props.initialQuestion, busy]);
 
   const submit = () => {
     const q = text.trim();
@@ -166,13 +192,10 @@ export function AskSqlChat(props: AskSqlChatProps): JSX.Element {
               onRetry={() => (t.sql ? void run(t.id) : void ask(t.question))}
               onEdit={(sql) => editSql(t.id, sql)}
               onPlan={() => void planFor(t.id)}
-              onSave={() =>
-                t.sql &&
-                save({ name: t.question.slice(0, 60), question: t.question, sql: t.sql, connectionId: activeConn })
-              }
               busy={busy}
               canPlan={canPlan}
               requireApproval={props.requireApproval}
+              sqlDisplayPlacement={props.sqlDisplayPlacement}
             />
           ))
         )}
@@ -234,24 +257,105 @@ function TurnView({
   onRetry,
   onEdit,
   onPlan,
-  onSave,
   busy,
   canPlan,
   requireApproval,
+  sqlDisplayPlacement,
 }: {
   turn: Turn;
   onRun: () => void;
   onRetry: () => void;
   onEdit: (sql: string) => void;
   onPlan: () => void;
-  onSave: () => void;
   busy: boolean;
   canPlan: boolean;
   requireApproval?: boolean;
+  sqlDisplayPlacement?: 'before' | 'after';
 }): JSX.Element {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
-  const [saved, setSaved] = useState(false);
+  const placement = requireApproval ? 'before' : (sqlDisplayPlacement ?? 'before');
+
+  const sqlSection = turn.sql && (
+    <>
+      {editing ? (
+        <div className="asksql-sqlblock">
+          <div className="asksql-sqlhead">
+            <span>Edit SQL</span>
+          </div>
+          <textarea
+            className="asksql-sqledit"
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            spellCheck={false}
+            aria-label="Edit SQL"
+          />
+          <div className="asksql-actions" style={{ padding: 8 }}>
+            <button
+              className="asksql-btn asksql-btn-primary"
+              onClick={() => {
+                onEdit(draft);
+                setEditing(false);
+              }}
+            >
+              Save
+            </button>
+            <button className="asksql-btn" onClick={() => setEditing(false)}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : (
+        <SqlBlock sql={turn.sql} />
+      )}
+      {turn.explanation && !editing && <Markdown className="asksql-explain" text={turn.explanation} />}
+      {turn.autoLimited && (
+        <div className="asksql-warn">A row limit was added automatically - export to get everything.</div>
+      )}
+      {!editing &&
+        (turn.phase === 'sql_ready' || turn.phase === 'done' || turn.phase === 'error' || turn.phase === 'stopped') && (
+        <div className="asksql-actions">
+          {turn.phase === 'sql_ready' && requireApproval && (
+            <button className="asksql-btn asksql-btn-primary" onClick={onRun} disabled={busy}>
+              Run query
+            </button>
+          )}
+          <button
+            className="asksql-btn"
+            onClick={() => {
+              setDraft(turn.sql!);
+              setEditing(true);
+            }}
+            disabled={busy}
+          >
+            Edit
+          </button>
+          {canPlan && (
+            <button className="asksql-btn" onClick={onPlan} disabled={busy || turn.planning}>
+              {turn.planning ? 'Explaining...' : 'Plan'}
+            </button>
+          )}
+        </div>
+      )}
+      {turn.plan && (
+        <div className="asksql-sqlblock">
+          <div className="asksql-sqlhead">
+            <span>Query plan</span>
+          </div>
+          <pre className="asksql-sqlcode">{turn.plan}</pre>
+        </div>
+      )}
+      {turn.phase === 'running' && (
+        <div className="asksql-stage">
+          <span className="asksql-spinner" />
+          Running...
+        </div>
+      )}
+    </>
+  );
+
+  const resultSection = turn.result && <ResultTable result={turn.result} />;
+
   return (
     <div className="asksql-turn">
       <div className="asksql-role">You</div>
@@ -264,97 +368,17 @@ function TurnView({
             {stageLabel(turn.stage)}
           </div>
         )}
-        {turn.sql && (
+        {placement === 'after' ? (
           <>
-            {editing ? (
-              <div className="asksql-sqlblock">
-                <div className="asksql-sqlhead">
-                  <span>Edit SQL</span>
-                </div>
-                <textarea
-                  className="asksql-sqledit"
-                  value={draft}
-                  onChange={(e) => setDraft(e.target.value)}
-                  spellCheck={false}
-                  aria-label="Edit SQL"
-                />
-                <div className="asksql-actions" style={{ padding: 8 }}>
-                  <button
-                    className="asksql-btn asksql-btn-primary"
-                    onClick={() => {
-                      onEdit(draft);
-                      setEditing(false);
-                    }}
-                  >
-                    Save
-                  </button>
-                  <button className="asksql-btn" onClick={() => setEditing(false)}>
-                    Cancel
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <SqlBlock sql={turn.sql} />
-            )}
-            {turn.explanation && !editing && <Markdown className="asksql-explain" text={turn.explanation} />}
-            {turn.autoLimited && (
-              <div className="asksql-warn">A row limit was added automatically - export to get everything.</div>
-            )}
-            {!editing &&
-              (turn.phase === 'sql_ready' ||
-                turn.phase === 'done' ||
-                turn.phase === 'error' ||
-                turn.phase === 'stopped') && (
-              <div className="asksql-actions">
-                {turn.phase === 'sql_ready' && requireApproval && (
-                  <button className="asksql-btn asksql-btn-primary" onClick={onRun} disabled={busy}>
-                    Run query
-                  </button>
-                )}
-                <button
-                  className="asksql-btn"
-                  onClick={() => {
-                    setDraft(turn.sql!);
-                    setEditing(true);
-                  }}
-                  disabled={busy}
-                >
-                  Edit
-                </button>
-                {canPlan && (
-                  <button className="asksql-btn" onClick={onPlan} disabled={busy || turn.planning}>
-                    {turn.planning ? 'Explaining...' : 'Plan'}
-                  </button>
-                )}
-                <button
-                  className="asksql-btn"
-                  onClick={() => {
-                    onSave();
-                    setSaved(true);
-                    setTimeout(() => setSaved(false), 1200);
-                  }}
-                >
-                  {saved ? 'Saved' : 'Save'}
-                </button>
-              </div>
-            )}
-            {turn.plan && (
-              <div className="asksql-sqlblock">
-                <div className="asksql-sqlhead">
-                  <span>Query plan</span>
-                </div>
-                <pre className="asksql-sqlcode">{turn.plan}</pre>
-              </div>
-            )}
-            {turn.phase === 'running' && (
-              <div className="asksql-stage">
-                <span className="asksql-spinner" />
-                Running...
-              </div>
-            )}
+            {resultSection}
+            {sqlSection}
+          </>
+        ) : (
+          <>
+            {sqlSection}
+            {resultSection}
           </>
         )}
-        {turn.result && <ResultTable result={turn.result} />}
         {turn.schemaAnswer && (
           <>
             <Markdown className="asksql-explain" text={turn.schemaAnswer.answer} />
