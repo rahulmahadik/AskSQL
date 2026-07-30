@@ -30,6 +30,8 @@ export interface ChatEvent {
   readonly sql?: string;
   readonly explanation?: string;
   readonly autoLimited?: boolean;
+  /** MongoDB only: the collection the pipeline runs against, required to execute it. */
+  readonly collection?: string;
   readonly code?: string;
   readonly userMessage?: string;
   readonly retryable?: boolean;
@@ -46,7 +48,10 @@ export interface Transport {
   listConnections(): Promise<ConnectionSummary[]>;
   schema(connectionId?: string, refresh?: boolean): Promise<SchemaCatalog>;
   chat(params: AskParams): AsyncIterable<ChatEvent>;
-  execute(sql: string, opts?: ExecuteOptions & { connectionId?: string; question?: string }): Promise<ResultSet>;
+  execute(
+    sql: string,
+    opts?: ExecuteOptions & { connectionId?: string; question?: string; collection?: string },
+  ): Promise<ResultSet>;
   explain(sql: string, connectionId?: string): Promise<string>;
   /** Grounded plain-language answer about the schema (never runs a query). */
   explainSchema(question: string, connectionId?: string): Promise<SchemaAnswer>;
@@ -194,11 +199,21 @@ export class HttpTransport implements Transport {
     }
   }
 
-  async execute(sql: string, opts?: ExecuteOptions & { connectionId?: string; question?: string }): Promise<ResultSet> {
+  async execute(
+    sql: string,
+    opts?: ExecuteOptions & { connectionId?: string; question?: string; collection?: string },
+  ): Promise<ResultSet> {
     const res = await this.doFetch(this.url('/execute'), {
       method: 'POST',
       headers: this.headers(),
-      body: JSON.stringify({ sql, connectionId: opts?.connectionId, question: opts?.question, maxRows: opts?.maxRows }),
+      body: JSON.stringify({
+        sql,
+        connectionId: opts?.connectionId,
+        question: opts?.question,
+        maxRows: opts?.maxRows,
+        // Ignored by the SQL path; a Mongo pipeline cannot run without it.
+        collection: opts?.collection,
+      }),
       signal: opts?.signal,
     });
     const body = await this.unwrap<{ result: ResultSet }>(res);
@@ -305,7 +320,10 @@ export class LocalTransport implements Transport {
     }
     while (events.length > 0) yield events.shift()!;
   }
-  execute(sql: string, opts?: ExecuteOptions & { connectionId?: string; question?: string }): Promise<ResultSet> {
+  execute(
+    sql: string,
+    opts?: ExecuteOptions & { connectionId?: string; question?: string; collection?: string },
+  ): Promise<ResultSet> {
     return this.engine.execute(sql, opts);
   }
   explain(sql: string, connectionId?: string): Promise<string> {

@@ -295,14 +295,14 @@ describe('AskSqlChat', () => {
     await waitFor(() => expect(screen.getByText('SELECT 1')).toBeTruthy());
   });
 
-  it('saves a query and flips the Save button label', async () => {
+  it('offers no Save button, because nothing surfaces saved queries back to the user', async () => {
     const user = userEvent.setup();
     const transport = makeTransport({ chat: chatOf({ type: 'sql', sql: 'SELECT 1' }, { type: 'done' }) });
     render(<AskSqlChat transport={transport} requireApproval />);
     await user.type(screen.getByRole('textbox', { name: /Ask a question/i }), 'q');
     await user.click(screen.getByRole('button', { name: 'Send' }));
-    await user.click(await screen.findByRole('button', { name: 'Save' }));
-    expect(screen.getByRole('button', { name: 'Saved' })).toBeTruthy();
+    await screen.findByText('SELECT 1');
+    expect(screen.queryByRole('button', { name: 'Save' })).toBeNull();
   });
 
   it('warns when a row limit was auto-applied', async () => {

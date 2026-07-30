@@ -101,6 +101,16 @@ export const ASKSQL_CSS = `
 .asksql-schema-search { margin: 8px; padding: 6px 10px; border: 1px solid var(--aq-border); border-radius: 6px;
   background: var(--aq-bg); color: var(--aq-fg); font: inherit; }
 .asksql-schema-list { flex: 1; overflow-y: auto; padding: 0 8px 8px; }
+.asksql-schema-group { margin-top: 4px; }
+.asksql-schema-grouphead { display: flex; align-items: center; gap: 4px; width: 100%; background: none; border: 0;
+  padding: 4px 2px; font: inherit; font-weight: 600; color: var(--aq-fg); cursor: pointer; text-align: left;
+  text-transform: uppercase; font-size: 11px; letter-spacing: .04em; opacity: .75; }
+.asksql-schema-grouphead:hover { opacity: 1; }
+/* Indent under the group header so nesting reads as a tree, not a flat list. */
+.asksql-schema-groupbody { margin-left: 10px; border-left: 1px solid rgba(127,127,127,.35); padding-left: 6px; }
+/* The caret is the affordance, so give it a fixed slot and enough weight to see. */
+.asksql-schema-caret { display: inline-block; width: 12px; font-weight: 700; opacity: .85; }
+.asksql-schema-toggle:hover .asksql-schema-caret { opacity: 1; }
 .asksql-schema-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .asksql-schema-toggle { flex: 1; text-align: left; background: none; border: none; color: var(--aq-fg); cursor: pointer;
   padding: 4px 2px; font: inherit; }

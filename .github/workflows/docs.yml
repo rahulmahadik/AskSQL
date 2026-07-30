@@ -45,6 +45,20 @@ jobs:
         run: |
           VERSION=$(node -p "require('./packages/core/package.json').version")
           npx typedoc --name "AskSQL API Reference (core v$VERSION)"
+      # The extension's store listings need a live privacy-policy URL; publish
+      # PRIVACY.md on the same Pages site at /privacy.html.
+      - name: Render privacy policy page
+        run: |
+          npx --yes marked --gfm -i packages/browser-extension/PRIVACY.md > /tmp/privacy-body.html
+          {
+            echo '<!doctype html><html lang="en"><head><meta charset="utf-8">'
+            echo '<meta name="viewport" content="width=device-width,initial-scale=1">'
+            echo '<title>AskSQL Privacy Policy</title>'
+            echo '<style>body{max-width:760px;margin:2rem auto;padding:0 1rem;font:16px/1.6 system-ui;color:#222}code{background:#f4f4f4;padding:1px 4px;border-radius:3px}table{border-collapse:collapse}td,th{border:1px solid #ccc;padding:4px 8px}</style>'
+            echo '</head><body>'
+            cat /tmp/privacy-body.html
+            echo '</body></html>'
+          } > docs/api/privacy.html
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:

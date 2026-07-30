@@ -1,5 +1,8 @@
 # AskSQL for JetBrains IDEs
 
+**[Install from the JetBrains Marketplace](https://plugins.jetbrains.com/plugin/33126-asksql)**
+
+
 AI database chat inside any JetBrains IDE (IntelliJ IDEA, DataGrip, PyCharm, WebStorm,
 GoLand, PhpStorm, Rider, CLion, RubyMine, RustRover, Android Studio): ask a question in
 plain language, review the generated SQL, approve it, and get results.

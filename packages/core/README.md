@@ -5,9 +5,17 @@ natural-language-to-SQL pipeline, and the model provider resolver. No database
 drivers and no UI; those live in the adapter packages.
 
 ```bash
-npm i @asksql/core @asksql/postgres
+npm i @asksql/core @asksql/postgres pg @ai-sdk/groq
 ```
 
+## Ask about the schema itself, not just the data
+
+`explainSchema(question)` answers schema questions in plain language, grounded in
+the real catalog: what tables exist, how they relate, and advisory suggestions -
+add a column, create an index, improve performance - returned as DDL **proposals
+it never executes**. Off-topic questions are declined rather than answered from
+general knowledge. Answers are checked against the catalog; invented table or
+column names are rejected and retried.
 ## Ask a question end to end
 
 ```ts
@@ -62,3 +70,13 @@ so `baseURL` is only needed to override a default (an OpenAI-compatible gateway,
 Full documentation: [https://github.com/rahulmahadik/AskSQL](https://github.com/rahulmahadik/AskSQL)
 
 API reference: [rahulmahadik.github.io/AskSQL](https://rahulmahadik.github.io/AskSQL/)
+
+## MongoDB and custom models
+
+MongoDB is non-SQL: import `createMongoAskSql` from `@asksql/core/mongo` with the
+`@asksql/mongodb` connector - the same ask/guard/run flow, answering with a guarded
+aggregation pipeline instead of SQL.
+
+`model` also accepts a plain async function
+(`({ system, prompt, signal }) => string | AsyncIterable<string>`) - an escape hatch
+for custom gateways with no AI SDK involved.

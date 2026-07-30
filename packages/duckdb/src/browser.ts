@@ -40,6 +40,8 @@ import {
   type FileFormat,
 } from './shared.js';
 
+export { sanitizeTableName, quoteIdent } from './shared.js';
+
 /** A file to register from the browser. Provide `data` (content), not a path. */
 export interface BrowserFileSource {
   readonly table: string;

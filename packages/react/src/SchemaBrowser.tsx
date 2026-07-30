@@ -5,7 +5,7 @@
  * Read-only; DDL is shown, never editable (schema management is a non-goal).
  */
 
-import { useMemo, useState, type JSX } from 'react';
+import { useMemo, useState, type JSX, type ReactNode } from 'react';
 import type { SchemaCatalog, TableInfo } from '@asksql/core';
 
 export interface SchemaBrowserProps {
@@ -49,10 +49,36 @@ export function SchemaBrowser({ catalog, onPick }: SchemaBrowserProps): JSX.Elem
       />
       <div className="asksql-schema-list">
         {tables.length === 0 && <div className="asksql-meta">No matches.</div>}
-        {tables.map((t) => (
-          <TableNode key={`${t.schema ?? ''}.${t.name}`} table={t} multiSchema={multiSchema} onPick={onPick} />
-        ))}
+        {GROUPS.map(({ label, match }) => {
+          const group = tables.filter((t) => match(t.kind));
+          if (group.length === 0) return null;
+          return (
+            <SchemaGroup key={label} label={`${label} (${group.length})`}>
+              {group.map((t) => (
+                <TableNode key={`${t.schema ?? ''}.${t.name}`} table={t} multiSchema={multiSchema} onPick={onPick} />
+              ))}
+            </SchemaGroup>
+          );
+        })}
       </div>
+    </div>
+  );
+}
+
+/** Grouped the way a database tool does, so views are not mixed in with tables. */
+const GROUPS: readonly { label: string; match: (kind: TableInfo['kind']) => boolean }[] = [
+  { label: 'Tables', match: (k) => k === 'table' || k === undefined },
+  { label: 'Views', match: (k) => k === 'view' || k === 'materialized_view' },
+];
+
+function SchemaGroup({ label, children }: { label: string; children: ReactNode }): JSX.Element {
+  const [open, setOpen] = useState(true);
+  return (
+    <div className="asksql-schema-group">
+      <button className="asksql-schema-grouphead" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
+        <span className="asksql-schema-caret">{open ? '▾' : '▸'}</span> {label}
+      </button>
+      {open && <div className="asksql-schema-groupbody">{children}</div>}
     </div>
   );
 }
@@ -78,7 +104,8 @@ function TableNode({
           aria-expanded={open}
           aria-label={`Toggle ${name}`}
         >
-          {open ? '▾' : '▸'} <span className="asksql-schema-icon">{icon}</span> {name}
+          <span className="asksql-schema-caret">{open ? '▾' : '▸'}</span>{' '}
+          <span className="asksql-schema-icon">{icon}</span> {name}
           {table.source === 'file' && <em className="asksql-schema-tag"> file</em>}
         </button>
         {onPick && (

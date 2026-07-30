@@ -9,10 +9,12 @@ on:
     paths-ignore:
       - 'packages/vscode/**'
       - 'packages/jetbrains/**'
+      - 'packages/browser-extension/**'
   pull_request:
     paths-ignore:
       - 'packages/vscode/**'
       - 'packages/jetbrains/**'
+      - 'packages/browser-extension/**'
 jobs:
   check:
     runs-on: ubuntu-latest

@@ -17,6 +17,8 @@ export interface Turn {
   phase: TurnPhase;
   stage?: string;
   sql?: string;
+  /** MongoDB only: the collection `sql` (an aggregation pipeline) runs against. */
+  collection?: string;
   explanation?: string;
   autoLimited?: boolean;
   result?: ResultSet;
@@ -65,6 +67,23 @@ export interface UseAskSqlResult {
   reset(): void;
 }
 
+/** EXPLAIN's shape varies by engine: DuckDB key/value rows, Postgres a single "QUERY PLAN" column, MySQL a wide table. Prefer the plan-text column; fall back to joining all cells. */
+export function formatPlan(res: ResultSet): string {
+  const planCol = res.columns.findIndex((c) => /^(explain_value|query plan|plan)$/i.test(c.name));
+  const cell = (v: unknown): string => (v === null || v === undefined ? '' : String(v));
+  if (planCol !== -1) {
+    return res.rows
+      .map((r) => cell(r[planCol]))
+      .filter((t) => t.trim() !== '')
+      .join('\n')
+      .trim();
+  }
+  return res.rows
+    .map((r) => r.map(cell).join(' '))
+    .join('\n')
+    .trim();
+}
+
 export function useAskSql(opts: UseAskSqlOptions): UseAskSqlResult {
   const [turns, setTurns] = useState<Turn[]>([]);
   const [busy, setBusy] = useState(false);
@@ -84,14 +103,20 @@ export function useAskSql(opts: UseAskSqlOptions): UseAskSqlResult {
   }, []);
 
   const doRun = useCallback(
-    async (turnId: string, sql: string) => {
+    async (turnId: string, sql: string, collection?: string) => {
       const controller = new AbortController();
       abortRef.current = controller;
       patch(turnId, { phase: 'running', error: undefined, suggestedSql: undefined });
       try {
+        const turn = turnsRef.current.find((t) => t.id === turnId);
+        // `collection` is passed in rather than read from the turn: auto-run
+        // fires before React re-renders, so turnsRef is still pre-patch here
+        // (the same reason the caller passes `sql` instead of reading it).
+        const runCollection = collection ?? turn?.collection;
         const result = await opts.transport.execute(sql, {
           connectionId: opts.connectionId,
-          question: turnsRef.current.find((t) => t.id === turnId)?.question,
+          question: turn?.question,
+          ...(runCollection ? { collection: runCollection } : {}),
           signal: controller.signal,
         });
         patch(turnId, { phase: 'done', result });
@@ -134,6 +159,7 @@ export function useAskSql(opts: UseAskSqlOptions): UseAskSqlResult {
       abortRef.current = controller;
 
       let generatedSql: string | undefined;
+      let generatedCollection: string | undefined;
       let askErrorCode: string | undefined;
       try {
         for await (const ev of opts.transport.chat({
@@ -143,7 +169,10 @@ export function useAskSql(opts: UseAskSqlOptions): UseAskSqlResult {
           signal: controller.signal,
         })) {
           applyEvent(id, ev);
-          if (ev.type === 'sql') generatedSql = ev.sql;
+          if (ev.type === 'sql') {
+            generatedSql = ev.sql;
+            generatedCollection = ev.collection;
+          }
           else if (ev.type === 'error') askErrorCode = ev.code;
         }
       } catch (err) {
@@ -192,7 +221,7 @@ export function useAskSql(opts: UseAskSqlOptions): UseAskSqlResult {
       // Keep busy across the auto-run so Stop stays available and typed input isn't
       // discarded mid-execute; don't run a query the user just cancelled.
       if (generatedSql && !opts.requireApproval && !controller.signal.aborted) {
-        await doRun(id, generatedSql);
+        await doRun(id, generatedSql, generatedCollection);
       }
       setBusy(false);
       inFlightRef.current = false;
@@ -200,7 +229,13 @@ export function useAskSql(opts: UseAskSqlOptions): UseAskSqlResult {
       function applyEvent(turnId: string, ev: ChatEvent) {
         if (ev.type === 'stage') patch(turnId, { stage: ev.stage });
         else if (ev.type === 'sql')
-          patch(turnId, { phase: 'sql_ready', sql: ev.sql, explanation: ev.explanation, autoLimited: ev.autoLimited });
+          patch(turnId, {
+            phase: 'sql_ready',
+            sql: ev.sql,
+            explanation: ev.explanation,
+            autoLimited: ev.autoLimited,
+            ...(ev.collection ? { collection: ev.collection } : {}),
+          });
         else if (ev.type === 'error')
           patch(turnId, {
             phase: 'error',
@@ -264,8 +299,7 @@ export function useAskSql(opts: UseAskSqlOptions): UseAskSqlResult {
         }
         // EXPLAIN passes the guard (read-only); reuse the execute path.
         const res = await opts.transport.execute(`EXPLAIN ${turn.sql}`, { connectionId: opts.connectionId });
-        const text = res.rows.map((r) => r.map((c) => (c === null ? '' : String(c))).join(' ')).join('\n');
-        patch(turnId, { plan: text || '(no plan returned)', planning: false });
+        patch(turnId, { plan: formatPlan(res) || '(no plan returned)', planning: false });
       } catch (err) {
         const e = err as { userMessage?: string };
         patch(turnId, { plan: `Couldn't fetch the plan: ${e.userMessage ?? 'error'}`, planning: false });

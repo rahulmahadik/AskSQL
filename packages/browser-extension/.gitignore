@@ -1,0 +1,8 @@
+dist/
+*.zip
+node_modules/
+*.tsbuildinfo
+.devkey/
+.chrome-for-testing/
+public/duckdb-extensions/*
+!public/duckdb-extensions/.gitkeep

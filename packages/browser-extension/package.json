@@ -1,0 +1,42 @@
+{
+  "name": "asksql-browser-extension",
+  "private": true,
+  "type": "module",
+  "version": "0.1.0",
+  "description": "AskSQL for Chromium browsers (Edge + Chrome): zero-backend DuckDB-WASM file chat and @asksql/server sidecar mode in a Manifest V3 side panel.",
+  "scripts": {
+    "fetch-duckdb-extensions": "node scripts/fetch-duckdb-extensions.mjs",
+    "build": "node scripts/fetch-duckdb-extensions.mjs && node esbuild.mjs --production",
+    "package": "npm run build && node scripts/package-zip.mjs",
+    "watch": "node esbuild.mjs --watch",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src test"
+  },
+  "dependencies": {
+    "@asksql/core": "workspace:*",
+    "@asksql/duckdb": "workspace:*",
+    "@asksql/react": "workspace:*",
+    "@ai-sdk/anthropic": "^4.0.14",
+    "@ai-sdk/google": "^4.0.14",
+    "@ai-sdk/groq": "^4.0.10",
+    "@ai-sdk/openai": "^4.0.13",
+    "@ai-sdk/openai-compatible": "^3.0.9",
+    "@duckdb/duckdb-wasm": "^1.32.0",
+    "ai": "^7.0.26",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7"
+  },
+  "devDependencies": {
+    "@asksql/server": "workspace:*",
+    "@eslint/js": "^9.20.0",
+    "@types/chrome": "^0.2.2",
+    "@types/node": "^26.1.1",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "esbuild": "^0.28.1",
+    "eslint": "^9.20.0",
+    "puppeteer-core": "^25.3.0",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.24.0"
+  }
+}

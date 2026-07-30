@@ -1,6 +1,6 @@
 {
   "name": "@asksql/server",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "AskSQL server sidecar: credential-holding HTTP handler with auth hook, server-side SQL guard, audit log. Framework-agnostic + Express/Next adapters.",
   "type": "module",
   "main": "./dist/index.js",
@@ -23,7 +23,8 @@
     "build": "tsc -b"
   },
   "dependencies": {
-    "@asksql/core": "workspace:^"
+    "@asksql/core": "workspace:^",
+    "@ai-sdk/openai-compatible": "^3.0.9"
   },
   "license": "Apache-2.0",
   "engines": {
@@ -60,5 +61,44 @@
     "anthropic",
     "ollama",
     "text2sql"
-  ]
+  ],
+  "devDependencies": {
+    "@asksql/postgres": "workspace:*",
+    "@asksql/mysql": "workspace:*",
+    "@asksql/oracle": "workspace:*",
+    "@asksql/mongodb": "workspace:*",
+    "@asksql/sqlite": "workspace:*",
+    "@asksql/duckdb": "workspace:*"
+  },
+  "peerDependencies": {
+    "@asksql/postgres": "workspace:*",
+    "@asksql/mysql": "workspace:*",
+    "@asksql/oracle": "workspace:*",
+    "@asksql/mongodb": "workspace:*",
+    "@asksql/sqlite": "workspace:*",
+    "@asksql/duckdb": "workspace:*"
+  },
+  "peerDependenciesMeta": {
+    "@asksql/postgres": {
+      "optional": true
+    },
+    "@asksql/mysql": {
+      "optional": true
+    },
+    "@asksql/oracle": {
+      "optional": true
+    },
+    "@asksql/mongodb": {
+      "optional": true
+    },
+    "@asksql/sqlite": {
+      "optional": true
+    },
+    "@asksql/duckdb": {
+      "optional": true
+    }
+  },
+  "bin": {
+    "asksql": "./dist/bin.js"
+  }
 }

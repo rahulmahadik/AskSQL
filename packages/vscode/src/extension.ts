@@ -286,6 +286,22 @@ export function activate(ctx: vscode.ExtensionContext): void {
       }),
     ),
 
+    /**
+     * Seeds a question about the table that was clicked. The tree row is the
+     * only place the table is known, so this is not offered in the command
+     * palette - there would be nothing to act on.
+     */
+    vscode.commands.registerCommand(
+      'asksql.askAboutTable',
+      guard(async (node?: Node) => {
+        if (!node || node.kind !== 'table') return;
+        const t = node.table;
+        const name = t.schema ? `${t.schema}.${t.name}` : t.name;
+        await vscode.commands.executeCommand('asksql.chat.focus');
+        chat.prefill(`Show me 10 rows from ${name}`);
+      }),
+    ),
+
     /** Bundle versions and recent (secret-free, length-capped) log lines for a bug report. */
     vscode.commands.registerCommand(
       'asksql.collectDiagnostics',

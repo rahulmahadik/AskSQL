@@ -75,3 +75,14 @@ the server allows the page's origin (CORS).
 Full documentation: [https://github.com/rahulmahadik/AskSQL](https://github.com/rahulmahadik/AskSQL)
 
 API reference: [rahulmahadik.github.io/AskSQL](https://rahulmahadik.github.io/AskSQL/)
+
+## No backend at all
+
+`LocalTransport` wraps a `@asksql/core` engine running in the same tab (for example
+DuckDB-WASM over uploaded files), so the whole ask -> guard -> run loop happens
+in-browser - same `<AskSqlChat>`, no server.
+
+`<AskSqlChat>` also accepts `initialQuestion` (asked automatically whenever it changes
+to a new non-empty value - e.g. an "ask about selection" hand-off, with
+`onInitialQuestionConsumed` to clear your state) and `sqlDisplayPlacement`
+(`'before' | 'after'`) to show results first with the SQL below.

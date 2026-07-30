@@ -60,3 +60,13 @@ page's origin (CORS).
 Full documentation: [https://github.com/rahulmahadik/AskSQL](https://github.com/rahulmahadik/AskSQL)
 
 API reference: [rahulmahadik.github.io/AskSQL](https://rahulmahadik.github.io/AskSQL/)
+
+## More options
+
+| Option | Type | Default | What it does |
+|---|---|---|---|
+| `mode` | `'bubble' \| 'chat'` | `'bubble'` | Floating chat-head, or a full-page chat filling `target`. |
+| `position` | corner | `'bottom-right'` | Bubble corner, with `offset` and `zIndex` to fit your UI. |
+| `title` | `string` | - | Bubble header title. |
+| `suggestions` | `string[]` | - | Starter questions shown as clickable chips. |
+| `nonce` | `string` | - | CSP nonce for the injected stylesheet (strict-CSP pages). |

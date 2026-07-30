@@ -51,6 +51,11 @@ class SchemaTreePanel(private val project: Project) : Disposable {
         override fun toString() = label
     }
 
+    /** Carries the table so the row can act on it; the label is what the tree renders. */
+    private class TableNode(val table: TableInfo, private val label: String) {
+        override fun toString() = label
+    }
+
     init {
         component.add(JBScrollPane(tree), BorderLayout.CENTER)
         installContextMenu()
@@ -66,11 +71,34 @@ class SchemaTreePanel(private val project: Project) : Disposable {
                 if (!e.isPopupTrigger) return
                 val path = tree.getPathForLocation(e.x, e.y) ?: return
                 val node = path.lastPathComponent as? DefaultMutableTreeNode ?: return
-                val info = node.userObject as? ConnectionNode ?: return
                 tree.selectionPath = path
-                showConnectionMenu(info.descriptor, e)
+                when (val info = node.userObject) {
+                    is ConnectionNode -> showConnectionMenu(info.descriptor, e)
+                    is TableNode -> showTableMenu(info.table, e)
+                    else -> return
+                }
             }
         })
+    }
+
+    private fun showTableMenu(table: TableInfo, e: java.awt.event.MouseEvent) {
+        val menu = javax.swing.JPopupMenu()
+        menu.add(javax.swing.JMenuItem("Ask About This Table").apply { addActionListener { askAbout(table) } })
+        menu.show(tree, e.x, e.y)
+    }
+
+    /** Seeds the chat with a question about this table, the same handoff Ask About Selection uses. */
+    private fun askAbout(table: TableInfo) {
+        val name = table.schema?.let { "$it.${table.name}" } ?: table.name
+        PendingQuestion.set(project, "Show me 10 rows from $name")
+        val toolWindow = com.intellij.openapi.wm.ToolWindowManager.getInstance(project).getToolWindow("AskSQL") ?: return
+        val chatContent = toolWindow.contentManager.contents
+            .firstOrNull { it.getUserData(AskSqlToolWindowFactory.CHAT_PANEL_KEY) != null }
+        toolWindow.show()
+        chatContent?.let { content ->
+            toolWindow.contentManager.setSelectedContent(content)
+            content.getUserData(AskSqlToolWindowFactory.CHAT_PANEL_KEY)?.consumePendingQuestion()
+        }
     }
 
     private fun showConnectionMenu(descriptor: ConnectionDescriptor, e: java.awt.event.MouseEvent) {
@@ -225,7 +253,9 @@ class SchemaTreePanel(private val project: Project) : Disposable {
         for (table in tables) {
             val schemaPrefix = table.schema?.let { "$it · " } ?: ""
             val colCount = table.columns.size
-            val tableNode = DefaultMutableTreeNode("${table.name} - $schemaPrefix$colCount col${if (colCount == 1) "" else "s"}")
+            val tableNode = DefaultMutableTreeNode(
+                TableNode(table, "${table.name} - $schemaPrefix$colCount col${if (colCount == 1) "" else "s"}"),
+            )
             for (column in table.columns) {
                 val marker = when {
                     table.primaryKey.contains(column.name) -> " (PK)"

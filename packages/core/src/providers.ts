@@ -155,9 +155,10 @@ export function assertBaseUrl(url: string, carriesSecret: boolean): void {
   }
 }
 
-async function importProvider(pkgName: string): Promise<Record<string, unknown>> {
+/** `promise` must be a literal `import('pkg-name')` at the call site - browser bundlers can only statically include string-literal specifiers (Node accepts either). */
+async function importProvider(promise: Promise<unknown>, pkgName: string): Promise<Record<string, unknown>> {
   try {
-    return (await import(pkgName)) as Record<string, unknown>;
+    return (await promise) as Record<string, unknown>;
   } catch (err) {
     throw new AskSqlError('CONFIG_ERROR', {
       detail: `cannot import ${pkgName}: ${err instanceof Error ? err.message : String(err)}`,
@@ -185,17 +186,22 @@ export async function resolveModel(config: ProviderConfig): Promise<ModelLike> {
 
   switch (config.provider) {
     case 'openai': {
-      const mod = await importProvider('@ai-sdk/openai');
+      const mod = await importProvider(import('@ai-sdk/openai'), '@ai-sdk/openai');
       const create = mod['createOpenAI'] as (o: object) => (id: string) => ModelLike;
       return create({ apiKey: config.apiKey, ...(config.baseURL ? { baseURL: config.baseURL } : {}) })(config.model);
     }
     case 'anthropic': {
-      const mod = await importProvider('@ai-sdk/anthropic');
+      const mod = await importProvider(import('@ai-sdk/anthropic'), '@ai-sdk/anthropic');
       const create = mod['createAnthropic'] as (o: object) => (id: string) => ModelLike;
-      return create({ apiKey: config.apiKey, ...(config.baseURL ? { baseURL: config.baseURL } : {}) })(config.model);
+      return create({
+        apiKey: config.apiKey,
+        // Anthropic rejects a browser Origin without this; a no-op elsewhere.
+        headers: { 'anthropic-dangerous-direct-browser-access': 'true' },
+        ...(config.baseURL ? { baseURL: config.baseURL } : {}),
+      })(config.model);
     }
     case 'google': {
-      const mod = await importProvider('@ai-sdk/google');
+      const mod = await importProvider(import('@ai-sdk/google'), '@ai-sdk/google');
       const create = mod['createGoogleGenerativeAI'] as (o: object) => (id: string) => ModelLike;
       // Honor a user-supplied baseURL instead of silently sending the key to the
       // vendor cloud (assertBaseUrl above already validated it).
@@ -219,7 +225,7 @@ export async function resolveModel(config: ProviderConfig): Promise<ModelLike> {
           userMessage: 'The Azure resource name contains invalid characters.',
         });
       }
-      const mod = await importProvider('@ai-sdk/azure');
+      const mod = await importProvider(import('@ai-sdk/azure'), '@ai-sdk/azure');
       const create = mod['createAzure'] as (o: object) => (id: string) => ModelLike;
       return create({
         apiKey: config.apiKey,
@@ -228,7 +234,7 @@ export async function resolveModel(config: ProviderConfig): Promise<ModelLike> {
       })(config.model);
     }
     case 'groq': {
-      const mod = await importProvider('@ai-sdk/groq');
+      const mod = await importProvider(import('@ai-sdk/groq'), '@ai-sdk/groq');
       const create = mod['createGroq'] as (o: object) => (id: string) => ModelLike;
       return create({ apiKey: config.apiKey, ...(config.baseURL ? { baseURL: config.baseURL } : {}) })(config.model);
     }
@@ -237,7 +243,7 @@ export async function resolveModel(config: ProviderConfig): Promise<ModelLike> {
     case 'openai-compatible': {
       // NVIDIA and Ollama are OpenAI-compatible with a known endpoint we pre-seed;
       // a user-supplied baseURL overrides it. openai-compatible has no default.
-      const mod = await importProvider('@ai-sdk/openai-compatible');
+      const mod = await importProvider(import('@ai-sdk/openai-compatible'), '@ai-sdk/openai-compatible');
       const create = mod['createOpenAICompatible'] as (o: object) => (id: string) => ModelLike;
       const baseURL = config.baseURL ?? PROVIDER_API_HOST[config.provider];
       if (!baseURL) {

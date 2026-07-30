@@ -8,6 +8,14 @@
 
 All packages are published on npm under the [`@asksql`](https://www.npmjs.com/org/asksql) scope.
 
+**Get it:**
+
+| Surface | Install |
+|---|---|
+| JetBrains IDEs (IntelliJ, DataGrip, PyCharm, ...) | [JetBrains Marketplace](https://plugins.jetbrains.com/plugin/33126-asksql) |
+| VS Code | [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=RahulMahadik.asksql-vscode) |
+| Your own app / server | `npm i @asksql/core` - plus [`@asksql/react`](https://www.npmjs.com/package/@asksql/react), [`@asksql/server`](https://www.npmjs.com/package/@asksql/server), [`@asksql/widget`](https://www.npmjs.com/package/@asksql/widget) and the per-database connectors |
+
 **Open-source, embeddable AI database chat.** Ask a question in plain language, review the
 generated SQL, approve it, and get results - as a floating chat-head bubble you can drop into
 any app, or a full-page chat UI, from one `npm install`.
@@ -25,6 +33,12 @@ const transport = new HttpTransport({ baseUrl: '/asksql' });
   <br />
   <em>Ask in plain language, review the generated SQL, get results. (<a href="docs/screenshots/README.md">more screenshots</a>)</em>
 </p>
+
+## Use it in JetBrains IDEs
+
+Install **[AskSQL](https://plugins.jetbrains.com/plugin/33126-asksql)** from the JetBrains
+Marketplace (IntelliJ IDEA, DataGrip, PyCharm, and the rest of the family). Six databases,
+local or hosted models, read-only by design - the same engine as every other surface.
 
 ## Use it in VS Code
 
@@ -45,7 +59,7 @@ Groq / NVIDIA key.
        alt="A plain-language question turned into SQL with results, plus a general question answered from the schema." />
 </p>
 
-Install **AskSQL** from the VS Code Marketplace (or build the `.vsix` from `packages/vscode`). See the
+Install **[AskSQL](https://marketplace.visualstudio.com/items?itemName=RahulMahadik.asksql-vscode)** from the VS Code Marketplace (or build the `.vsix` from `packages/vscode`). See the
 [extension README](packages/vscode/README.md) for details.
 
 Working in a JetBrains IDE instead? The **AskSQL** plugin for IntelliJ IDEA, DataGrip, PyCharm, and
@@ -134,6 +148,11 @@ only the schema plus your question ever reach the model. When you want a chat UI
 query CSV / Parquet files in the browser use `@asksql/duckdb`. The rest of this README covers
 each of those. Prefer a cloud model instead of Ollama? Swap step 2 for one `@ai-sdk/*` package
 and an API key - see [Install only what your mode needs](#install-only-what-your-mode-needs).
+
+**Schema Q&A**: turn on `answerSchemaQuestions` (or call `engine.explainSchema`) and
+questions that aren't a data query - "how do these tables relate?", "how should I add a
+phone column?", "suggest an index" - get grounded prose answers, with any proposed
+INSERT/UPDATE/DELETE/DDL returned as text that is never executed.
 
 ## Packages
 

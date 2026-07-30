@@ -4,6 +4,8 @@
  * client-visible response.
  */
 
+import type { MongoConnector } from '@asksql/core/mongo';
+import type { DynamicConnectionOptions } from './dynamicConnections.js';
 import type { AskSqlConfig, Connector, HistoryEntry } from '@asksql/core';
 
 /** Result of the host's auth hook. */
@@ -39,13 +41,21 @@ export interface AuditSink {
 }
 
 export interface AskSqlServerConfig {
-  /** All connections the server can reach (with credentials). */
+  /** All SQL connections the server can reach (with credentials). */
   readonly connectors: readonly Connector[];
+  /** MongoDB connections. Separate because Mongo is not a SQL `Connector`. */
+  readonly mongoConnectors?: readonly MongoConnector[];
   /** Engine settings shared by all requests (model, policy, pruner, llm). */
   readonly engine: Omit<AskSqlConfig, 'connectors' | 'history'>;
   /** Identity + scope resolver. Required - there is no anonymous default. */
   readonly auth: AuthHook;
   readonly audit?: AuditSink;
+  /**
+   * Let clients create connections at runtime via POST /connections, so a
+   * browser extension can offer a host/port/user/password form. Off unless
+   * explicitly enabled - see dynamicConnections.ts for why.
+   */
+  readonly dynamicConnections?: DynamicConnectionOptions;
   /** Max request body bytes. Default 64 KB. */
   readonly maxBodyBytes?: number;
   /**
@@ -73,6 +83,13 @@ export interface ErrorContext {
 export type ChatStreamEvent =
   | { readonly type: 'stage'; readonly stage: string }
   | { readonly type: 'token'; readonly text: string }
-  | { readonly type: 'sql'; readonly sql: string; readonly explanation: string; readonly autoLimited: boolean }
+  | {
+      readonly type: 'sql';
+      readonly sql: string;
+      readonly explanation?: string;
+      readonly autoLimited: boolean;
+      /** MongoDB only: the collection the pipeline runs against, required to execute it. */
+      readonly collection?: string;
+    }
   | { readonly type: 'error'; readonly code: string; readonly userMessage: string; readonly retryable: boolean }
   | { readonly type: 'done' };

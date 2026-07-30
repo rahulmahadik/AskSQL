@@ -554,6 +554,11 @@ class EnginePipeline(
             }.text.trim()
             unknown = unknownReferencesInProse(answer, fullCatalog)
         }
+        // Deterministic, not prompt-hoped: a proposed write statement always carries the read-only note.
+        val writeFence = Regex("```sql[\\s\\S]*?\\b(insert|update|delete|alter|create|drop|truncate)\\b", RegexOption.IGNORE_CASE)
+        if (writeFence.containsMatchIn(answer) && !answer.contains("read-only", ignoreCase = true)) {
+            answer += "\n\n*Proposal only - AskSQL is read-only and never executes statements; run it yourself if you want it applied.*"
+        }
         return SchemaAnswer(answer, tables, unknown.isEmpty(), unknown, isSchemaChange)
     }
 

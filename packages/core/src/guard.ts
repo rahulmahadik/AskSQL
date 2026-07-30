@@ -819,6 +819,16 @@ export function guardSql(input: GuardInput): GuardVerdict {
 
   // ---- EXPLAIN wrapper: guard the inner statement, keep the prefix ----
   let inner = body;
+  // Valid Oracle syntax the parser cannot read: strip a trailing clause,
+  // validate the rest, re-apply it as a parseable ROWNUM wrap at the end.
+  let strippedFetchLimit: number | null = null;
+  if (dialect.limitStyle === 'fetch') {
+    const fetchTail = /\s+FETCH\s+FIRST\s+(\d+)\s+ROWS?\s+ONLY\s*$/i.exec(inner);
+    if (fetchTail) {
+      strippedFetchLimit = Number(fetchTail[1]);
+      inner = inner.slice(0, fetchTail.index);
+    }
+  }
   let explainPrefix = '';
   const explainMatch = /^\s*explain(\s+query\s+plan|\s+analyze|\s+verbose|\s*\([^)]*\))*\s+/iu.exec(body);
   if (explainMatch) {
@@ -919,7 +929,12 @@ export function guardSql(input: GuardInput): GuardVerdict {
   let finalSql = body;
   if (!explainPrefix) {
     const status = inspectLimit(root, policy.maxRows);
-    if (status.kind === 'none' && dialect.limitStyle === 'fetch') {
+    if (strippedFetchLimit !== null) {
+      // ORDER BY runs inside the subquery, so ROWNUM keeps the model's top-N.
+      const capped = Math.min(strippedFetchLimit, policy.maxRows);
+      finalSql = `SELECT * FROM (\n${inner}\n) WHERE ROWNUM <= ${capped}`;
+      if (capped < strippedFetchLimit) loweredLimit = true;
+    } else if (status.kind === 'none' && dialect.limitStyle === 'fetch') {
       // Oracle has no LIMIT, and node-sql-parser cannot validate FETCH FIRST, so
       // appending either would break. The connector's driver-level maxRows caps the
       // fetch after any ORDER BY (a correct top-N), so no SQL-level limit is injected.
