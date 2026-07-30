@@ -1,0 +1,60 @@
+name: Browser Extension CI
+
+# Runs only when the extension - or a package it bundles - changes, so an
+# npm-only, VS Code-only, or JetBrains-only change never triggers it (and vice
+# versa). The extension bundles @asksql/core, @asksql/react, and
+# @asksql/duckdb's browser export, so a change to any of those must
+# re-validate it too.
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'packages/browser-extension/**'
+      - 'packages/core/**'
+      - 'packages/react/**'
+      - 'packages/duckdb/**'
+      - 'packages/server/**'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - '.github/workflows/browser-extension-ci.yml'
+  pull_request:
+    paths:
+      - 'packages/browser-extension/**'
+      - 'packages/core/**'
+      - 'packages/react/**'
+      - 'packages/duckdb/**'
+      - 'packages/server/**'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - '.github/workflows/browser-extension-ci.yml'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # Build the @asksql/* dist the extension bundles, then the extension itself.
+      - run: pnpm build
+      - run: pnpm --filter asksql-browser-extension run typecheck
+      - run: pnpm --filter asksql-browser-extension run lint
+      - run: pnpm exec vitest run packages/browser-extension
+      # ubuntu-latest ships Google Chrome preinstalled; fetch-duckdb-extensions.mjs
+      # needs it to discover the xlsx extension URL (see the script's own header).
+      - run: pnpm --filter asksql-browser-extension run build
+      # Same packaging as the release workflow: package-zip.mjs strips the
+      # dev-only manifest "key", so the CI artifact is store-shaped too.
+      - name: Package zip
+        working-directory: packages/browser-extension
+        run: node scripts/package-zip.mjs
+      - name: Upload extension artifact
+        uses: actions/upload-artifact@v5
+        with:
+          name: asksql-browser-extension
+          path: packages/browser-extension/asksql-browser-extension.zip
+          if-no-files-found: error

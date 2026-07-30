@@ -1,0 +1,198 @@
+/* Chrome-shaped around @asksql/react (which injects its own styles). Kept
+   minimal - just enough layout for the panel/options shells. */
+html,
+body {
+  margin: 0;
+  height: 100%;
+  font: 13px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  color: #111827;
+  background: #ffffff;
+}
+@media (prefers-color-scheme: dark) {
+  html,
+  body {
+    color: #e5e7eb;
+    background: #111827;
+  }
+}
+#root {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+.asksql-ext-root {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+.asksql-ext-header {
+  padding: 8px 12px;
+  border-bottom: 1px solid rgba(127, 127, 127, 0.25);
+}
+.asksql-ext-tabs {
+  display: flex;
+  border-bottom: 1px solid rgba(127, 127, 127, 0.25);
+}
+.asksql-ext-tab {
+  flex: 1;
+  padding: 8px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  color: inherit;
+  border-bottom: 2px solid transparent;
+}
+.asksql-ext-tab.active {
+  border-bottom-color: #2563eb;
+  font-weight: 600;
+}
+.asksql-ext-setup {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.asksql-ext-status {
+  color: #6b7280;
+  font-size: 12px;
+}
+.asksql-ext-btn {
+  padding: 6px 12px;
+  border-radius: 6px;
+  border: 1px solid rgba(127, 127, 127, 0.4);
+  background: #2563eb;
+  color: #fff;
+  cursor: pointer;
+  width: fit-content;
+}
+.asksql-ext-chat-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 12px;
+  border-bottom: 1px solid rgba(127, 127, 127, 0.25);
+}
+.asksql-ext-chat-header .asksql-ext-status {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The section is a flex column, so buttons stack unless grouped into a row. */
+.asksql-ext-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.asksql-ext-connection-row .asksql-ext-btn + .asksql-ext-btn {
+  margin-left: 8px;
+}
+.asksql-ext-command {
+  background: rgba(127, 127, 127, 0.12);
+  padding: 8px 10px;
+  border-radius: 6px;
+  overflow-x: auto;
+  margin: 6px 0;
+  font-size: 12px;
+}
+.asksql-ext-section-inline {
+  border: 1px solid rgba(127, 127, 127, 0.25);
+  border-radius: 6px;
+  padding: 10px;
+}
+.asksql-ext-linkish {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 2px 4px;
+  color: inherit;
+  opacity: 0.8;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Underline only on hover: a persistent one under the model name reads as
+   clutter in a header that is mostly labels, not links. */
+.asksql-ext-linkish:hover,
+.asksql-ext-linkish:focus-visible {
+  text-decoration: underline;
+  opacity: 1;
+}
+/* Bounded so a long table list scrolls itself instead of squeezing the chat. */
+.asksql-ext-tables {
+  max-height: 40%;
+  overflow-y: auto;
+  border-bottom: 1px solid rgba(127, 127, 127, 0.25);
+  flex: 0 0 auto;
+}
+.asksql-ext-chat-header {
+  flex-wrap: wrap;
+}
+.asksql-ext-chat {
+  /* The panel is a fixed-height column: header, optional status, then the chat. */
+  overflow: hidden;
+}
+/* @asksql/react sizes its chat with height:100%, which in this column resolves
+   to the WHOLE panel - so placed after the header it overflows by the header's
+   height and pushes the composer below the fold. Make it a flex item that takes
+   the remaining space instead; its own .asksql-thread still scrolls inside. */
+.asksql-ext-chat > .asksql-root {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: auto;
+}
+.asksql-ext-options {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+.asksql-ext-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.asksql-ext-field label {
+  font-weight: 600;
+}
+.asksql-ext-field input,
+.asksql-ext-field select {
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid rgba(127, 127, 127, 0.4);
+  background: transparent;
+  color: inherit;
+}
+.asksql-ext-warning {
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: rgba(234, 179, 8, 0.15);
+  border: 1px solid rgba(234, 179, 8, 0.4);
+  font-size: 12px;
+}
+.asksql-ext-connection-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 0;
+  border-bottom: 1px solid rgba(127, 127, 127, 0.15);
+}
+.asksql-ext-connection-row span {
+  flex: 1;
+}
+.asksql-ext-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid rgba(127, 127, 127, 0.15);
+}
+.asksql-ext-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}

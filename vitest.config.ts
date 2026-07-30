@@ -11,6 +11,9 @@ export default defineConfig({
       vscode: fileURLToPath(new URL('./packages/vscode/test/vscode-mock.ts', import.meta.url)),
       '@asksql/core/mongo': fileURLToPath(new URL('./packages/core/src/mongo/index.ts', import.meta.url)),
       '@asksql/core': pkg('core'),
+      // Must precede the bare '@asksql/duckdb' entry: aliases match in order,
+      // and the bare one would rewrite this subpath to index.ts/browser.
+      '@asksql/duckdb/browser': fileURLToPath(new URL('./packages/duckdb/src/browser.ts', import.meta.url)),
       '@asksql/duckdb': pkg('duckdb'),
       '@asksql/sqlite': pkg('sqlite'),
       '@asksql/postgres': pkg('postgres'),
@@ -36,9 +39,13 @@ export default defineConfig({
       // The coverage floor gates the reusable LIBRARY - the engine, connectors, server,
       // and MCP tools. The VS Code extension and React UI packages are host/browser
       // integration layers (webview messaging, commands, secrets, tree rendering; React
-      // components + hooks) validated by their own suites (218 + 86 tests) and live
-      // rendering, not this branch floor. duckdb/browser.ts and widget/* are the
-      // duckdb-wasm/browser builds (need a browser + WASM).
+      // components + hooks) validated by their own suites and live rendering, not this
+      // branch floor. duckdb/browser.ts and widget/* are the duckdb-wasm/browser builds
+      // (need a browser + WASM). The browser extension's React entry points (sidepanel/
+      // options, DOM-rendering) get the same treatment, validated by its real-browser
+      // smoke suite instead; everything else in that package - including the service
+      // worker - is plain TS a chrome.* mock can unit-test directly, so it stays in the
+      // floor.
       exclude: [
         '**/*.d.ts',
         '**/index.ts',
@@ -46,6 +53,10 @@ export default defineConfig({
         'packages/duckdb/src/browser.ts',
         'packages/vscode/src/**',
         'packages/react/src/**',
+        // Process entry point: one call into main() plus exit-code plumbing.
+        'packages/server/src/bin.ts',
+        'packages/browser-extension/src/sidepanel/**',
+        'packages/browser-extension/src/options/**',
       ],
       // Floors below the current numbers, so a coverage regression fails `pnpm coverage`.
       thresholds: { statements: 92, branches: 85, functions: 94, lines: 94 },

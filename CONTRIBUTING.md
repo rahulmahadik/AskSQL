@@ -30,6 +30,7 @@ pnpm test        # the full suite (see gating below)
 | `packages/react` / `packages/widget` | UI surfaces |
 | `packages/mcp` | Model Context Protocol tool definitions |
 | `packages/vscode` | VS Code extension. Private, versioned and released on its own line - not part of the npm release |
+| `packages/browser-extension` | Edge/Chrome extension (Manifest V3). Private, versioned and released on its own line - not part of the npm release |
 | `examples/` | Runnable end-to-end demos |
 | `tests/` | Cross-package integration + live tests |
 

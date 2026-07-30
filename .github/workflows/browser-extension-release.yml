@@ -1,0 +1,89 @@
+name: Browser Extension Release
+
+# Package a store-ready zip on a browser-ext-v* tag, mirroring how release.yml
+# publishes npm on v*, vscode-release.yml on vscode-v*, and jetbrains-release.yml
+# on jetbrains-v*. One surface, one tag prefix - a tag never publishes more
+# than the surface it names.
+#
+# Submission to Microsoft Partner Center (Edge Add-ons) and the Chrome Web
+# Store is manual for the first release (same as the JetBrains plan treated
+# its first Marketplace upload) - this workflow produces the signed-ready
+# artifact, it doesn't call either store's publish API yet.
+on:
+  push:
+    tags:
+      - 'browser-ext-v*'
+  workflow_dispatch:
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    environment: browser-extension-publish
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Verify release tag is on main
+        run: |
+          git fetch origin main --quiet
+          if ! git merge-base --is-ancestor "${{ github.sha }}" origin/main; then
+            echo "::error::Tag ${{ github.ref_name }} (${{ github.sha }}) is not on main; refusing to release."
+            exit 1
+          fi
+          echo "Release tag ${{ github.ref_name }} is on main; proceeding."
+      - name: Verify tag matches extension version
+        if: github.event_name != 'workflow_dispatch'
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          TAG_VERSION="${REF_NAME#browser-ext-v}"
+          PKG_VERSION="$(node -p "require('./packages/browser-extension/package.json').version")"
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "::error::Tag ${REF_NAME} does not match packages/browser-extension/package.json version ${PKG_VERSION}."
+            exit 1
+          fi
+          echo "Tag matches extension version ${PKG_VERSION}."
+      - uses: pnpm/action-setup@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: pnpm --filter asksql-browser-extension run build
+      # package-zip.mjs strips the dev-only manifest "key" from the copy it
+      # zips; zipping dist/ directly would ship it and both stores reject that.
+      - name: Package store-ready zip
+        working-directory: packages/browser-extension
+        run: node scripts/package-zip.mjs
+      - name: Verify the zip carries no manifest key
+        working-directory: packages/browser-extension
+        run: |
+          unzip -p asksql-browser-extension.zip manifest.json | node -e "
+            let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{
+              const m=JSON.parse(d);
+              if (m.key) { console.error('manifest key leaked into the zip'); process.exit(1); }
+              console.log('zip manifest is key-free, version ' + m.version);
+            })"
+      - name: Attach zip to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: packages/browser-extension/asksql-browser-extension.zip
+      # Opt-in once Partner Center credentials exist: set the repository
+      # variable EDGE_PUBLISH_ENABLED=true and the environment secrets
+      # EDGE_PRODUCT_ID / EDGE_CLIENT_ID / EDGE_API_KEY (see RELEASE-RUNBOOK).
+      - name: Upload to Edge Add-ons (draft)
+        if: vars.EDGE_PUBLISH_ENABLED == 'true'
+        uses: wdzeng/edge-addon@v2
+        with:
+          product-id: ${{ secrets.EDGE_PRODUCT_ID }}
+          zip-path: packages/browser-extension/asksql-browser-extension.zip
+          api-key: ${{ secrets.EDGE_API_KEY }}
+          client-id: ${{ secrets.EDGE_CLIENT_ID }}
+          upload-only: true
+          notes-for-certification: >
+            declarativeNetRequestWithHostAccess is used only to strip the Origin
+            header on requests to the user's own configured AI endpoint (for
+            example a local Ollama server). See PRIVACY.md in the package.
