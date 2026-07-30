@@ -101,6 +101,14 @@ jobs:
           node-version: 22
           # setup-node@v5 defaults package-manager-cache:true, which detects the repo-root pnpm and runs it; this isolated npm-only dir has no pnpm installed.
           package-manager-cache: false
+      # The core pin is file:../../../core (vectors mirror the repo's own core
+      # until each release), so its dist/ must exist before npm links it.
+      - uses: pnpm/action-setup@v5
+      - name: Build @asksql/core for the file: dependency
+        working-directory: .
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm --filter @asksql/core run build
       - run: npm install --no-audit --no-fund
       - run: node export-vectors.mjs
       - name: Fail if generated vectors differ from committed ones
