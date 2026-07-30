@@ -104,7 +104,7 @@ jobs:
       # The core pin is file:../../../core (vectors mirror the repo's own core
       # until each release), so its dist/ must exist before npm links it.
       - uses: pnpm/action-setup@v5
-      - name: Build @asksql/core for the file: dependency
+      - name: Build @asksql/core (parity pins it as a file dependency)
         working-directory: .
         run: |
           pnpm install --frozen-lockfile

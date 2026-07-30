@@ -16,7 +16,25 @@ vi.mock('@asksql/react', async (importOriginal) => {
   };
 });
 
-afterEach(() => {
+const handles: { unmount(): void }[] = [];
+const tracked = (h: { unmount(): void }) => {
+  let done = false;
+  const safe = {
+    unmount() {
+      if (done) return;
+      done = true;
+      h.unmount();
+    },
+  };
+  handles.push(safe);
+  return safe;
+};
+
+afterEach(async () => {
+  for (const h of handles.splice(0)) h.unmount();
+  // Flush React's scheduler while jsdom still exists, or a deferred render
+  // task fires after teardown and crashes the run with "window is not defined".
+  await new Promise((r) => setImmediate(r));
   document.body.innerHTML = '';
 });
 
@@ -28,7 +46,7 @@ describe('mount', () => {
     host.innerHTML = '<p id="keep">host content</p>';
     document.body.appendChild(host);
 
-    mount({ ...opts, target: host });
+    tracked(mount({ ...opts, target: host }));
 
     // The host keeps its own children; the widget lives in an element we created.
     expect(host.querySelector('#keep')).not.toBeNull();
@@ -37,14 +55,14 @@ describe('mount', () => {
   });
 
   it('isolates its styles inside the shadow root, never the host page head', () => {
-    mount(opts);
+    tracked(mount(opts));
     expect(document.head.querySelector('style')).toBeNull();
     const mp = document.body.querySelector('[data-asksql-widget]')!;
     expect(mp.shadowRoot).toBeNull(); // closed mode: not reachable from outside
   });
 
   it('defaults to document.body when no target is given', () => {
-    mount(opts);
+    tracked(mount(opts));
     expect(document.body.querySelector('[data-asksql-widget]')).not.toBeNull();
   });
 
@@ -52,7 +70,7 @@ describe('mount', () => {
     const host = document.createElement('section');
     host.id = 'app';
     document.body.appendChild(host);
-    mount({ ...opts, target: '#app' });
+    tracked(mount({ ...opts, target: '#app' }));
     expect(host.querySelector('[data-asksql-widget]')).not.toBeNull();
   });
 
@@ -66,7 +84,7 @@ describe('mount', () => {
     document.body.appendChild(host);
     const before = host.innerHTML;
 
-    const handle = mount({ ...opts, target: host });
+    const handle = tracked(mount({ ...opts, target: host }));
     expect(host.querySelector('[data-asksql-widget]')).not.toBeNull();
 
     handle.unmount();
@@ -76,8 +94,8 @@ describe('mount', () => {
   });
 
   it('mounts twice without the second clobbering the first', () => {
-    const a = mount(opts);
-    const b = mount(opts);
+    const a = tracked(mount(opts));
+    const b = tracked(mount(opts));
     expect(document.body.querySelectorAll('[data-asksql-widget]')).toHaveLength(2);
     a.unmount();
     expect(document.body.querySelectorAll('[data-asksql-widget]')).toHaveLength(1);
