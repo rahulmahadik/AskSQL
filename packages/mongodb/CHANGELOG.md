@@ -1,5 +1,13 @@
 # @asksql/mongodb
 
+## 0.1.2
+
+### Patch Changes
+
+- f440790: Default the separate user/password `authSource` to `admin` (fixes authentication for root/Atlas users, who don't live in the query database; overridable via a new `authSource` option), and give clearer connection errors - an Atlas IP allow-list hint on a TLS/timeout failure, and a note about the `<password>` placeholder brackets on an auth failure.
+- Updated dependencies
+  - @asksql/core@0.3.4
+
 ## 0.1.1
 
 ### Patch Changes

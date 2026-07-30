@@ -1,5 +1,64 @@
 # @asksql/server
 
+## 0.3.0
+
+### Minor Changes
+
+- Add `asksql serve`, runtime database connections, and MongoDB support.
+
+  **`@asksql/server`**
+
+  - New `asksql serve` CLI (`npx --package=@asksql/server asksql serve --provider ollama --model <id>`),
+    so running a sidecar no longer means writing HTTP boilerplate. Binds to
+    `127.0.0.1` by default and refuses a public `--host` unless `--allow-host`
+    names which databases it may open.
+  - New opt-in `dynamicConnections` option enabling `POST /connections` and
+    `DELETE /connections/:id`, so a client that cannot open a database socket (a
+    browser extension) can still offer a host/port/user/password form. Off unless
+    explicitly enabled; link-local addresses are refused and an optional host
+    allowlist is supported.
+  - MongoDB connections are now served alongside SQL ones via `mongoConnectors`.
+    `/chat` returns the aggregation pipeline plus the `collection` it targets, and
+    `/execute` accepts that collection.
+  - `ANY_CONNECTION` (`'*'`) auth scope, because connections created at runtime get
+    server-generated ids an auth hook cannot enumerate in advance.
+  - The engine is now built lazily, so a server may start with no connectors and
+    have databases added later.
+
+  **`@asksql/react`**
+
+  - `ChatEvent.collection` and `execute(..., { collection })` carry the MongoDB
+    collection from generation through to running the pipeline.
+  - `formatPlan` is exported and now reads the engine's plan column, so DuckDB
+    plans no longer render with a literal `physical_plan` prefix.
+
+  **`@asksql/core`**
+
+  - A provider `403` no longer claims the API key was rejected; it also covers a
+    local model server refusing the caller's origin, which has no key to fix.
+
+  **Post-review hardening (same release)**
+
+  - `@asksql/core`: the guard now accepts a trailing Oracle `FETCH FIRST n ROWS
+ONLY`, validating the query and re-applying the limit as a `ROWNUM` wrap
+    capped at maxRows - previously an unrecoverable block when the model emitted
+    Oracle's own limit syntax.
+  - `@asksql/server`: MongoDB URI hosts get the same link-local/allowlist SSRF
+    checks as plain hosts; `DELETE /connections/:id` enforces the caller's
+    connection scope; duplicate-id creation race closed; request bodies capped at
+    10 MB; SSE streams stop when the client disconnects; `/chat` forwards
+    follow-up context and the answer explanation for MongoDB; `/explain` routes to
+    the Mongo engine and `/explainSchema` reports MongoDB as unsupported instead
+    of a misleading error; `close()` works on a mongo-only server and `/health`
+    lists mongo connections.
+
+### Patch Changes
+
+- Updated dependencies
+- Updated dependencies [f440790]
+  - @asksql/core@0.3.4
+  - @asksql/mongodb@0.1.2
+
 ## 0.2.1
 
 ### Patch Changes
