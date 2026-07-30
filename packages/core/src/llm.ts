@@ -154,8 +154,17 @@ export function classifyLlmError(err: unknown, callerAborted: boolean): AskSqlEr
   if (isBillingExhaustion(e, msg, status)) {
     return new AskSqlError('LLM_BILLING', { detail: `quota/billing: ${msg.slice(0, 200)}`, cause: err });
   }
-  if (status === 401 || status === 403) {
-    return new AskSqlError('LLM_AUTH', { detail: `provider returned ${status}`, cause: err });
+  if (status === 401) {
+    return new AskSqlError('LLM_AUTH', { detail: 'provider returned 401', cause: err });
+  }
+  // 403: a rejected key, or a local server refusing the caller's origin.
+  if (status === 403) {
+    return new AskSqlError('LLM_AUTH', {
+      detail: 'provider returned 403',
+      userMessage:
+        'The AI provider refused the request (403). If you configured an API key, check it. If this is a local model, the server may be refusing requests from this app - see its allowed-origins setting.',
+      cause: err,
+    });
   }
   if (status === 429) {
     return new AskSqlError('LLM_RATE_LIMIT', { detail: `provider returned 429`, cause: err });

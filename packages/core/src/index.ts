@@ -27,7 +27,7 @@ export {
   type RepairPromptInput,
 } from './prompt.js';
 export { callModel, classifyLlmError, type LlmCallInput, type LlmCallResult } from './llm.js';
-export { resolveModel, PROVIDER_API_HOST, type ProviderConfig, type ProviderName } from './providers.js';
+export { resolveModel, assertBaseUrl, PROVIDER_API_HOST, type ProviderConfig, type ProviderName } from './providers.js';
 export { MemoryHistoryStore, MemoryFewShotStore } from './history.js';
 export {
   createAskSql,

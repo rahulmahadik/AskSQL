@@ -705,6 +705,11 @@ export function createAskSql(config: AskSqlConfig): AskSqlEngine {
       ).text.trim();
       // Grounding floor, checked against the full catalog (not the pruned subset, so a real
       // table dropped by pruning isn't flagged).
+      // Deterministic, not prompt-hoped: any proposed write statement carries the
+      // read-only note even when the model forgets to add it.
+      if (/```sql[\s\S]*?\b(insert|update|delete|alter|create|drop|truncate)\b/i.test(answer) && !/read-only/i.test(answer)) {
+        answer += '\n\n*Proposal only - AskSQL is read-only and never executes statements; run it yourself if you want it applied.*';
+      }
       let unknownReferences = unknownReferencesInProse(answer, catalog);
       // One repair pass for understanding questions: a name absent from the schema is a
       // hallucination, so regenerate constrained to real names. Skipped for schema-change

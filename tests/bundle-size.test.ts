@@ -4,6 +4,10 @@
  * past its budget (React/drivers are peers and excluded). Budgets are set at
  * roughly current size × 2 so normal growth is fine but a regression trips.
  *
+ * Command-line entry points are excluded: they are spawned as their own
+ * process and never imported by an embedding app, so counting them would
+ * measure something no integrator ships.
+ *
  * Skips when dist is absent (run `pnpm build` first).
  */
 import { describe, expect, it } from 'vitest';
@@ -14,9 +18,13 @@ import { join } from 'node:path';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 
+const CLI_ENTRY_POINTS = new Set(['cli.js', 'bin.js']);
+
 // KB (gzipped) ceilings for each package's OWN emitted JS.
 const BUDGETS: Record<string, number> = {
-  core: 45,
+  // 45 -> 46 for real features: Oracle FETCH FIRST acceptance in the guard,
+  // the 403 key-vs-origin message, browser-origin provider support.
+  core: 46,
   react: 20,
   server: 12,
   postgres: 14,
@@ -28,7 +36,7 @@ const BUDGETS: Record<string, number> = {
 function gzippedKb(pkg: string): number | null {
   const dist = join(root, 'packages', pkg, 'dist');
   if (!existsSync(dist)) return null;
-  const files = readdirSync(dist).filter((f) => f.endsWith('.js'));
+  const files = readdirSync(dist).filter((f) => f.endsWith('.js') && !CLI_ENTRY_POINTS.has(f));
   if (files.length === 0) return null;
   const buf = Buffer.concat(files.map((f) => readFileSync(join(dist, f))));
   return gzipSync(buf).length / 1024;

@@ -7,7 +7,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { guardSql } from '../src/guard.js';
-import { POSTGRES_DIALECT } from '../src/dialects.js';
+import { ORACLE_DIALECT, POSTGRES_DIALECT } from '../src/dialects.js';
 
 const guard = (sql: string) => guardSql({ sql, dialect: POSTGRES_DIALECT });
 
@@ -40,5 +40,38 @@ describe('guard fails closed on parser gaps, recoverably', () => {
     ]) {
       expect(guard(sql).allowed, sql).toBe(true);
     }
+  });
+});
+
+describe('Oracle FETCH FIRST (unparseable but valid - the model is told not to write it, yet sometimes does)', () => {
+  const oracle = (sql: string, maxRows = 200) => guardSql({ sql, dialect: ORACLE_DIALECT, policy: { maxRows } });
+
+  it('accepts a trailing FETCH FIRST and re-applies it as a parseable ROWNUM wrap', () => {
+    const v = oracle('SELECT region FROM sales ORDER BY amount DESC FETCH FIRST 1 ROWS ONLY');
+    expect(v.allowed).toBe(true);
+    expect(v.sql).toMatch(/^SELECT \* FROM \(/);
+    expect(v.sql).toContain('ROWNUM <= 1');
+    expect(v.sql).not.toMatch(/FETCH\s+FIRST/i);
+  });
+
+  it('accepts the singular ROW form too', () => {
+    expect(oracle('SELECT region FROM sales FETCH FIRST 5 ROW ONLY').allowed).toBe(true);
+  });
+
+  it('caps an over-limit FETCH FIRST at maxRows and reports the lowering', () => {
+    const v = oracle('SELECT region FROM sales FETCH FIRST 500 ROWS ONLY', 200);
+    expect(v.allowed).toBe(true);
+    expect(v.sql).toContain('ROWNUM <= 200');
+    expect(v.loweredLimit).toBe(true);
+  });
+
+  it('still validates what is under the clause - a write does not sneak through', () => {
+    const v = oracle('DELETE FROM sales FETCH FIRST 1 ROWS ONLY');
+    expect(v.allowed).toBe(false);
+  });
+
+  it('a mid-query FETCH FIRST still fails closed rather than being mangled', () => {
+    const v = oracle('SELECT * FROM (SELECT region FROM sales FETCH FIRST 3 ROWS ONLY) sub');
+    expect(v.allowed).toBe(false);
   });
 });
