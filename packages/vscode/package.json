@@ -3,7 +3,7 @@
   "private": true,
   "displayName": "AskSQL",
   "description": "AI database chat: ask in plain language, review the query, get answers. Read-only by design, bring your own model.",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "publisher": "RahulMahadik",
   "license": "Apache-2.0",
   "pricing": "Free",
@@ -135,6 +135,12 @@
         "command": "asksql.collectDiagnostics",
         "title": "Collect Diagnostics",
         "category": "AskSQL"
+      },
+      {
+        "command": "asksql.askAboutTable",
+        "title": "Ask About This Table",
+        "category": "AskSQL",
+        "icon": "$(comment-discussion)"
       }
     ],
     "configuration": {
@@ -366,6 +372,17 @@
           "command": "asksql.testConnection",
           "when": "view == asksql.schema && viewItem == asksql.connection",
           "group": "1_modify@0"
+        },
+        {
+          "command": "asksql.askAboutTable",
+          "when": "view == asksql.schema && viewItem == asksql.table",
+          "group": "inline@0"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "asksql.askAboutTable",
+          "when": "false"
         }
       ]
     },

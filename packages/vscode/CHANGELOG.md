@@ -6,6 +6,20 @@ All notable changes to the AskSQL VS Code extension are documented here. The for
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-07-31
+
+### Added
+- **Ask About This Table**: an inline action on every table in the schema view
+  that focuses the chat prefilled with a question about that table.
+- **Write-query proposals**: asking for an INSERT/UPDATE/DELETE/DDL now returns
+  the statement as a text proposal carrying an explicit read-only note - never
+  executed. (Enable *Answer schema questions* to get proposals instead of a
+  refusal.)
+
+### Changed
+- A provider 403 no longer claims the API key was rejected when it may be a
+  local model server refusing the request's origin; the message now covers both.
+
 ## [0.3.1] - 2026-07-24
 
 ### Fixed
