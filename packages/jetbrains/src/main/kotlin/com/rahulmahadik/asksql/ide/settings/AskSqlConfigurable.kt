@@ -89,6 +89,9 @@ class AskSqlConfigurable : Configurable {
                         .bindItem({ modelField.takeIf { it.isNotBlank() } }, { modelField = it.orEmpty() })
                         .applyToComponent { isEditable = true } // model discovery is best-effort; typing a name always works
                         .component
+                    button("Test Provider") {
+                        testProvider(providerComboBox, baseUrlTextField, modelComboBox)
+                    }
                     button("Fetch Models") {
                         fetchModelsInto(providerComboBox, baseUrlTextField, modelComboBox)
                     }.comment(
@@ -178,6 +181,41 @@ class AskSqlConfigurable : Configurable {
         modelComboBox.removeAllItems()
         dialogPanel?.reset() // re-reads the (now-defaulted) backing fields into every bound Swing component
         forcePersistOnNextApply = true
+    }
+
+    /**
+     * Actually calls the model. Constructing a client proves nothing - a wrong
+     * key, model id, or base URL all fail only once a request is made.
+     */
+    private fun testProvider(
+        providerComboBox: com.intellij.openapi.ui.ComboBox<ProviderKind>,
+        baseUrlTextField: javax.swing.JTextField,
+        modelComboBox: com.intellij.openapi.ui.ComboBox<String>,
+    ) {
+        val provider = providerComboBox.selectedItem as? ProviderKind ?: run {
+            Messages.showWarningDialog("Choose a provider first.", "AskSQL")
+            return
+        }
+        val model = (modelComboBox.editor.item as? String)?.trim().orEmpty()
+        if (model.isEmpty()) {
+            Messages.showWarningDialog("Enter a model name first, or click Fetch Models.", "AskSQL")
+            return
+        }
+        try {
+            runBlockingWithProgress(null, "Testing provider") {
+                val config = ProviderConfig(
+                    provider = provider,
+                    model = model,
+                    apiKey = String(apiKeyComponent.password).ifEmpty { AskSqlSecrets.getApiKey(provider.wireName) },
+                    baseUrl = baseUrlTextField.text.trim().ifEmpty { null },
+                )
+                LlmClients.forConfig(config).chat("You are a test.", "Reply with the single word OK.")
+            }
+        } catch (e: Exception) {
+            Messages.showErrorDialog(ErrorPresenter.present(e).userMessage, "AskSQL")
+            return
+        }
+        Messages.showInfoMessage("$model responded successfully.", "AskSQL")
     }
 
     private fun fetchModelsInto(
