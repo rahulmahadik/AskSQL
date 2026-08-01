@@ -178,6 +178,53 @@ describe('hallucination floor', () => {
     });
     await expect(engine.ask('show ghosts')).rejects.toMatchObject({ code: 'LLM_BAD_OUTPUT' });
   });
+
+  // The message is the whole value of blocking: a user who is only told "no" cannot rephrase.
+  it('names the real tables, and says nothing ran, when the table never exists', async () => {
+    const conn = new FakeConnector();
+    const engine = createAskSql({
+      connectors: [conn],
+      model: model(['```sql\nSELECT * FROM ghosts\n```']),
+    });
+    const err = await engine.ask('show ghosts').catch((e: AskSqlError) => e);
+    expect(err).toBeInstanceOf(AskSqlError);
+    expect((err as AskSqlError).userMessage).toMatch(/nothing was run/);
+    expect((err as AskSqlError).userMessage).toMatch(/Available: users, orders/);
+  });
+
+  it('suggests the closest real table when the invented name is a near-miss', async () => {
+    const conn = new FakeConnector();
+    const engine = createAskSql({
+      connectors: [conn],
+      model: model(['```sql\nSELECT * FROM userss\n```']),
+    });
+    const err = await engine.ask('show userss').catch((e: AskSqlError) => e);
+    expect((err as AskSqlError).userMessage).toMatch(/Did you mean users\?/);
+  });
+
+  // The CTE scan used to stop at the first SELECT - which is the one INSIDE the first CTE body -
+  // so in a two-CTE query the second name looked invented and a valid query was refused.
+  it('accepts a multi-CTE query, where every CTE after the first once looked invented', async () => {
+    const conn = new FakeConnector();
+    const sql =
+      'WITH recent AS (SELECT id FROM orders), totals AS (SELECT id FROM orders) ' +
+      'SELECT recent.id FROM recent JOIN totals ON totals.id = recent.id';
+    const engine = createAskSql({ connectors: [conn], model: model([`\`\`\`sql\n${sql}\n\`\`\``]) });
+    const res = await engine.ask('recent order totals');
+    expect(res.sql).toMatch(/totals/i);
+    expect(res.repairs).toBe(0);
+  });
+
+  it('names the real columns, and says nothing ran, when the column never exists', async () => {
+    const conn = new FakeConnector();
+    const engine = createAskSql({
+      connectors: [conn],
+      model: model(['```sql\nSELECT nickname FROM users\n```']),
+    });
+    const err = await engine.ask('show nicknames').catch((e: AskSqlError) => e);
+    expect((err as AskSqlError).userMessage).toMatch(/nothing was run/);
+    expect((err as AskSqlError).userMessage).toMatch(/users has: created_at, id, name/);
+  });
 });
 
 describe('IMPOSSIBLE sentinel', () => {
@@ -341,5 +388,76 @@ describe('event stream', () => {
     expect(stages).toContain('catalog');
     expect(stages).toContain('guard');
     expect(stages).toContain('done');
+  });
+});
+
+/**
+ * The hallucination floor fires for ANY invented name on any engine, not one phrasing. When it
+ * gives up, the message has to carry the one fact that lets the user rephrase: what does exist.
+ */
+describe('blocked-query messages name what exists', () => {
+  const CATALOG_WITH_VIEW: SchemaCatalog = {
+    engine: 'postgres',
+    schemas: ['public'],
+    tables: [
+      {
+        name: 'in_stock',
+        kind: 'view',
+        columns: [
+          { name: 'id', dbType: 'int', nullable: false },
+          { name: 'shop_id', dbType: 'int', nullable: false },
+          { name: 'name', dbType: 'text', nullable: false },
+          { name: 'stock', dbType: 'int', nullable: false },
+        ],
+        primaryKey: [],
+        foreignKeys: [],
+        uniques: [],
+        checks: [],
+        indexes: [],
+        source: 'db',
+      },
+    ],
+    enums: [],
+    sequences: [],
+    triggers: [],
+    routines: [],
+    warnings: [],
+    fetchedAt: 'now',
+  };
+
+  class ViewConnector extends FakeConnector {
+    override async introspect(): Promise<SchemaCatalog> {
+      return CATALOG_WITH_VIEW;
+    }
+  }
+
+  it('lists the real columns when the model keeps inventing one', async () => {
+    const engine = createAskSql({
+      connectors: [new ViewConnector()],
+      model: model(['```sql\nSELECT product_id FROM in_stock\n```']),
+    });
+    await expect(engine.ask('what is the most expensive product?')).rejects.toMatchObject({
+      userMessage: expect.stringContaining('in_stock has: id, name, shop_id, stock'),
+    });
+  });
+
+  it('says nothing was run, so the user knows the database was not touched', async () => {
+    const engine = createAskSql({
+      connectors: [new ViewConnector()],
+      model: model(['```sql\nSELECT product_id FROM in_stock\n```']),
+    });
+    await expect(engine.ask('anything')).rejects.toMatchObject({
+      userMessage: expect.stringContaining('nothing was run'),
+    });
+  });
+
+  it('lists the real tables, and the closest match, when the model invents a table', async () => {
+    const engine = createAskSql({
+      connectors: [new ViewConnector()],
+      model: model(['```sql\nSELECT * FROM in_stocks\n```']),
+    });
+    await expect(engine.ask('what is in stock?')).rejects.toMatchObject({
+      userMessage: expect.stringMatching(/Available: in_stock/),
+    });
   });
 });

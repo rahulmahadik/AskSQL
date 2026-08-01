@@ -167,7 +167,10 @@ describe('maxRows clamp (H3) and truncation signal (M1)', () => {
     const engine = createAskSql({ connectors: [conn], model: async () => 'x', policy: { maxRows: 100 } });
     const res = await engine.execute('SELECT * FROM users');
     expect(res.truncated).toBe(true);
-    expect(res.warnings.join(' ')).toMatch(/export to get everything/i);
+    // The warning must say the rows are partial. It used to promise an export would return
+    // everything, which no surface implements - a truncated CSV read as a complete one.
+    expect(res.warnings.join(' ')).toMatch(/first rows only/i);
+    expect(res.warnings.join(' ')).not.toMatch(/export/i);
   });
 
   it('does not over-report truncation for a result under the cap', async () => {

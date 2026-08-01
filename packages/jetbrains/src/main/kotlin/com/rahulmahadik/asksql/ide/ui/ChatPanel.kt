@@ -347,15 +347,29 @@ class ChatPanel(private val project: Project) : Disposable {
                         while (contextTurns.size > 6) contextTurns.removeFirst()
                     }
                 } else {
-                    val result = engineService.mongoPipeline.ask(
-                        question = question,
-                        descriptor = descriptor,
-                        password = password,
-                        llmClient = llmClient,
-                        context = mongoContext,
-                        onEvent = { event -> onEngineEvent(turn, event) },
-                        customInstructions = AskSqlAppSettings.getInstance().customInstructions,
-                    )
+                    val result = try {
+                        engineService.mongoPipeline.ask(
+                            question = question,
+                            descriptor = descriptor,
+                            password = password,
+                            llmClient = llmClient,
+                            context = mongoContext,
+                            onEvent = { event -> onEngineEvent(turn, event) },
+                            customInstructions = AskSqlAppSettings.getInstance().customInstructions,
+                        )
+                    } catch (e: Exception) {
+                        // Same schema-understanding fallback the SQL branch has, in MongoDB terms.
+                        val code = ErrorPresenter.present(e).code
+                        if (
+                            AskSqlAppSettings.getInstance().answerSchemaQuestions &&
+                            (code == AskSqlErrorCode.LLM_CANNOT_ANSWER || code == AskSqlErrorCode.LLM_REFUSAL)
+                        ) {
+                            val sa = engineService.mongoPipeline.explainSchema(question, descriptor, password, llmClient)
+                            onEdt { turn.showSchemaAnswer(sa.answer, sa.unknownReferences, sa.isSchemaChange) }
+                            return@launch
+                        }
+                        throw e
+                    }
                     if (requireApproval) {
                         onEdt {
                             turn.showMongoPipelinePendingApproval(

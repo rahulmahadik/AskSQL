@@ -59,50 +59,19 @@ class EnginePipeline(
         internal fun isMetadataQuestion(question: String) =
             METADATA_INTENT_RE.containsMatchIn(question) && METADATA_OBJECT_RE.containsMatchIn(question)
 
-        /** A request to add/change/remove schema objects rather than understand the current schema. */
-        private val SCHEMA_CHANGE_RE = Regex("""\b(add|create|extend|alter|drop|remove|rename|migrate|introduce|modify)\b""", RegexOption.IGNORE_CASE)
+        /**
+         * A write statement offered in an answer, fenced or bare. Matched by statement shape rather
+         * than by a ```sql fence, because smaller models reply with the raw statement and no fence
+         * and the note saying AskSQL will not run it must still attach.
+         */
+        private val PROPOSED_WRITE_RE = Regex(
+            """^\s*(?:```\w*\s*)?(insert\s+into\s|update\s+[\w."`]+(?:\s+(?:as\s+)?[\w"`]+)?\s+set\s|delete\s+(?:from\s|[\w."`]+\s+from\s)|merge\s+into\s|replace\s+into\s|upsert\s+into\s|alter\s+(?:table|schema|view|index|sequence|database)\s|create\s+(?:or\s+replace\s+)?(?:table|index|unique\s+index|view|materialized\s+view|schema|trigger|function|procedure|sequence|database|role|user|type|extension|domain|policy)\s|drop\s+(?:table|index|view|materialized\s+view|schema|trigger|function|procedure|sequence|database|role|user|type|extension|domain|policy)\s|comment\s+on\s+(?:table|column)\s|truncate\s+(?:table\s+)?[\w."`]+\s*;|grant\s+[\w,\s]+\s+on\s+[\w."`]+\s+to\s|revoke\s+[\w,\s]+\s+on\s+[\w."`]+\s+from\s)""",
+            setOf(RegexOption.IGNORE_CASE, RegexOption.MULTILINE),
+        )
 
         /** A whole-schema question (relationships, overview, table count) that needs the full picture, not a term-pruned handful of tables. */
         private val BROAD_SCHEMA_RE =
             Regex("""\b(?:relat|overview|summar|structur|entit|connect|erd|diagram)\w*|how many tables?|all (?:the )?tables?|whole (?:schema|database)|about (?:this|the|my) (?:database|schema|db)|what.{0,20}(?:database|schema|db) (?:is|for|about|do)""", RegexOption.IGNORE_CASE)
-
-        // SQL vocabulary and types that read like identifiers but never name a table or column.
-        private val NON_IDENTIFIER_SNAKE = setOf(
-            "primary_key", "foreign_key", "foreign_keys", "data_type", "data_types",
-            "not_null", "auto_increment", "use_case", "read_only", "read_write",
-            "integer", "int", "bigint", "smallint", "serial", "bigserial", "varchar", "char", "text",
-            "boolean", "bool", "date", "time", "timestamp", "timestamptz", "numeric", "decimal", "real",
-            "uuid", "json", "jsonb", "unique", "primary", "foreign", "constraint", "references", "index",
-            "default", "cascade", "null", "column", "table",
-        )
-        private val PROSE_IDENTIFIER_RE = Regex("""`([^`\s]+)`|"([\w.]+)"|\b([a-z][a-z0-9]*(?:_[a-z0-9]+)+)\b""", RegexOption.IGNORE_CASE)
-
-        /**
-         * Identifier-shaped names in a prose answer absent from the catalog - the grounding floor
-         * for [explainSchema]. Conservative: only snake_case and quoted/backticked tokens are checked,
-         * so ordinary English never trips it while an invented `customer_history` is caught.
-         */
-        internal fun unknownReferencesInProse(answer: String, catalog: SchemaCatalog): List<String> {
-            val known = HashSet<String>()
-            for (s in catalog.schemas) known += s.lowercase()
-            for (t in catalog.tables) {
-                known += t.name.lowercase()
-                if (t.schema != null) {
-                    known += t.schema.lowercase()
-                    known += "${t.schema.lowercase()}.${t.name.lowercase()}"
-                }
-                for (c in t.columns) known += c.name.lowercase()
-            }
-            val found = LinkedHashSet<String>()
-            for (m in PROSE_IDENTIFIER_RE.findAll(answer)) {
-                val raw = (m.groupValues[1].ifEmpty { m.groupValues[2] }.ifEmpty { m.groupValues[3] }).lowercase()
-                if (raw.isEmpty() || raw in NON_IDENTIFIER_SNAKE) continue
-                val bare = if (raw.contains('.')) raw.substringAfterLast('.') else raw
-                if (raw in known || bare in known) continue
-                found += raw
-            }
-            return found.toList()
-        }
 
         /** Each engine's read-only way to list tables; system schemas are exempt from the hallucination floor. */
         internal fun catalogQueryHint(engine: com.rahulmahadik.asksql.ide.model.EngineKind): String = when (engine) {
@@ -328,9 +297,15 @@ class EnginePipeline(
             val unknownTable = HallucinationChecks.firstUnknownTable(verdict.sql, fullCatalog, verdict.tables)
             if (unknownTable != null) {
                 if (attempt >= MAX_REPAIRS) {
+                    // Same reasoning as the column case: say what IS there, and name the closest match.
+                    val names = fullCatalog.tables.map { if (it.schema != null) "${it.schema}.${it.name}" else it.name }
+                    val closest = SchemaFuzzyMatch.closestTableName(unknownTable, fullCatalog)
+                    val suggestion = if (closest != null) " Did you mean $closest?" else ""
+                    val more = if (names.size > 12) ", ..." else ""
                     throw AskSqlException(
                         AskSqlErrorCode.LLM_BAD_OUTPUT,
-                        userMessage = "I couldn't find a table called \"$unknownTable\" in this database. Try rephrasing, or check the schema tree above.",
+                        userMessage = "The AI kept referring to a table called \"$unknownTable\", which this database does not have, " +
+                            "so nothing was run.$suggestion Available: ${names.take(12).joinToString(", ")}$more.",
                         retryable = false,
                     )
                 }
@@ -346,9 +321,15 @@ class EnginePipeline(
             val unknownColumn = HallucinationChecks.firstUnknownColumn(verdict.sql, fullCatalog)
             if (unknownColumn != null) {
                 if (attempt >= MAX_REPAIRS) {
+                    // Name what exists: the repair prompt already had this list, and withholding it
+                    // from the user left them guessing at the one thing that lets them rephrase.
+                    val columns = unknownColumn.available.take(12).joinToString(", ")
+                    val more = if (unknownColumn.available.size > 12) ", ..." else ""
                     throw AskSqlException(
                         AskSqlErrorCode.LLM_BAD_OUTPUT,
-                        userMessage = "There's no \"${unknownColumn.column}\" column on ${unknownColumn.table} in this database. Try rephrasing, or check the schema tree above.",
+                        userMessage = "The AI kept using a \"${unknownColumn.column}\" column on ${unknownColumn.table}, which does not exist, " +
+                            "so nothing was run. ${unknownColumn.table} has: $columns$more. " +
+                            "Try naming the column you mean - or use a larger model, which is usually the real fix.",
                         retryable = false,
                     )
                 }
@@ -492,13 +473,6 @@ class EnginePipeline(
         return result.text.trim()
     }
 
-    data class SchemaAnswer(
-        val answer: String,
-        val tables: List<String>,
-        val grounded: Boolean,
-        val unknownReferences: List<String>,
-        val isSchemaChange: Boolean,
-    )
 
     /**
      * Answer a natural-language question about the schema in prose, grounded in the catalog.
@@ -510,15 +484,15 @@ class EnginePipeline(
         descriptor: ConnectionDescriptor,
         password: String?,
         llmClient: LlmClient,
-    ): SchemaAnswer {
+    ): Scope.SchemaAnswer {
         val q = question.trim()
         if (q.isEmpty()) throw AskSqlException(AskSqlErrorCode.INVALID_INPUT, userMessage = "Ask a question about the schema.")
         val dialect = Dialects.of(descriptor.engine)
         val fullCatalog = catalog(descriptor, password)
         if (fullCatalog.tables.isEmpty()) {
-            return SchemaAnswer("This connection has no tables the current user can read.", emptyList(), true, emptyList(), false)
+            return Scope.SchemaAnswer("This connection has no tables the current user can read.", emptyList(), true, emptyList(), false)
         }
-        val isSchemaChange = SCHEMA_CHANGE_RE.containsMatchIn(q)
+        val isSchemaChange = Grounding.SCHEMA_CHANGE_RE.containsMatchIn(q)
         // A whole-schema question ("how are the tables related?", "summarize this database") needs the full
         // picture. Term-based pruning would narrow it to a couple of tables, so instead pass a compact list of
         // ALL tables plus the full join graph (declared + naming-inferred).
@@ -544,22 +518,67 @@ class EnginePipeline(
         var answer = com.rahulmahadik.asksql.ide.llm.LlmClients.withChatTimeout {
             llmClient.chat(system, Prompts.buildSchemaAnswerUser(q, schemaText, relationships))
         }.text.trim()
+        // Naming a real table, view or column counts as a database question by itself, so unusual
+        // phrasing or bad grammar cannot get a legitimate request declined.
+        val questionIsAboutThisDatabase =
+            Scope.looksDatabaseRelated(q) || isSchemaChange || Grounding.mentionsCatalogName(q, fullCatalog)
+        if (Scope.isOffTopic(answer) || (Scope.isDegenerateAnswer(answer) && !PROPOSED_WRITE_RE.containsMatchIn(answer))) {
+            // Challenge the refusal once when the question is plainly about data; accept it otherwise.
+            if (!questionIsAboutThisDatabase) return Scope.offTopicAnswer(dialect.promptLabel)
+            // No sentinel in this system prompt: the question is already known to be about data,
+            // so the model has no refusal to repeat.
+            answer = com.rahulmahadik.asksql.ide.llm.LlmClients.withChatTimeout {
+                llmClient.chat(
+                    Prompts.buildSchemaAnswerSystem(dialect, isSchemaChange, allowOutOfScope = false),
+                    Prompts.buildSchemaAnswerScopeRepairUser(q, schemaText, dialect.promptLabel, relationships),
+                )
+            }.text.trim()
+            // The retry has no sentinel to emit, so a model that still will not answer says so in
+            // prose; give those the same decline rather than surfacing a bare apology.
+            if (
+                Scope.isOffTopic(answer) ||
+                (Scope.isDegenerateAnswer(answer) && !PROPOSED_WRITE_RE.containsMatchIn(answer)) ||
+                Scope.isProseRefusal(answer, Grounding.mentionsCatalogName(answer, fullCatalog))
+            ) {
+                return Scope.offTopicAnswer(dialect.promptLabel)
+            }
+        }
+        // Deterministic backstop, for models too small to follow the sentinel rule. Nothing here
+        // is about data: not the question, not a name in the catalog, not the language of the
+        // reply, and not a statement to run. A model that answered anyway answered something else.
+        if (
+            !questionIsAboutThisDatabase &&
+            !Grounding.mentionsCatalogName(answer, fullCatalog) &&
+            !Scope.looksDatabaseRelated(answer) &&
+            !PROPOSED_WRITE_RE.containsMatchIn(answer)
+        ) {
+            return Scope.offTopicAnswer(dialect.promptLabel)
+        }
+        // Strip before grounding: the marker is internal protocol, and `out_of_scope` is
+        // snake_case, so leaving it in would report AskSQL's own token as an invented name.
+        answer = Scope.stripSentinel(answer)
         // Grounding floor checked against the full catalog, so a real table dropped by pruning isn't flagged.
-        var unknown = unknownReferencesInProse(answer, fullCatalog)
+        var unknown = Grounding.unknownReferencesInProse(answer, fullCatalog)
         // One repair pass for understanding questions: a name absent from the schema is a hallucination,
         // so regenerate constrained to real names. Skipped for a change request, where new names are the proposal.
         if (unknown.isNotEmpty() && !isSchemaChange) {
             answer = com.rahulmahadik.asksql.ide.llm.LlmClients.withChatTimeout {
-                llmClient.chat(system, Prompts.buildSchemaAnswerRepairUser(q, schemaText, unknown, relationships))
+                // No sentinel: this pass exists to fix names, and an escape hatch here would let
+                // the raw sentinel through as the final answer.
+                llmClient.chat(
+                    Prompts.buildSchemaAnswerSystem(dialect, isSchemaChange, allowOutOfScope = false),
+                    Prompts.buildSchemaAnswerRepairUser(q, schemaText, unknown, relationships),
+                )
             }.text.trim()
-            unknown = unknownReferencesInProse(answer, fullCatalog)
+            // Sentinel only, matching core: a terse but correct repair is still an answer.
+            if (Scope.isOffTopic(answer)) return Scope.offTopicAnswer(dialect.promptLabel)
+            unknown = Grounding.unknownReferencesInProse(answer, fullCatalog)
         }
         // Deterministic, not prompt-hoped: a proposed write statement always carries the read-only note.
-        val writeFence = Regex("```sql[\\s\\S]*?\\b(insert|update|delete|alter|create|drop|truncate)\\b", RegexOption.IGNORE_CASE)
-        if (writeFence.containsMatchIn(answer) && !answer.contains("read-only", ignoreCase = true)) {
+        if (PROPOSED_WRITE_RE.containsMatchIn(answer) && !answer.contains("read-only", ignoreCase = true)) {
             answer += "\n\n*Proposal only - AskSQL is read-only and never executes statements; run it yourself if you want it applied.*"
         }
-        return SchemaAnswer(answer, tables, unknown.isEmpty(), unknown, isSchemaChange)
+        return Scope.SchemaAnswer(answer, tables, unknown.isEmpty(), unknown, isSchemaChange)
     }
 
     private fun auditEntry(

@@ -5,6 +5,11 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 // Defined via vi.hoisted so the hoisted vi.mock factories can reference it.
 const { FakeConnector, sqliteClose } = vi.hoisted(() => {
   class FakeConnector {
+    /** Set to hold introspect() open, so a test can act while a read is in flight. */
+    static gate: Promise<void> | undefined;
+    /** The table list the NEXT introspect returns; a call captures it on entry. */
+    static tables: unknown[] = [{ name: 't', kind: 'table', columns: [] }];
+    static started = 0;
     dialect = 'sql';
     connectCalls = 0;
     introspectCalls = 0;
@@ -21,7 +26,10 @@ const { FakeConnector, sqliteClose } = vi.hoisted(() => {
     }
     async introspect(): Promise<{ tables: unknown[] }> {
       this.introspectCalls++;
-      return { tables: [{ name: 't', kind: 'table', columns: [] }] };
+      FakeConnector.started++;
+      const tables = FakeConnector.tables;
+      if (FakeConnector.gate) await FakeConnector.gate;
+      return { tables };
     }
     async close(): Promise<void> {
       this.closed++;
@@ -74,7 +82,12 @@ import {
   type ConnectionConfig,
 } from '../src/engine.js';
 
-beforeEach(() => resetVscodeMock());
+beforeEach(() => {
+  resetVscodeMock();
+  FakeConnector.gate = undefined;
+  FakeConnector.tables = [{ name: 't', kind: 'table', columns: [] }];
+  FakeConnector.started = 0;
+});
 
 const pg = (over: Partial<ConnectionConfig> = {}): ConnectionConfig => ({
   id: 'db1',
@@ -227,6 +240,30 @@ describe('EngineManager.buildOne branches (via catalogFor)', () => {
     // mongo out, so catalogFor routes it to the mongo path instead. Assert isMongo.
     const mgr = mgrWith([{ id: 'mo', name: 'Mongo', engine: 'mongodb', database: 'd', usesConnectionString: true }]);
     expect(mgr.isMongo('mo')).toBe(true);
+  });
+
+  // Refresh Schema exists to pick up a table created outside the IDE. A read that
+  // started before the refresh describes the old database and must not survive it.
+  it('a refresh during an in-flight introspect re-reads instead of serving the pre-refresh tables', async () => {
+    const mgr = mgrWith([pg({ id: 'm', engine: 'mysql' })]);
+    let release!: () => void;
+    FakeConnector.gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const inFlight = mgr.catalogFor('m');
+    while (FakeConnector.started === 0) await new Promise((r) => setTimeout(r, 0));
+
+    // A table is created externally; the user hits Refresh while the first read is still open.
+    FakeConnector.tables = [
+      { name: 't', kind: 'table', columns: [] },
+      { name: 'brand_new', kind: 'table', columns: [] },
+    ];
+    mgr.invalidateCatalogs();
+    FakeConnector.gate = undefined;
+    release();
+
+    expect((await inFlight).tables).toHaveLength(1);
+    expect((await mgr.catalogFor('m')).tables.map((t) => t.name)).toEqual(['t', 'brand_new']);
   });
 });
 
@@ -437,3 +474,60 @@ describe('EngineManager.testConnection / testProvider', () => {
     if (!res.ok) expect(res.message).toMatch(/No AI model is selected/);
   });
 });
+
+describe('EngineManager.testConnection freshness', () => {
+  function mgrWith(conns: ConnectionConfig[], secrets = createSecretStorage()): EngineManager {
+    setInspect('connections', { global: conns });
+    return new EngineManager(secrets as never);
+  }
+
+  // "Test connection" reports a table count; a read that started earlier describes the schema
+  // from before whatever the user just changed, so it must not be joined.
+  it('does not report a count from a read that started before the test', async () => {
+    const mgr = mgrWith([pg({ id: 'm', engine: 'mysql' })]);
+    let release!: () => void;
+    FakeConnector.gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const inFlight = mgr.catalogFor('m');
+    while (FakeConnector.started === 0) await new Promise((r) => setTimeout(r, 0));
+
+    FakeConnector.tables = [
+      { name: 't', kind: 'table', columns: [] },
+      { name: 'added_outside', kind: 'table', columns: [] },
+    ];
+    FakeConnector.gate = undefined;
+    const test = mgr.testConnection('m');
+    release();
+    await inFlight;
+
+    expect(await test).toEqual({ ok: true, tables: 2 });
+  });
+});
+
+describe('refresh vs connector lifetime', () => {
+  function mgrWith(conns: ConnectionConfig[], secrets = createSecretStorage()): EngineManager {
+    setInspect('connections', { global: conns });
+    return new EngineManager(secrets as never);
+  }
+
+  // Refreshing the schema drops cached catalogs; it does NOT tear down connectors. Conflating
+  // the two made a refresh during startup abort the connector build and cache the failure.
+  it('a refresh while connectors are still being built does not break the connection', async () => {
+    const mgr = mgrWith([pg({ id: 'm', engine: 'mysql' })]);
+    let release!: () => void;
+    FakeConnector.gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const first = mgr.catalogFor('m');
+    while (FakeConnector.started === 0) await new Promise((r) => setTimeout(r, 0));
+    mgr.invalidateCatalogs();
+    FakeConnector.gate = undefined;
+    release();
+    await first;
+
+    // The connection still works, and reports no build failure.
+    expect((await mgr.catalogFor('m')).tables.length).toBeGreaterThan(0);
+    expect(mgr.failureFor('m')).toBeUndefined();
+  });
+})

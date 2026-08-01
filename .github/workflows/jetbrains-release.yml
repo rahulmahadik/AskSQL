@@ -62,7 +62,7 @@ jobs:
           PUBLISH_TOKEN: ${{ secrets.JETBRAINS_PUBLISH_TOKEN }}
 
       - name: Attach signed zip to the GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: packages/jetbrains/build/distributions/*-signed.zip
           fail_on_unmatched_files: true

@@ -96,7 +96,7 @@ class AskSqlConfigurable : Configurable {
                         fetchModelsInto(providerComboBox, baseUrlTextField, modelComboBox)
                     }.comment(
                         "Type a model name directly (e.g. gpt-4o-mini, claude-sonnet-5, gemini-2.5-flash, " +
-                            "qwen2.5-coder:14b), or click Fetch Models to list what the configured " +
+                            "qwen2.5-coder:7b), or click Fetch Models to list what the configured " +
                             "provider/endpoint currently offers.",
                     )
                 }
@@ -137,7 +137,7 @@ class AskSqlConfigurable : Configurable {
                 row {
                     checkBox("Answer schema questions in plain language")
                         .bindSelected({ answerSchemaQuestionsField }, { answerSchemaQuestionsField = it })
-                        .comment("When a question can't become SQL (\"what is this database for?\", \"how are these tables related?\"), answer it from the schema instead of erroring. Grounded in structure only - never data values; invented names are flagged. Accuracy depends on your model, so treat it as guidance, not fact. Off by default.")
+                        .comment("When a question can't become SQL (\"what is this database for?\", \"how are these tables related?\", \"write me a DELETE for stale rows\"), answer it from the schema instead of erroring - a write request comes back as a statement to run yourself, never executed. Grounded in structure only, never data values; invented names are flagged. Accuracy depends on your model, so treat it as guidance, not fact.")
                 }
             }
             group("Custom instructions") {

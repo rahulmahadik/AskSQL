@@ -22,12 +22,27 @@ import {
   buildExplainUser,
   buildRepairUser,
   buildSchemaAnswerRepairUser,
+  buildSchemaAnswerScopeRepairUser,
   buildSchemaAnswerSystem,
   buildSchemaAnswerUser,
   buildSqlSystem,
   buildSqlUser,
+  OFF_TOPIC_SENTINEL,
 } from './prompt.js';
 import { catalogQueryHint, closestTableName, isMetadataQuestion } from './schema-match.js';
+import { mentionsCatalogName, SCHEMA_CHANGE_RE, unknownReferencesInProse } from './grounding.js';
+export { unknownReferencesInProse } from './grounding.js';
+import {
+  isDegenerateAnswer,
+  isOffTopic,
+  isProseRefusal,
+  stripSentinel,
+  looksDatabaseRelated,
+  MODEL_REFUSAL_RE,
+  offTopicAnswer,
+  type SchemaAnswer,
+} from './scope.js';
+export { isDegenerateAnswer, isOffTopic, isProseRefusal, looksDatabaseRelated, offTopicAnswer } from './scope.js';
 import type {
   AskOptions,
   AskResult,
@@ -71,20 +86,74 @@ export interface ExplainSchemaOptions {
   readonly signal?: AbortSignal;
 }
 
-export interface SchemaAnswer {
-  readonly answer: string;
-  /** Catalog tables given to the model as grounding (schema-qualified where applicable). */
-  readonly tables: readonly string[];
-  /** True unless the answer named a table/column not present in the schema. */
-  readonly grounded: boolean;
-  /** Identifier-shaped names in the answer absent from the schema. For a schema-change request these are proposed new names; otherwise they are hallucinations. */
-  readonly unknownReferences: readonly string[];
-  /** The question asked to add/change/remove schema objects, so unknownReferences are proposals AskSQL never runs, not errors. */
-  readonly isSchemaChange: boolean;
+export type { SchemaAnswer } from './scope.js';
+
+/**
+ * Returns the first base relation referenced by the SQL that is missing from
+ * the catalog, or null. CTE names count as known relations. Pass the table
+ * list the guard already computed (`GuardVerdict.tables`) to avoid a second
+ * parse of the same statement; falls back to parsing only if it's absent.
+ */
+// Standard read-only system catalogs across the supported dialects. Tables in
+// these schemas exist by definition, so the hallucination check must not treat
+// them as unknown (the guard still enforces read-only access to them).
+const SYSTEM_SCHEMAS: ReadonlySet<string> = new Set([
+  'information_schema',
+  'pg_catalog',
+  'mysql',
+  'performance_schema',
+  'sys',
+]);
+
+export function firstUnknownTable(
+  sql: string,
+  catalog: SchemaCatalog,
+  grammar: string,
+  precomputed?: readonly string[],
+): string | null {
+  let list: readonly string[];
+  if (precomputed) {
+    list = precomputed;
+  } else {
+    try {
+      list = tableParser.tableList(sql, { database: grammar });
+    } catch {
+      return null; // the guard already parsed it; never double-block here
+    }
+  }
+  const known = new Set<string>();
+  for (const t of catalog.tables) {
+    known.add(t.name.toLowerCase());
+    if (t.schema) known.add(`${t.schema.toLowerCase()}.${t.name.toLowerCase()}`);
+  }
+  // CTE names (WITH x AS ...) count as known relations.
+  const cteNames = collectCteNames(sql);
+  for (const entry of list) {
+    const parts = entry.split('::');
+    const schema = parts[1] && parts[1] !== 'null' ? parts[1].toLowerCase() : null;
+    const name = (parts[2] ?? '').toLowerCase();
+    if (!name) continue;
+    if (cteNames.has(name)) continue;
+    const qualified = schema ? `${schema}.${name}` : name;
+    if (known.has(qualified) || known.has(name)) continue;
+    // System catalogs are real, read-only relations (the guard already permits
+    // catalog reads) - a metadata query like "which columns are in orders?"
+    // legitimately hits information_schema, so it is not a hallucinated table.
+    if (schema && SYSTEM_SCHEMAS.has(schema)) continue;
+    if (name.startsWith('sqlite_') || name.startsWith('pg_')) continue;
+    return schema ? `${schema}.${name}` : name;
+  }
+  return null;
 }
 
-/** A request to add/change/remove schema objects (index, column, table, ...) rather than understand the current schema. */
-const SCHEMA_CHANGE_RE = /\b(add|create|extend|alter|drop|remove|rename|migrate|introduce|modify)\b/iu;
+/**
+ * A write statement offered in an answer, fenced or bare. Matched by statement shape rather
+ * than by a ```sql fence, because smaller models reply with the raw statement and no fence and
+ * the note saying AskSQL will not run it must still attach. The shapes are anchored to a line
+ * start and require a target, so ordinary prose ("you can update the row later") does not trip it.
+ */
+const PROPOSED_WRITE_RE =
+  /^\s*(?:```\w*\s*)?(insert\s+into\s|update\s+[\w."`]+(?:\s+(?:as\s+)?[\w"`]+)?\s+set\s|delete\s+(?:from\s|[\w."`]+\s+from\s)|merge\s+into\s|replace\s+into\s|upsert\s+into\s|alter\s+(?:table|schema|view|index|sequence|database)\s|create\s+(?:or\s+replace\s+)?(?:table|index|unique\s+index|view|materialized\s+view|schema|trigger|function|procedure|sequence|database|role|user|type|extension|domain|policy)\s|drop\s+(?:table|index|view|materialized\s+view|schema|trigger|function|procedure|sequence|database|role|user|type|extension|domain|policy)\s|comment\s+on\s+(?:table|column)\s|truncate\s+(?:table\s+)?[\w."`]+\s*;|grant\s+[\w,\s]+\s+on\s+[\w."`]+\s+to\s|revoke\s+[\w,\s]+\s+on\s+[\w."`]+\s+from\s)/imu;
 
 /** A whole-schema question (relationships, overview, table count) that needs the full picture, not a term-pruned handful of tables. */
 const BROAD_SCHEMA_RE =
@@ -224,6 +293,24 @@ export function createAskSql(config: AskSqlConfig): AskSqlEngine {
     return pending;
   };
 
+/**
+ * Enforces `allowDataInPrompt`. Sampled cell values are the only real data a catalog carries, so
+ * dropping them here keeps them out of every prompt. Declared enum labels are schema, and stay.
+ */
+function stripSampledValues(catalog: SchemaCatalog, allowed: boolean): SchemaCatalog {
+  if (allowed) return catalog;
+  if (!catalog.tables.some((t) => t.columns.some((c) => c.sampledValues && c.sampledValues.length > 0))) {
+    return catalog;
+  }
+  return {
+    ...catalog,
+    tables: catalog.tables.map((t) => ({
+      ...t,
+      columns: t.columns.map(({ sampledValues: _dropped, ...rest }) => rest),
+    })),
+  };
+}
+
   const getCatalog = async (conn: Connector, refresh = false): Promise<SchemaCatalog> => {
     await ensureConnected(conn);
     const cached = catalogCache.get(conn.id);
@@ -234,7 +321,7 @@ export function createAskSql(config: AskSqlConfig): AskSqlEngine {
     let p!: Promise<SchemaCatalog>;
     p = (async () => {
       try {
-        const catalog = await conn.introspect();
+        const catalog = stripSampledValues(await conn.introspect(), config.allowDataInPrompt === true);
         // A failed sub-query returns [] and pushes a warning; an empty table set
         // with warnings is a permission/network failure masquerading as an empty
         // database. Surface it and never cache the poisoned result.
@@ -299,7 +386,7 @@ export function createAskSql(config: AskSqlConfig): AskSqlEngine {
       });
       const warnings = [...result.warnings];
       if (verdict.autoLimited) {
-        warnings.push(`A row limit of ${policy.maxRows} was added automatically - export to get everything.`);
+        warnings.push(`A row limit of ${policy.maxRows} was added automatically - these are the first rows only.`);
       }
       if (verdict.loweredLimit) {
         warnings.push(`The row limit was lowered to ${policy.maxRows}.`);
@@ -450,7 +537,7 @@ export function createAskSql(config: AskSqlConfig): AskSqlEngine {
             retryable: false,
           });
         }
-        const refusal = /\b(i can(?:no|')t|i cannot|i am unable|i'm unable|i'm sorry|as an ai)\b/iu.test(text);
+        const refusal = MODEL_REFUSAL_RE.test(text);
         if (attempt >= MAX_REPAIRS) {
           throw new AskSqlError(refusal ? 'LLM_REFUSAL' : 'LLM_BAD_OUTPUT', {
             detail: `no SQL extracted after ${attempt + 1} attempts; raw preview: ${text.slice(0, 200)}`,
@@ -515,8 +602,14 @@ export function createAskSql(config: AskSqlConfig): AskSqlEngine {
       const unknownTable = firstUnknownTable(verdict.sql, fullCatalog, conn.dialect.grammar, verdict.tables);
       if (unknownTable) {
         if (attempt >= MAX_REPAIRS) {
+          // Same reasoning as the column case: say what IS there, and name the closest match.
+          const names = fullCatalog.tables.map((t) => (t.schema ? `${t.schema}.${t.name}` : t.name));
+          const closest = closestTableName(unknownTable, fullCatalog);
+          const suggestion = closest ? ` Did you mean ${closest}?` : '';
           throw new AskSqlError('LLM_BAD_OUTPUT', {
-            userMessage: `I couldn't find a table called "${unknownTable}" in this database. Try rephrasing, or check the schema.`,
+            userMessage:
+              `The AI kept referring to a table called "${unknownTable}", which this database does not have, ` +
+              `so nothing was run.${suggestion} Available: ${names.slice(0, 12).join(', ')}${names.length > 12 ? ', ...' : ''}.`,
             detail: `unknown table ${unknownTable} after ${attempt + 1} attempts`,
             retryable: false,
           });
@@ -539,8 +632,15 @@ export function createAskSql(config: AskSqlConfig): AskSqlEngine {
       const unknownColumn = firstUnknownColumn(verdict.sql, fullCatalog, conn.dialect.grammar);
       if (unknownColumn) {
         if (attempt >= MAX_REPAIRS) {
+          // Name what exists. The repair prompt already had this list; withholding it from the
+          // user left them guessing at the one thing that would let them rephrase successfully.
+          const columns = unknownColumn.available.slice(0, 12).join(', ');
+          const more = unknownColumn.available.length > 12 ? ', ...' : '';
           throw new AskSqlError('LLM_BAD_OUTPUT', {
-            userMessage: `There's no "${unknownColumn.column}" column on ${unknownColumn.table} in this database. Try rephrasing, or check the schema.`,
+            userMessage:
+              `The AI kept using a "${unknownColumn.column}" column on ${unknownColumn.table}, which does not exist, ` +
+              `so nothing was run. ${unknownColumn.table} has: ${columns}${more}. ` +
+              'Try naming the column you mean - or use a larger model, which is usually the real fix.',
             detail: `unknown column ${unknownColumn.table}.${unknownColumn.column} after ${attempt + 1} attempts`,
             retryable: false,
           });
@@ -703,13 +803,50 @@ export function createAskSql(config: AskSqlConfig): AskSqlEngine {
           settings: config.llm,
         })
       ).text.trim();
+      // Naming a real table, view or column counts as a database question by itself, so unusual
+      // phrasing or bad grammar cannot get a legitimate request declined.
+      const questionIsAboutThisDatabase =
+        looksDatabaseRelated(q) || isSchemaChange || mentionsCatalogName(q, catalog);
+      if (isOffTopic(answer) || (isDegenerateAnswer(answer) && !PROPOSED_WRITE_RE.test(answer))) {
+        // Challenge the refusal once when the question is plainly about data; accept it otherwise.
+        if (!questionIsAboutThisDatabase) return offTopicAnswer(conn.dialect.promptLabel);
+        answer = (
+          await callModel({
+            model: config.model,
+            // No sentinel in this system prompt: the question is already known to be
+            // about data, so the model has no refusal to repeat.
+            system: buildSchemaAnswerSystem(conn.dialect, isSchemaChange, false),
+            prompt: buildSchemaAnswerScopeRepairUser(q, schemaText, conn.dialect.promptLabel, relationships),
+            signal: opts.signal,
+            settings: config.llm,
+          })
+        ).text.trim();
+        // The retry has no sentinel to emit, so a model that still will not answer says so in
+        // prose; give those the same decline rather than surfacing a bare apology.
+        if (
+          isOffTopic(answer) ||
+          (isDegenerateAnswer(answer) && !PROPOSED_WRITE_RE.test(answer)) ||
+          isProseRefusal(answer, mentionsCatalogName(answer, catalog))
+        ) {
+          return offTopicAnswer(conn.dialect.promptLabel);
+        }
+      }
+      // Deterministic backstop, for models too small to follow the sentinel rule. Nothing here
+      // is about data: not the question, not a name in the catalog, not the language of the
+      // reply, and not a statement to run. A model that answered anyway answered something else.
+      if (
+        !questionIsAboutThisDatabase &&
+        !mentionsCatalogName(answer, catalog) &&
+        !looksDatabaseRelated(answer) &&
+        !PROPOSED_WRITE_RE.test(answer)
+      ) {
+        return offTopicAnswer(conn.dialect.promptLabel);
+      }
+      // Strip before grounding: the marker is internal protocol, and `out_of_scope` is
+      // snake_case, so leaving it in would report AskSQL's own token as an invented name.
+      answer = stripSentinel(answer);
       // Grounding floor, checked against the full catalog (not the pruned subset, so a real
       // table dropped by pruning isn't flagged).
-      // Deterministic, not prompt-hoped: any proposed write statement carries the
-      // read-only note even when the model forgets to add it.
-      if (/```sql[\s\S]*?\b(insert|update|delete|alter|create|drop|truncate)\b/i.test(answer) && !/read-only/i.test(answer)) {
-        answer += '\n\n*Proposal only - AskSQL is read-only and never executes statements; run it yourself if you want it applied.*';
-      }
       let unknownReferences = unknownReferencesInProse(answer, catalog);
       // One repair pass for understanding questions: a name absent from the schema is a
       // hallucination, so regenerate constrained to real names. Skipped for schema-change
@@ -718,13 +855,21 @@ export function createAskSql(config: AskSqlConfig): AskSqlEngine {
         answer = (
           await callModel({
             model: config.model,
-            system,
+            // No sentinel: this pass exists to fix names, and an escape hatch here would let
+            // the raw sentinel through as the final answer.
+            system: buildSchemaAnswerSystem(conn.dialect, isSchemaChange, false),
             prompt: buildSchemaAnswerRepairUser(q, schemaText, unknownReferences, relationships),
             signal: opts.signal,
             settings: config.llm,
           })
         ).text.trim();
+        if (isOffTopic(answer)) return offTopicAnswer(conn.dialect.promptLabel);
         unknownReferences = unknownReferencesInProse(answer, catalog);
+      }
+      // Last, so it survives the repair pass: any proposed write statement carries the
+      // read-only note even when the model forgets it. (The Kotlin port does the same.)
+      if (PROPOSED_WRITE_RE.test(answer) && !/read-only/i.test(answer)) {
+        answer += '\n\n*Proposal only - AskSQL is read-only and never executes statements; run it yourself if you want it applied.*';
       }
       return { answer, tables, grounded: unknownReferences.length === 0, unknownReferences, isSchemaChange };
     },
@@ -784,141 +929,11 @@ import pkg from 'node-sql-parser';
 const { Parser } = pkg;
 const tableParser = new Parser();
 
-/**
- * Returns the first base relation referenced by the SQL that is missing from
- * the catalog, or null. CTE names count as known relations. Pass the table
- * list the guard already computed (`GuardVerdict.tables`) to avoid a second
- * parse of the same statement; falls back to parsing only if it's absent.
- */
-// Standard read-only system catalogs across the supported dialects. Tables in
-// these schemas exist by definition, so the hallucination check must not treat
-// them as unknown (the guard still enforces read-only access to them).
-const SYSTEM_SCHEMAS: ReadonlySet<string> = new Set([
-  'information_schema',
-  'pg_catalog',
-  'mysql',
-  'performance_schema',
-  'sys',
-]);
 
-export function firstUnknownTable(
-  sql: string,
-  catalog: SchemaCatalog,
-  grammar: string,
-  precomputed?: readonly string[],
-): string | null {
-  let list: readonly string[];
-  if (precomputed) {
-    list = precomputed;
-  } else {
-    try {
-      list = tableParser.tableList(sql, { database: grammar });
-    } catch {
-      return null; // the guard already parsed it; never double-block here
-    }
-  }
-  const known = new Set<string>();
-  for (const t of catalog.tables) {
-    known.add(t.name.toLowerCase());
-    if (t.schema) known.add(`${t.schema.toLowerCase()}.${t.name.toLowerCase()}`);
-  }
-  // CTE names (WITH x AS ...) count as known relations.
-  const cteNames = collectCteNames(sql);
-  for (const entry of list) {
-    const parts = entry.split('::');
-    const schema = parts[1] && parts[1] !== 'null' ? parts[1].toLowerCase() : null;
-    const name = (parts[2] ?? '').toLowerCase();
-    if (!name) continue;
-    if (cteNames.has(name)) continue;
-    const qualified = schema ? `${schema}.${name}` : name;
-    if (known.has(qualified) || known.has(name)) continue;
-    // System catalogs are real, read-only relations (the guard already permits
-    // catalog reads) - a metadata query like "which columns are in orders?"
-    // legitimately hits information_schema, so it is not a hallucinated table.
-    if (schema && SYSTEM_SCHEMAS.has(schema)) continue;
-    if (name.startsWith('sqlite_') || name.startsWith('pg_')) continue;
-    return schema ? `${schema}.${name}` : name;
-  }
-  return null;
-}
 
-// SQL vocabulary and types that read like identifiers but never name a table or column - so a
-// DDL suggestion's `integer`/`unique` isn't mistaken for a proposed object.
-const NON_IDENTIFIER_SNAKE: ReadonlySet<string> = new Set([
-  'primary_key',
-  'foreign_key',
-  'foreign_keys',
-  'data_type',
-  'data_types',
-  'not_null',
-  'auto_increment',
-  'use_case',
-  'read_only',
-  'read_write',
-  'integer',
-  'int',
-  'bigint',
-  'smallint',
-  'serial',
-  'bigserial',
-  'varchar',
-  'char',
-  'text',
-  'boolean',
-  'bool',
-  'date',
-  'time',
-  'timestamp',
-  'timestamptz',
-  'numeric',
-  'decimal',
-  'real',
-  'uuid',
-  'json',
-  'jsonb',
-  'unique',
-  'primary',
-  'foreign',
-  'constraint',
-  'references',
-  'index',
-  'default',
-  'cascade',
-  'null',
-  'column',
-  'table',
-]);
 
-/**
- * Identifier-shaped names in a prose answer that are absent from the catalog - the
- * grounding floor for explainSchema. Conservative by design: only snake_case tokens and
- * backtick/double-quote-wrapped names are inspected, so ordinary English never trips it
- * while an invented `customer_history` is caught. Real schema names pass (they're in the
- * catalog); a small stopword set covers SQL vocabulary like `foreign_key`.
- */
-export function unknownReferencesInProse(answer: string, catalog: SchemaCatalog): string[] {
-  const known = new Set<string>();
-  for (const s of catalog.schemas) known.add(s.toLowerCase());
-  for (const t of catalog.tables) {
-    known.add(t.name.toLowerCase());
-    if (t.schema) {
-      known.add(t.schema.toLowerCase());
-      known.add(`${t.schema.toLowerCase()}.${t.name.toLowerCase()}`);
-    }
-    for (const c of t.columns) known.add(c.name.toLowerCase());
-  }
-  const found = new Set<string>();
-  const re = /`([^`\s]+)`|"([\w.]+)"|\b([a-z][a-z0-9]*(?:_[a-z0-9]+)+)\b/gi;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(answer)) !== null) {
-    const raw = (m[1] ?? m[2] ?? m[3] ?? '').toLowerCase();
-    if (!raw || NON_IDENTIFIER_SNAKE.has(raw)) continue;
-    const bare = raw.includes('.') ? (raw.split('.').pop() ?? raw) : raw;
-    if (known.has(raw) || known.has(bare)) continue;
-    found.add(raw);
-  }
-  return [...found];
-}
+
+
 
 // ---------------------------------------------------------------------------
 // Unknown-column detection (hallucination floor, column level)
@@ -933,11 +948,11 @@ export interface UnknownColumn {
 /** Collect CTE relation names lexically (WITH x AS (...), y AS (...)). */
 function collectCteNames(sql: string): ReadonlySet<string> {
   const names = new Set<string>();
-  const cteRe = /\bwith\s+(?:recursive\s+)?([\s\S]*?)\bselect\b/iu.exec(sql);
-  if (cteRe) {
-    for (const m of cteRe[1]!.matchAll(/([A-Za-z_][A-Za-z0-9_]*)\s+as\s*\(/giu)) {
-      names.add(m[1]!.toLowerCase());
-    }
+  if (!/\bwith\b/iu.test(sql)) return names;
+  // Scans the whole statement: bounding it at the first SELECT ended inside the first CTE body,
+  // so later CTE names looked invented. Over-collecting only makes the floor more lenient.
+  for (const m of sql.matchAll(/([A-Za-z_][A-Za-z0-9_]*)\s+as\s*\(/giu)) {
+    names.add(m[1]!.toLowerCase());
   }
   return names;
 }

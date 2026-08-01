@@ -10,6 +10,16 @@ import { AskSqlError } from '../errors.js';
 import { callModel } from '../llm.js';
 import { pruneCatalog } from '../catalog.js';
 import { closestTableName } from '../schema-match.js';
+import {
+  isDegenerateAnswer,
+  isOffTopic,
+  isProseRefusal,
+  looksDatabaseRelated,
+  offTopicAnswer,
+  stripSentinel,
+  type SchemaAnswer,
+} from '../scope.js';
+import { mentionsCatalogName, SCHEMA_CHANGE_RE, unknownReferencesInProse } from '../grounding.js';
 import type {
   EngineEvent,
   ExecuteOptions,
@@ -30,6 +40,9 @@ import { extractImpossible, extractPipeline } from './extract.js';
 import {
   buildMongoExplainSystem,
   buildMongoExplainUser,
+  buildMongoSchemaAnswerScopeRepairUser,
+  buildMongoSchemaAnswerSystem,
+  buildMongoSchemaAnswerUser,
   buildMongoRepairUser,
   buildPipelineSystem,
   buildPipelineUser,
@@ -92,9 +105,22 @@ export interface MongoAskEngine {
   ask(question: string, opts?: MongoAskOptions): Promise<MongoAskResult>;
   execute(pipelineJson: string, collection: string, opts?: ExecuteOptions): Promise<ResultSet>;
   explain(pipelineJson: string, opts?: { signal?: AbortSignal }): Promise<string>;
+  /** Prose answer about the database itself, for a question no pipeline can answer. Mirrors the SQL engine's method. */
+  explainSchema(question: string, opts?: { signal?: AbortSignal }): Promise<SchemaAnswer>;
   catalog(): Promise<SchemaCatalog>;
   invalidateCatalog(): void;
 }
+
+/**
+ * A question asking to add/change/remove data or collections: the answer is a proposal, so new
+ * names are expected. Word-for-word the SQL path's list - a divergence classified the same
+ * request differently depending on which engine the user happened to be connected to.
+ */
+const MONGO_SCHEMA_CHANGE_RE = SCHEMA_CHANGE_RE;
+
+/** A write command offered in an answer: the document counterpart of PROPOSED_WRITE_RE. */
+const MONGO_WRITE_COMMAND_RE =
+  /\bdb\.\w+\.(insertOne|insertMany|updateOne|updateMany|deleteOne|deleteMany|replaceOne|createIndex|dropIndex|drop|renameCollection)\s*\(/i;
 
 const looksLikeRefusal = (text: string): boolean =>
   /\b(i can(?:no|')t|i cannot|i am unable|i'm unable|i'm sorry|as an ai)\b/iu.test(text);
@@ -407,10 +433,96 @@ export function createMongoAskSql(config: MongoAskConfig): MongoAskEngine {
     return result.text.trim();
   };
 
+  const explainSchema = async (question: string, opts: { signal?: AbortSignal } = {}): Promise<SchemaAnswer> => {
+    const q = (question ?? '').trim();
+    if (!q) throw new AskSqlError('INVALID_INPUT');
+    // Same cap as every other entry point: this one is reachable from the public server route.
+    if (q.length > MAX_QUESTION_LENGTH) {
+      throw new AskSqlError('INVALID_INPUT', {
+        userMessage: 'The question is too long. Keep it under 10,000 characters.',
+        detail: `question length ${q.length}`,
+      });
+    }
+    const full = await catalog();
+    if (full.tables.length === 0) {
+      return { answer: 'This connection has no collections the current user can read.', tables: [], grounded: true, unknownReferences: [], isSchemaChange: false };
+    }
+    const isSchemaChange = MONGO_SCHEMA_CHANGE_RE.test(q);
+    const pruned = pruneCatalog(full, q, config.pruner);
+    let answer = (
+      await callModel({
+        model: config.model,
+        system: buildMongoSchemaAnswerSystem(isSchemaChange),
+        prompt: buildMongoSchemaAnswerUser(q, pruned.schemaText),
+        signal: opts.signal,
+        settings: config.llm,
+      })
+    ).text.trim();
+    // Same three signals as the SQL path: database words, a change request, or - the one that
+    // does not depend on phrasing - naming a collection or field that really exists here.
+    const questionIsAboutThisDatabase =
+      looksDatabaseRelated(q) || isSchemaChange || mentionsCatalogName(q, full);
+    if (isOffTopic(answer) || (isDegenerateAnswer(answer) && !MONGO_WRITE_COMMAND_RE.test(answer))) {
+      // Challenge the refusal once when the question is plainly about data; accept it otherwise.
+      if (!questionIsAboutThisDatabase) return offTopicAnswer('MongoDB');
+      answer = (
+        await callModel({
+          model: config.model,
+          // No sentinel in this system prompt: the question is already known to be
+          // about data, so the model has no refusal to repeat.
+          system: buildMongoSchemaAnswerSystem(isSchemaChange, false),
+          prompt: buildMongoSchemaAnswerScopeRepairUser(q, pruned.schemaText),
+          signal: opts.signal,
+          settings: config.llm,
+        })
+      ).text.trim();
+      // Same as the SQL path: after the retry a refusal arrives as prose, not the sentinel.
+      if (
+        isOffTopic(answer) ||
+        (isDegenerateAnswer(answer) && !MONGO_WRITE_COMMAND_RE.test(answer)) ||
+        isProseRefusal(answer, mentionsCatalogName(answer, full))
+      ) {
+        return offTopicAnswer('MongoDB');
+      }
+    }
+    // Same deterministic backstop as the SQL path, for models too small to follow the rule.
+    if (
+      !questionIsAboutThisDatabase &&
+      !mentionsCatalogName(answer, full) &&
+      !looksDatabaseRelated(answer) &&
+      !MONGO_WRITE_COMMAND_RE.test(answer)
+    ) {
+      return offTopicAnswer('MongoDB');
+    }
+    // Strip before grounding, for the same reason as the SQL path.
+    answer = stripSentinel(answer);
+    // Same deterministic guarantee as the SQL path: a proposed write always says who runs it.
+    const withNote =
+      MONGO_WRITE_COMMAND_RE.test(answer) &&
+      !/read-only/i.test(answer)
+        ? `${answer}\n\n*Proposal only - AskSQL is read-only and never executes commands; run it yourself if you want it applied.*`
+        : answer;
+    // Same grounding floor as the SQL path, against the FULL catalog so a collection dropped
+    // by pruning is not mistaken for an invention. Claiming grounded:true unconditionally hid
+    // exactly the hallucinations this value is meant to warn about.
+    // Computed unconditionally, like the SQL path: for a change request these are the PROPOSED
+    // names, which the UI shows as proposals rather than errors. Zeroing them here meant MongoDB
+    // users never saw that list at all.
+    const unknownReferences = unknownReferencesInProse(withNote, full, { documentStyle: true });
+    return {
+      answer: withNote,
+      tables: pruned.catalog.tables.map((t) => t.name),
+      grounded: unknownReferences.length === 0,
+      unknownReferences,
+      isSchemaChange,
+    };
+  };
+
   return {
     ask,
     execute,
     explain,
+    explainSchema,
     catalog,
     invalidateCatalog: () => {
       cached = null;

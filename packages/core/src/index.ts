@@ -23,16 +23,23 @@ export {
   buildSchemaAnswerSystem,
   buildSchemaAnswerUser,
   buildSchemaAnswerRepairUser,
+  buildSchemaAnswerScopeRepairUser,
+  OFF_TOPIC_SENTINEL,
   type SqlPromptInput,
   type RepairPromptInput,
 } from './prompt.js';
 export { callModel, classifyLlmError, type LlmCallInput, type LlmCallResult } from './llm.js';
 export { resolveModel, assertBaseUrl, PROVIDER_API_HOST, type ProviderConfig, type ProviderName } from './providers.js';
 export { MemoryHistoryStore, MemoryFewShotStore } from './history.js';
+/** The options type of the exported `unknownReferencesInProse`, so callers can name it. */
+export type { GroundingOptions } from './grounding.js';
 export {
   createAskSql,
   firstUnknownTable,
   unknownReferencesInProse,
+  isOffTopic,
+  looksDatabaseRelated,
+  offTopicAnswer,
   type AskSqlEngine,
   type ExecuteEngineOptions,
   type ExplainOptions,

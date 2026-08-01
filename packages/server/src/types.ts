@@ -29,6 +29,11 @@ export interface ServerRequest {
   readonly query: Readonly<Record<string, string | undefined>>;
   readonly headers: Readonly<Record<string, string | undefined>>;
   json(): Promise<unknown>;
+  /**
+   * Aborted when the client goes away. Adapters supply it; the handler passes it to the engine so
+   * a cancelled request stops the model call and the database query instead of only the response.
+   */
+  readonly signal?: AbortSignal;
 }
 
 export interface AuditRecord extends HistoryEntry {

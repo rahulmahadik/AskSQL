@@ -27,7 +27,9 @@ try {
   writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
 
   rmSync(outZip, { force: true });
-  execFileSync('zip', ['-rq', outZip, '.'], { cwd: staging, stdio: 'inherit' });
+  // -x '.*' '*/.*': store validators reject packages containing hidden files
+  // (dist carries a .gitkeep); -D: no directory entries, matching Chrome's own packer.
+  execFileSync('zip', ['-rqD', outZip, '.', '-x', '.*', '*/.*'], { cwd: staging, stdio: 'inherit' });
   console.log(`Wrote ${path.relative(here, outZip)} (manifest "key" stripped for store submission).`);
 } finally {
   rmSync(staging, { recursive: true, force: true });

@@ -280,6 +280,12 @@ export class EngineManager {
    * not cache its now-stale result over the fresh state.
    */
   private generation = 0;
+  /**
+   * Bumped whenever cached CATALOGS are dropped, which - unlike [generation] - does not tear
+   * down connectors. Kept separate so a Refresh cannot look like a reset to the connector
+   * build, which reacts by closing SQLite handles and recording a permanent failure.
+   */
+  private catalogGeneration = 0;
 
   constructor(private readonly secrets: vscode.SecretStorage) {}
 
@@ -591,8 +597,9 @@ export class EngineManager {
     // Share one in-flight introspect across concurrent callers.
     const running = this.catalogInflight.get(connectionId);
     if (running) return running;
-    const p = this.introspectFresh(connectionId).finally(() => {
-      this.catalogInflight.delete(connectionId);
+    const p: Promise<SchemaCatalog> = this.introspectFresh(connectionId).finally(() => {
+      // Only our own entry: an invalidateCatalogs() may have replaced it with a newer read.
+      if (this.catalogInflight.get(connectionId) === p) this.catalogInflight.delete(connectionId);
     });
     this.catalogInflight.set(connectionId, p);
     return p;
@@ -600,6 +607,7 @@ export class EngineManager {
 
   private async introspectFresh(connectionId: string): Promise<SchemaCatalog> {
     const gen = this.generation;
+    const catalogGen = this.catalogGeneration;
     // Both Connector and MongoConnector expose connect() + introspect(); pick the
     // right source, then read the schema through the shared shape.
     let conn: { connect(): Promise<void>; introspect(): Promise<SchemaCatalog> } | undefined;
@@ -628,7 +636,8 @@ export class EngineManager {
     );
     // A reset() while we were awaiting means this catalog belongs to connectors
     // that are now closed - return it to this caller but never cache it.
-    if (gen === this.generation) this.catalogs.set(connectionId, cat);
+    // Cache only if neither a reset nor a catalog invalidation happened while this read ran.
+    if (gen === this.generation && catalogGen === this.catalogGeneration) this.catalogs.set(connectionId, cat);
     return cat;
   }
 
@@ -646,6 +655,10 @@ export class EngineManager {
         connectors,
         model: resolved,
         policy: { maxRows: cfg().get<number>('maxRows') ?? 1000 },
+        // The same setting that tells the connector to sample values also tells the engine it may
+        // put them in a prompt. Without this the sampling setting would collect values that core
+        // then strips, which is the confusing half-on state.
+        allowDataInPrompt: cfg().get<boolean>('sampleColumnValues') ?? false,
       });
       this.engines.set(key, engine);
       return engine;
@@ -701,7 +714,27 @@ export class EngineManager {
    * Drop the cached schema without tearing down connections. Engines cache
    * their own catalog internally, so they are dropped too and rebuild lazily.
    */
-  invalidateCatalogs(): void {
+  invalidateCatalogs(connectionId?: string): void {
+    // An introspect already running describes the pre-refresh database: bump the catalog
+    // generation so it cannot cache itself, and drop it so callers start a fresh read.
+    this.catalogGeneration++;
+    if (connectionId !== undefined) {
+      // One connection's schema only, so refreshing from its own menu does not make every other
+      // connection re-introspect. The engines are dropped either way: they cache per connection
+      // internally and rebuild lazily, so that costs nothing until the next question.
+      this.catalogInflight.delete(connectionId);
+      this.catalogs.delete(connectionId);
+      this.engines.clear();
+      // Mongo engines are keyed "<model>:<connectionId>", so match on the suffix.
+      for (const [key, engine] of this.mongoEngines) {
+        if (key.endsWith(`:${connectionId}`)) {
+          engine.invalidateCatalog();
+          this.mongoEngines.delete(key);
+        }
+      }
+      return;
+    }
+    this.catalogInflight.clear();
     this.catalogs.clear();
     this.engines.clear();
     for (const e of this.mongoEngines.values()) e.invalidateCatalog();
@@ -714,8 +747,12 @@ export class EngineManager {
    */
   async testConnection(connectionId: string): Promise<{ ok: true; tables: number } | { ok: false; message: string }> {
     try {
-      // Force a fresh read so the test reflects reality, not a warm cache.
+      // Force a fresh read so the test reflects reality: drop the cached catalog AND
+      // any read already in flight, which would otherwise report the pre-test schema.
       this.catalogs.delete(connectionId);
+      this.catalogInflight.delete(connectionId);
+      // Same reason as invalidateCatalogs: a read already running must not cache itself over this one.
+      this.catalogGeneration++;
       const cat = await this.catalogFor(connectionId);
       return { ok: true, tables: cat.tables.length };
     } catch (err) {
@@ -750,6 +787,7 @@ export class EngineManager {
    */
   async reset(): Promise<void> {
     this.generation++;
+    this.catalogGeneration++;
     const pending = this.connectorsPromise;
     const mongoPending = this.mongoConnectorsPromise;
     const handles = this.sqliteHandles;

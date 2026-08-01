@@ -66,4 +66,54 @@ class PromptParityTest {
         )
         assertEquals(vectors.getValue("repair"), actual)
     }
+
+    @Test
+    fun `schema-answer system prompts match published core byte for byte`() {
+        val vectors = loadVectors()
+        assertEquals(vectors.getValue("schemaAnswerSystem"), Prompts.buildSchemaAnswerSystem(Dialects.POSTGRES))
+        assertEquals(vectors.getValue("schemaAnswerSystemDdl"), Prompts.buildSchemaAnswerSystem(Dialects.POSTGRES, allowDdlSuggestions = true))
+        assertEquals(
+            vectors.getValue("schemaAnswerSystemNoScope"),
+            Prompts.buildSchemaAnswerSystem(Dialects.POSTGRES, allowDdlSuggestions = false, allowOutOfScope = false),
+        )
+    }
+
+    @Test
+    fun `schema-answer user and scope-repair prompts match published core byte for byte`() {
+        val vectors = loadVectors()
+        assertEquals(
+            vectors.getValue("schemaAnswerUser"),
+            Prompts.buildSchemaAnswerUser("what is this database for?", schemaText, listOf("orders.user_id = users.id")),
+        )
+        assertEquals(
+            vectors.getValue("schemaAnswerScopeRepair"),
+            Prompts.buildSchemaAnswerScopeRepairUser(
+                "how would I do this in MongoDB?",
+                schemaText,
+                Dialects.POSTGRES.promptLabel,
+                listOf("orders.user_id = users.id"),
+            ),
+        )
+    }
+
+    /**
+     * Verdict parity, not source parity: identical regex text can still behave differently
+     * across the two regex engines (flags, escaping, word boundaries).
+     */
+    @Test
+    fun `scope classifiers agree with published core on every probe`() {
+        val file = listOf(
+            File("tools/parity/vectors/classifiers.json"),
+            File("../tools/parity/vectors/classifiers.json"),
+            File(System.getProperty("user.dir"), "tools/parity/vectors/classifiers.json"),
+        ).firstOrNull { it.exists() } ?: error("classifiers.json not found - run `./gradlew parityVectors` first")
+        val obj = JsonParser.parseString(file.readText()).asJsonObject
+
+        for (e in obj.getAsJsonObject("looksDatabaseRelated").entrySet()) {
+            assertEquals("looksDatabaseRelated(${e.key})", e.value.asBoolean, Scope.looksDatabaseRelated(e.key))
+        }
+        for (e in obj.getAsJsonObject("isOffTopic").entrySet()) {
+            assertEquals("isOffTopic(${e.key})", e.value.asBoolean, Scope.isOffTopic(e.key))
+        }
+    }
 }

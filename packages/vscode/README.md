@@ -2,6 +2,9 @@
 
 **Ask your database in plain English. See the SQL. Get the answer - without leaving VS Code.**
 
+[![Version](https://vsmarketplacebadges.dev/version-short/RahulMahadik.asksql-vscode.svg?label=Marketplace)](https://marketplace.visualstudio.com/items?itemName=RahulMahadik.asksql-vscode)
+[![Installs](https://vsmarketplacebadges.dev/installs-short/RahulMahadik.asksql-vscode.svg?label=Installs)](https://marketplace.visualstudio.com/items?itemName=RahulMahadik.asksql-vscode)
+
 AskSQL adds a chat panel to your sidebar. Type a question, and it writes a read-only query,
 shows it to you, runs it, and returns the results as a table. Works with PostgreSQL, MySQL /
 MariaDB, SQLite, Oracle, and MongoDB, using whichever AI model you choose.
@@ -20,7 +23,8 @@ how many appointments were booked last week?
   explanation. Nothing is hidden.
 - **Read-only by design.** A deterministic guard - not the prompt - decides what runs. Writes, DDL,
   and stacked statements are refused before the database ever sees them. Ask it to delete something
-  and it says no.
+  and it writes the statement out for you to review and run yourself, clearly marked as a proposal;
+  AskSQL never executes it.
 - **Your rows stay private.** The model is sent your **schema and your question, never your data**.
   With a local model, nothing leaves your machine at all. (One optional setting,
   `asksql.sampleColumnValues`, will additionally show the model the handful of codes a short
@@ -37,9 +41,9 @@ how many appointments were booked last week?
 - **Self-correcting and forgiving.** If the model invents a column or misspells a table, AskSQL
   catches it against your real schema and fixes the query before it runs - and a typo in your own
   question ("appoinments") resolves to the real table instead of a refusal.
-- **You are in control.** The SQL is always shown first. Optionally require a click before anything
-  runs (`asksql.requireApproval`), choose whether SQL appears above or below the results
-  (`asksql.sqlDisplay`), cap rows (`asksql.maxRows`), and **Stop** a running query at any time.
+- **You are in control.** Every answer shows the SQL that produced it - below the results by
+  default, or above them with `asksql.sqlDisplay`. Require a click before anything runs
+  (`asksql.requireApproval`), cap rows (`asksql.maxRows`), and **Stop** a running query at any time.
 - **Many databases, one panel.** Keep several connections and switch between them from the panel;
   each answer is labelled with the database it ran against.
 - **Bring your own model.** A chat model you already have in VS Code (no API key), a fully local

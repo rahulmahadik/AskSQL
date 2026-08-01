@@ -3,8 +3,11 @@
  * Covers introspection (tables/views/triggers/FK/index) + querying +
  * read-only enforcement + guard integration.
  */
-import { describe, expect, it, beforeAll } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { DatabaseSync } from 'node:sqlite';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { rmSync } from 'node:fs';
 import { SqliteConnector } from '../src/index.js';
 import { guardSql, SQLITE_DIALECT } from '@asksql/core';
 
@@ -161,5 +164,130 @@ describe('SQLite 64-bit integer fidelity', () => {
     // An ordinary small integer still comes back as a number, not a string.
     expect(small).toBe(42);
     expect(res.columns[2]!.kind).toBe('number');
+  });
+});
+
+/**
+ * The driver fallback: with no better-sqlite3 installed the connector opens the file with
+ * Node's built-in sqlite. What matters is that the fallback keeps the read-only guarantee -
+ * the database itself must refuse a write, not just the SQL guard above it.
+ */
+describe('file mode: built-in node:sqlite fallback', () => {
+  const file = join(tmpdir(), `asksql-fallback-${process.pid}.db`);
+
+  beforeAll(() => {
+    const seed = new DatabaseSync(file);
+    seed.exec("CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES (1, 'a')");
+    seed.close();
+  });
+  afterAll(() => {
+    rmSync(file, { force: true });
+  });
+
+  it('opens a file path, introspects it, and reads rows', async () => {
+    const conn = new SqliteConnector({ id: 'f', name: 'F', file });
+    await conn.connect();
+    try {
+      expect((await conn.introspect()).tables.map((t) => t.name)).toContain('t');
+      expect((await conn.execute('SELECT v FROM t')).rows).toEqual([['a']]);
+    } finally {
+      await conn.close();
+    }
+  });
+
+  // Asserts the guarantee, not a driver's wording: better-sqlite3 and node:sqlite refuse
+  // a write with different messages, and either way the row must not appear.
+  it('opens the file read-only, so a write that reaches the database is refused', async () => {
+    const conn = new SqliteConnector({ id: 'f2', name: 'F2', file });
+    await conn.connect();
+    try {
+      await expect(conn.execute("INSERT INTO t VALUES (2, 'b')")).rejects.toThrow();
+      expect((await conn.execute('SELECT count(*) FROM t')).rows.flat().map(String)).toEqual(['1']);
+    } finally {
+      await conn.close();
+    }
+  });
+
+  it('reports a missing file as a configuration problem, not a driver problem', async () => {
+    const conn = new SqliteConnector({ id: 'f3', name: 'F3', file: join(tmpdir(), 'asksql-does-not-exist.db') });
+    await expect(conn.connect()).rejects.toMatchObject({ code: 'CONFIG_ERROR' });
+  });
+});
+
+/**
+ * The read-only assertion is the last line of defence: node:sqlite ignores unknown option
+ * keys, so a wrong or unsupported flag opens the file writable with no error anywhere.
+ */
+describe('read-only assertion', () => {
+  const file = join(tmpdir(), `asksql-assert-${process.pid}.db`);
+
+  beforeAll(() => {
+    const seed = new DatabaseSync(file);
+    seed.exec("CREATE TABLE t (id INTEGER PRIMARY KEY); INSERT INTO t VALUES (1)");
+    seed.close();
+  });
+  afterAll(() => rmSync(file, { force: true }));
+
+  /** A driver that opened the file writable and cannot arm query_only - what we must catch. */
+  const writableDriver = () => {
+    const inner = new DatabaseSync(file);
+    return {
+      prepare: (sql: string) => (/query_only/i.test(sql) ? { all: () => [{ query_only: 0 }] } : inner.prepare(sql)),
+      exec: () => {}, // swallows "PRAGMA query_only = ON", like a driver that does not support it
+      close: () => inner.close(),
+    };
+  };
+
+  it('refuses a handle whose read-only mode cannot be enforced', async () => {
+    const conn = new SqliteConnector({ id: 'w', name: 'W', database: writableDriver() as never });
+    await expect(conn.connect()).rejects.toMatchObject({
+      code: 'CONFIG_ERROR',
+      // A handle the caller opened gets its own wording: telling them to upgrade Node or install
+      // a driver makes no sense for a connection they created themselves.
+      userMessage: expect.stringMatching(/handle passed to AskSQL could not be put into read-only/i),
+    });
+  });
+
+  it('does not leave the rejected handle in service for the next connect()', async () => {
+    const conn = new SqliteConnector({ id: 'w2', name: 'W2', database: writableDriver() as never });
+    await expect(conn.connect()).rejects.toThrow(/read-only mode/i);
+    // The bug this guards: connect() returned early on the retained handle and served queries.
+    await expect(conn.connect()).rejects.toThrow(/read-only mode/i);
+  });
+
+  it('accepts a genuinely read-only caller handle', async () => {
+    const conn = new SqliteConnector({ id: 'r', name: 'R', database: new DatabaseSync(file, { readOnly: true }) as never });
+    await expect(conn.connect()).resolves.toBeUndefined();
+    expect((await conn.execute('SELECT count(*) FROM t')).rows.flat().map(String)).toEqual(['1']);
+    await conn.close();
+  });
+
+  // `query_only` belongs to the CONNECTION, and a caller-supplied handle is the host
+  // application's connection. Arming it and walking away left the host unable to write through
+  // its own handle for the rest of the process's life.
+  it('gives a caller-supplied handle back able to write again', async () => {
+    const hostDb = new DatabaseSync(file);
+    const conn = new SqliteConnector({ id: 'h', name: 'H', database: hostDb as never });
+    await conn.connect();
+    // While AskSQL holds it, the handle really is read-only.
+    expect(() => hostDb.exec('INSERT INTO t VALUES (99)')).toThrow();
+    await conn.close();
+    // And afterwards the host has its connection back exactly as it lent it.
+    hostDb.exec('INSERT INTO t VALUES (99)');
+    expect(hostDb.prepare('SELECT count(*) AS n FROM t').get()).toMatchObject({ n: 2 });
+    hostDb.exec('DELETE FROM t WHERE id = 99');
+    hostDb.close();
+  });
+
+  // The handle reaches `this.db` straight from the constructor, so nothing had proven it
+  // read-only if a caller went straight to execute().
+  it('refuses to query a caller-supplied handle before connect() has verified it', async () => {
+    const hostDb = new DatabaseSync(file);
+    const conn = new SqliteConnector({ id: 'u', name: 'U', database: hostDb as never });
+    await expect(conn.execute('SELECT count(*) FROM t')).rejects.toMatchObject({ code: 'DB_UNREACHABLE' });
+    // The host handle is untouched by the refusal: it can still write.
+    hostDb.exec('INSERT INTO t VALUES (98)');
+    hostDb.exec('DELETE FROM t WHERE id = 98');
+    hostDb.close();
   });
 });

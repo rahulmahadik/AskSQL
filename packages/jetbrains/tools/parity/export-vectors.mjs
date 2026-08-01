@@ -16,6 +16,11 @@ import {
   buildSqlSystem,
   buildSqlUser,
   buildRepairUser,
+  buildSchemaAnswerSystem,
+  buildSchemaAnswerUser,
+  buildSchemaAnswerScopeRepairUser,
+  isOffTopic,
+  looksDatabaseRelated,
 } from '@asksql/core';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -76,6 +81,18 @@ function exportPromptVectors() {
 
   const vectors = {
     system: buildSqlSystem(dialect, maxRows),
+    // The schema-answer path drifted silently before it was vectored: it carries the
+    // scope guard, so a reworded rule on one side changes what the other side refuses.
+    schemaAnswerSystem: buildSchemaAnswerSystem(dialect),
+    schemaAnswerSystemDdl: buildSchemaAnswerSystem(dialect, true),
+    schemaAnswerSystemNoScope: buildSchemaAnswerSystem(dialect, false, false),
+    schemaAnswerUser: buildSchemaAnswerUser('what is this database for?', schemaText, ['orders.user_id = users.id']),
+    schemaAnswerScopeRepair: buildSchemaAnswerScopeRepairUser(
+      'how would I do this in MongoDB?',
+      schemaText,
+      dialect.promptLabel,
+      ['orders.user_id = users.id'],
+    ),
     user: buildSqlUser({ question: 'top 5 customers by total spend', schemaText, dialect, maxRows }),
     repair: buildRepairUser({
       question: 'top 5 customers by total spend',
@@ -89,5 +106,53 @@ function exportPromptVectors() {
   console.log('Wrote prompt vectors -> tools/parity/vectors/prompts.json');
 }
 
+/**
+ * Behavioural vectors for the scope classifiers. Comparing regex SOURCE would pass while
+ * the two engines still disagreed (different flags, different escaping); comparing verdicts
+ * on real strings is what actually has to match.
+ */
+function exportClassifierVectors() {
+  const questions = [
+    'tell me a joke about penguins',
+    'what is the weather in Mumbai today?',
+    'who won the football world cup in 2022?',
+    'write me a python function that reverses a string',
+    'what is this database for?',
+    'how do I write a SQL JOIN here?',
+    'how would I do this in MongoDB aggregation instead?',
+    'what is a database index and when should I add one?',
+    'delete my Spotify listening history',
+    'Write a DELETE removing orders older than 2020',
+    'summarise the tables',
+    // Dead-alternation probe: \b after [sz] could never match "normalise"/"normalize".
+    'how should I normalise this schema?',
+    'should I denormalize for reporting?',
+    'hello',
+  ];
+  const answers = [
+    'OUT_OF_SCOPE',
+    'Sorry - OUT_OF_SCOPE.',
+    '  OUT_OF_SCOPE  ',
+    'The orders table records purchases.',
+    'This is OUT_OF_SCOPExx not the sentinel',
+    // Past the length bound: a real answer that merely discusses the sentinel must not be
+    // mistaken for a refusal.
+    'The OUT_OF_SCOPE marker is what the model emits for questions unrelated to data. This answer is far longer than a refusal ever is, and describes the schema at length.',
+    'OUT_OF_SCOPE - not a database question.',
+    // Models reformat the sentinel, and an unmatched near-miss is rendered to the user verbatim.
+    'OUT OF SCOPE',
+    'out-of-scope',
+    '**OUT_OF_SCOPE**',
+    'This is about scope creep in the project plan and how we manage it across teams.',
+  ];
+  const vectors = {
+    looksDatabaseRelated: Object.fromEntries(questions.map((q) => [q, looksDatabaseRelated(q)])),
+    isOffTopic: Object.fromEntries(answers.map((a) => [a, isOffTopic(a)])),
+  };
+  writeFileSync(join(outDir, 'classifiers.json'), JSON.stringify(vectors, null, 2) + '\n');
+  console.log('Wrote classifier vectors -> tools/parity/vectors/classifiers.json');
+}
+
 exportGuardVectors();
 exportPromptVectors();
+exportClassifierVectors();

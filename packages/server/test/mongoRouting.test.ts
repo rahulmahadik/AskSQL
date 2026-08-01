@@ -104,6 +104,27 @@ describe('MongoDB routing', () => {
     expect(closeSpy).toHaveBeenCalled();
   });
 
+  // The Mongo engine caches its catalog for 5 minutes, so without an explicit
+  // invalidation ?refresh=1 would keep serving the schema from before a new collection.
+  it('GET /schema?refresh=1 re-reads a Mongo catalog instead of serving the cached one', async () => {
+    let introspects = 0;
+    const connector = fakeMongo({
+      introspect: async () => {
+        introspects++;
+        return CATALOG;
+      },
+    });
+    const s = server(connector);
+    const schemaReq = (query: Record<string, string>): ServerRequest => ({ ...req('GET', '/schema'), query });
+
+    await s.handle(schemaReq({}));
+    await s.handle(schemaReq({}));
+    expect(introspects).toBe(1);
+
+    await s.handle(schemaReq({ refresh: '1' }));
+    expect(introspects).toBe(2);
+  });
+
   it('reports mongo connections in /health, not just SQL ones', async () => {
     const res = (await server(fakeMongo()).handle(req('GET', '/health'))) as {
       body: { connections: { id: string; engine: string }[] };

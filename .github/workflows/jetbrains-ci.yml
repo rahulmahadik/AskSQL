@@ -64,7 +64,7 @@ jobs:
       - uses: gradle/actions/setup-gradle@v6
       - run: ./gradlew test buildPlugin verifyPlugin --stacktrace
       - name: Upload plugin zip
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: asksql-jetbrains-plugin
           path: packages/jetbrains/build/distributions/*.zip
@@ -113,10 +113,14 @@ jobs:
       - run: node export-vectors.mjs
       - name: Fail if generated vectors differ from committed ones
         run: |
-          git diff --exit-code -- vectors/ || {
-            echo "::error::Golden parity vectors changed — a new @asksql/core release altered guard/prompt behavior. Port the change, regenerate, and commit the new vectors."
+          # --porcelain, not `git diff`: a NEW vector file is untracked, and git diff
+          # ignores untracked files, so a forgotten commit would pass silently.
+          changed="$(git status --porcelain -- vectors/)"
+          if [ -n "$changed" ]; then
+            echo "$changed"
+            echo "::error::Golden parity vectors changed or are missing from the commit — a new @asksql/core release altered guard/prompt behavior. Port the change, regenerate, and commit the new vectors."
             exit 1
-          }
+          fi
 
   root-monorepo-unaffected:
     needs: isolation-guard

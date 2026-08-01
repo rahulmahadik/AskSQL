@@ -12,7 +12,7 @@ npm i @asksql/core @asksql/server @asksql/postgres pg express @ai-sdk/groq
 ## Run it as a server (no code)
 
 ```bash
-npx --package=@asksql/server asksql serve --provider ollama --model qwen2.5-coder:14b
+npx --package=@asksql/server asksql serve --provider ollama --model qwen2.5-coder:7b
 ```
 
 The bin is `asksql` but the package is `@asksql/server`, so `--package` is
@@ -23,9 +23,9 @@ connector packages, e.g. `@asksql/postgres pg`) then just
 
 Listens on `127.0.0.1:3000` and accepts database connections from the client at
 runtime, so the AskSQL browser extension can offer an engine/host/port/user/password
-form (PostgreSQL, MySQL, Oracle, MongoDB, SQLite, DuckDB). POST `/explainSchema` answers schema questions in prose (SQL engines), including
-advisory add-a-column / index / performance suggestions as never-executed DDL
-proposals. Point the extension at
+form (PostgreSQL, MySQL, Oracle, MongoDB, SQLite, DuckDB). POST `/explainSchema` answers schema questions in prose on every engine, MongoDB
+included, with advisory add-a-column / index / performance suggestions as
+never-executed proposals. Point the extension at
 `http://localhost:3000`.
 
 Runtime connections are what make that form possible, so the server stays on loopback
@@ -111,8 +111,9 @@ Every endpoint runs your auth hook first and checks the caller's connection scop
 - `POST /execute` - runs a statement through the server-side guard; accepts `maxRows`.
   On a database error the response can carry `suggestedSql` for the user to review.
 - `POST /explain` - plain-language explanation of a statement (Mongo pipelines included).
-- `POST /explainSchema` - schema questions in prose, including advisory add-a-column /
-  index / performance suggestions as never-executed DDL proposals (SQL engines).
+- `POST /explainSchema` - schema questions in prose on any engine (MongoDB answers in
+  collections and `$lookup`), including advisory add-a-column / index / performance
+  suggestions as never-executed proposals. A question unrelated to data is declined.
 - `GET /schema` - cached catalog; `refresh=1` re-introspects.
 - `GET /history` - the caller's query history, paginated (`page`, `per_page`).
 - `POST /feedback` - marks a question/SQL pair good; stored per user as a few-shot example.

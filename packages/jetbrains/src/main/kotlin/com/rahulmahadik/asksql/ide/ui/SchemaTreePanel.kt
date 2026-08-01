@@ -25,8 +25,10 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.supervisorScope
 import java.awt.BorderLayout
 import javax.swing.JPanel
 import javax.swing.tree.DefaultMutableTreeNode
@@ -41,10 +43,8 @@ class SchemaTreePanel(private val project: Project) : Disposable {
     val component = JPanel(BorderLayout())
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val tree = Tree(DefaultMutableTreeNode("AskSQL"))
-    /** Guards against overlapping reloads; Refresh lives as the tool window's own title-bar icon (see AskSqlToolWindowFactory). */
-    private var isLoading = false
-    /** A reload requested while one is in flight runs after it finishes, so a connection edit/delete during a slow load isn't dropped. */
-    private var pendingReload = false
+    /** Serializes reloads; Refresh lives as the tool window's own title-bar icon (see AskSqlToolWindowFactory). */
+    private val reloads = ReloadCoalescer()
 
     /** Carries the descriptor on a connection node so a right-click can act on it; [toString] is the label the tree renders. */
     private class ConnectionNode(val descriptor: ConnectionDescriptor, private val label: String) {
@@ -103,7 +103,11 @@ class SchemaTreePanel(private val project: Project) : Disposable {
 
     private fun showConnectionMenu(descriptor: ConnectionDescriptor, e: java.awt.event.MouseEvent) {
         val menu = javax.swing.JPopupMenu()
-        menu.add(javax.swing.JMenuItem("Refresh Schema").apply { addActionListener { reload(forceRefresh = true) } })
+        menu.add(
+            javax.swing.JMenuItem("Refresh Schema").apply {
+                addActionListener { reload(forceRefresh = true, onlyConnectionId = descriptor.id) }
+            },
+        )
         menu.add(javax.swing.JMenuItem("Edit Connection…").apply { addActionListener { editConnection(descriptor) } })
         menu.addSeparator()
         menu.add(javax.swing.JMenuItem("Delete Connection…").apply { addActionListener { deleteConnection(descriptor) } })
@@ -169,16 +173,13 @@ class SchemaTreePanel(private val project: Project) : Disposable {
         ApplicationManager.getApplication().messageBus.syncPublisher(AskSqlSettingsListener.TOPIC).settingsChanged()
     }
 
-    fun reload(forceRefresh: Boolean) {
-        if (isLoading) {
-            pendingReload = true
-            return
-        }
-        isLoading = true
+    /** @param onlyConnectionId re-read just this connection; the others render from cache. */
+    fun reload(forceRefresh: Boolean, onlyConnectionId: String? = null) {
+        if (!reloads.begin(forceRefresh)) return
         val descriptors = ConnectionMerger.merged(project).map { it.descriptor }
         if (descriptors.isEmpty()) {
             tree.model = DefaultTreeModel(DefaultMutableTreeNode("No connections yet - use \"Add Connection\" to get started."))
-            isLoading = false
+            reloads.finish(runFollowUp = true)?.let { reload(forceRefresh = it) }
             return
         }
 
@@ -191,22 +192,38 @@ class SchemaTreePanel(private val project: Project) : Disposable {
         tree.model = DefaultTreeModel(renderRoot())
 
         scope.launch {
-            // Each connection loads concurrently and updates the tree as it finishes, so one slow/broken connection can't block the rest.
-            val jobs = descriptors.mapIndexed { index, descriptor ->
-                launch {
-                    nodes[index] = loadConnectionNode(descriptor, forceRefresh)
-                    ApplicationManager.getApplication().invokeLater {
-                        tree.model = DefaultTreeModel(renderRoot())
-                        TreeUtil.expand(tree, 1)
-                    }
+            try {
+                // Each connection loads concurrently and updates the tree as it finishes, so one slow/broken connection can't block the rest.
+                // supervisorScope: a connection failing in a way loadConnectionNode can't catch must not cancel its siblings.
+                supervisorScope {
+                    descriptors.mapIndexed { index, descriptor ->
+                        launch {
+                            val refreshThisOne = forceRefresh && (onlyConnectionId == null || descriptor.id == onlyConnectionId)
+                            nodes[index] = loadConnectionNode(descriptor, refreshThisOne)
+                            ApplicationManager.getApplication().invokeLater {
+                                tree.model = DefaultTreeModel(renderRoot())
+                                TreeUtil.expand(tree, 1)
+                            }
+                        }
+                    }.joinAll()
                 }
-            }
-            jobs.joinAll()
-            ApplicationManager.getApplication().invokeLater {
-                isLoading = false
-                if (pendingReload) {
-                    pendingReload = false
-                    reload(forceRefresh = false)
+            } finally {
+                // In a finally: a load that fails would otherwise leave the panel marked busy,
+                // making every later Refresh a no-op for the rest of the session.
+                val cancelled = !coroutineContext.isActive
+                ApplicationManager.getApplication().invokeLater {
+                    if (forceRefresh && !cancelled) {
+                        val loaded = nodes.filterNotNull()
+                        val tables = loaded.sumOf { node -> tableCount(node) }
+                        // A connection that could not be read renders an error child instead of groups;
+                        // saying only "N tables" there would report a failed refresh as a clean one.
+                        val failed = descriptors.size - loaded.count { tableCount(it) > 0 || hasEmptyMarker(it) }
+                        val suffix = if (failed > 0) " ($failed could not be read)" else ""
+                        // Refreshing an unchanged schema looks identical to a Refresh that did nothing.
+                        com.intellij.openapi.wm.WindowManager.getInstance().getStatusBar(project)
+                            ?.info = "AskSQL: schema refreshed - $tables tables across ${descriptors.size} connection(s)$suffix"
+                    }
+                    reloads.finish(runFollowUp = !cancelled)?.let { reload(forceRefresh = it) }
                 }
             }
         }
@@ -247,6 +264,14 @@ class SchemaTreePanel(private val project: Project) : Disposable {
         return connectionNode
     }
 
+    /** Tables and views rendered under one connection node, for the post-refresh status message. */
+    private fun tableCount(connectionNode: DefaultMutableTreeNode): Int =
+        connectionNode.breadthFirstEnumeration().asSequence().count { (it as? DefaultMutableTreeNode)?.userObject is TableNode }
+
+    /** True for a connection that read its schema and genuinely has nothing in it, as opposed to one that failed. */
+    private fun hasEmptyMarker(connectionNode: DefaultMutableTreeNode): Boolean =
+        connectionNode.breadthFirstEnumeration().asSequence().any { (it as? DefaultMutableTreeNode)?.userObject == "No tables found" }
+
     /** Group label carries the count ("Tables (12)"), and each table its column count. */
     private fun kindGroupNode(label: String, tables: List<TableInfo>): DefaultMutableTreeNode {
         val group = DefaultMutableTreeNode("$label (${tables.size})")
@@ -271,5 +296,40 @@ class SchemaTreePanel(private val project: Project) : Disposable {
 
     override fun dispose() {
         scope.cancel()
+    }
+}
+
+/**
+ * Serializes schema reloads: one runs at a time and later requests fold into a single follow-up.
+ * The follow-up keeps the strongest refresh asked for, so a Refresh pressed during a slow load
+ * still bypasses the catalog cache instead of re-rendering the cached schema.
+ *
+ * Not synchronized: every call is made from the EDT (UI actions, the settings listener, and the
+ * `invokeLater` that ends a load), so the state needs no locking.
+ */
+internal class ReloadCoalescer {
+    private var loading = false
+    private var pending = false
+    private var pendingForce = false
+
+    /** True when the caller should start a load; false when it was folded into the running one. */
+    fun begin(forceRefresh: Boolean): Boolean {
+        if (loading) {
+            pending = true
+            pendingForce = pendingForce || forceRefresh
+            return false
+        }
+        loading = true
+        return true
+    }
+
+    /** Clears the busy flag unconditionally and returns the follow-up's refresh flag, or null if there is none. */
+    fun finish(runFollowUp: Boolean): Boolean? {
+        loading = false
+        val force = pendingForce
+        val followUp = pending && runFollowUp
+        pending = false
+        pendingForce = false
+        return if (followUp) force else null
     }
 }

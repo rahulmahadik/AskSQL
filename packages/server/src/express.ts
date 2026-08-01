@@ -29,6 +29,9 @@ export interface ExpressLikeRes {
   write(chunk: string): void;
   end(body?: string): void;
   flushHeaders?(): void;
+  /** Optional so a hand-rolled adapter still type-checks; without them a request cannot be cancelled. */
+  on?(event: string, cb: () => void): void;
+  readonly writableEnded?: boolean;
 }
 export type Next = (err?: unknown) => void;
 
@@ -108,7 +111,14 @@ export function asksqlMiddleware(config: AskSqlServerConfig, adapter: ExpressAda
           return;
         }
       }
-      const sreq = toServerRequest(req, server.maxBodyBytes);
+      // The client hanging up is the only cancellation an HTTP server gets. Keyed on the RESPONSE
+      // closing before it finished: the request stream also emits 'close' on a normal read, which
+      // would abort every call the moment its body was parsed.
+      const aborted = new AbortController();
+      res.on?.('close', () => {
+        if (!res.writableEnded) aborted.abort();
+      });
+      const sreq = toServerRequest(req, server.maxBodyBytes, aborted.signal);
       let response: HandlerResponse;
       try {
         response = await server.handle(sreq);
@@ -143,7 +153,7 @@ export function asksqlMiddleware(config: AskSqlServerConfig, adapter: ExpressAda
   };
 }
 
-function toServerRequest(req: ExpressLikeReq, maxBodyBytes: number): ServerRequest {
+function toServerRequest(req: ExpressLikeReq, maxBodyBytes: number, signal?: AbortSignal): ServerRequest {
   const rawPath = req.path ?? (req.originalUrl ?? req.url ?? '/').split('?')[0]!;
   const query: Record<string, string | undefined> = {};
   for (const [k, v] of Object.entries(req.query ?? {})) {
@@ -159,6 +169,7 @@ function toServerRequest(req: ExpressLikeReq, maxBodyBytes: number): ServerReque
     path: rawPath,
     query,
     headers,
+    signal,
     json: async () => {
       // Prefer body-parser output when present; else read the raw stream.
       // An upstream express.json() bypasses readRawJson's size guard; re-check its serialized size.

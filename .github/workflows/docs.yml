@@ -59,9 +59,13 @@ jobs:
             cat /tmp/privacy-body.html
             echo '</body></html>'
           } > docs/api/privacy.html
-      - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/configure-pages@v6
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: docs/api
+          # typedoc emits .nojekyll, and v4 onwards drops dotfiles unless asked. Actions-based
+          # Pages serves the artifact verbatim so nothing here runs Jekyll, but keeping the file
+          # means the same output also works if this ever moves to branch-based Pages.
+          include-hidden-files: true
       - id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5

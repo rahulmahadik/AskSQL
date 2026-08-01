@@ -37,6 +37,19 @@ class MongoEnginePipeline(
         private const val MAX_REPAIRS = 2
         private val CATALOG_TTL = 300.seconds
         private const val DEFAULT_QUERY_TIMEOUT_MS = 30_000L
+
+        /**
+         * A question asking to add/change/remove data or collections: the answer is a proposal, so new
+         * names are expected. Word-for-word the SQL path's list - a divergence classified the same
+         * request differently depending on which engine the user happened to be connected to.
+         */
+        private val MONGO_SCHEMA_CHANGE_RE = Grounding.SCHEMA_CHANGE_RE
+
+        /** A write command offered in an answer: the document counterpart of PROPOSED_WRITE_RE. */
+        private val WRITE_COMMAND_RE = Regex(
+            "\\bdb\\.\\w+\\.(insertOne|insertMany|updateOne|updateMany|deleteOne|deleteMany|replaceOne|createIndex|dropIndex|drop|renameCollection)\\s*\\(",
+            RegexOption.IGNORE_CASE,
+        )
     }
 
     data class MongoAskResult(
@@ -382,6 +395,74 @@ class MongoEnginePipeline(
             llmClient.chat(MongoPrompts.buildExplainSystem(), MongoPrompts.buildExplainUser(p, schemaText))
         }
         return result.text.trim()
+    }
+
+    /** Prose answer about the database itself, for a question no pipeline can answer. Mirrors [EnginePipeline.explainSchema]. */
+    suspend fun explainSchema(
+        question: String,
+        descriptor: ConnectionDescriptor,
+        password: String?,
+        llmClient: LlmClient,
+    ): Scope.SchemaAnswer {
+        val q = question.trim()
+        if (q.isEmpty()) throw AskSqlException(AskSqlErrorCode.INVALID_INPUT, userMessage = "Ask a question about the schema.")
+        // Same cap as every other entry point.
+        if (q.length > 10_000) {
+            throw AskSqlException(
+                AskSqlErrorCode.INVALID_INPUT,
+                userMessage = "The question is too long. Keep it under 10,000 characters.",
+            )
+        }
+        val full = catalog(descriptor, password)
+        if (full.tables.isEmpty()) {
+            return Scope.SchemaAnswer("This connection has no collections the current user can read.", emptyList(), true, emptyList(), false)
+        }
+        val isSchemaChange = MONGO_SCHEMA_CHANGE_RE.containsMatchIn(q)
+        val pruned = CatalogPruner.pruneCatalog(full, q)
+        var answer = com.rahulmahadik.asksql.ide.llm.LlmClients.withChatTimeout {
+            llmClient.chat(MongoPrompts.buildSchemaAnswerSystem(isSchemaChange), MongoPrompts.buildSchemaAnswerUser(q, pruned.schemaText))
+        }.text.trim()
+        // Same three signals as the SQL path; the last does not depend on phrasing.
+        val questionIsAboutThisDatabase =
+            Scope.looksDatabaseRelated(q) || isSchemaChange || Grounding.mentionsCatalogName(q, full)
+        if (Scope.isOffTopic(answer) || (Scope.isDegenerateAnswer(answer) && !WRITE_COMMAND_RE.containsMatchIn(answer))) {
+            // Challenge the refusal once when the question is plainly about data; accept it otherwise.
+            if (!questionIsAboutThisDatabase) return Scope.offTopicAnswer("MongoDB")
+            answer = com.rahulmahadik.asksql.ide.llm.LlmClients.withChatTimeout {
+                llmClient.chat(
+                    MongoPrompts.buildSchemaAnswerSystem(isSchemaChange, allowOutOfScope = false),
+                    MongoPrompts.buildSchemaAnswerScopeRepairUser(q, pruned.schemaText),
+                )
+            }.text.trim()
+            // Same as the SQL path: after the retry a refusal arrives as prose, not the sentinel.
+            if (
+                Scope.isOffTopic(answer) ||
+                (Scope.isDegenerateAnswer(answer) && !WRITE_COMMAND_RE.containsMatchIn(answer)) ||
+                Scope.isProseRefusal(answer, Grounding.mentionsCatalogName(answer, full))
+            ) {
+                return Scope.offTopicAnswer("MongoDB")
+            }
+        }
+        // Same deterministic backstop as the SQL path, for models too small to follow the rule.
+        if (
+            !questionIsAboutThisDatabase &&
+            !Grounding.mentionsCatalogName(answer, full) &&
+            !Scope.looksDatabaseRelated(answer) &&
+            !WRITE_COMMAND_RE.containsMatchIn(answer)
+        ) {
+            return Scope.offTopicAnswer("MongoDB")
+        }
+        answer = Scope.stripSentinel(answer)
+        if (WRITE_COMMAND_RE.containsMatchIn(answer) && !answer.contains("read-only", ignoreCase = true)) {
+            answer += "\n\n*Proposal only - AskSQL is read-only and never executes commands; run it yourself if you want it applied.*"
+        }
+        // Same grounding floor as the SQL path, against the FULL catalog so a collection dropped by
+        // pruning is not mistaken for an invention. Reporting grounded=true unconditionally hid
+        // exactly the hallucinations this value warns about.
+        // Computed unconditionally, like the SQL path: for a change request these are the PROPOSED
+        // names, which the UI shows as proposals rather than errors.
+        val unknown = Grounding.unknownReferencesInProse(answer, full, documentStyle = true)
+        return Scope.SchemaAnswer(answer, pruned.catalog.tables.map { it.name }, unknown.isEmpty(), unknown, isSchemaChange)
     }
 
     private fun auditEntry(

@@ -68,7 +68,7 @@ jobs:
               console.log('zip manifest is key-free, version ' + m.version);
             })"
       - name: Attach zip to GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: packages/browser-extension/asksql-browser-extension.zip
       # Opt-in once Partner Center credentials exist: set the repository

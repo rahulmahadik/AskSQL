@@ -22,6 +22,7 @@ import org.junit.experimental.categories.Category
 import org.testcontainers.containers.OracleContainer
 import java.sql.Connection
 import java.util.Properties
+import kotlin.time.Duration.Companion.minutes
 
 /**
  * Proves, against a real Oracle instance, that introspection produces a correct catalog and that
@@ -30,6 +31,11 @@ import java.util.Properties
  */
 @Category(IntegrationTest::class)
 class OracleJdbcIntegrationTest {
+
+    private companion object {
+        /** Each test starts its own XE instance; cold dictionary queries run well past runTest's 60s default. */
+        val ORACLE_TIMEOUT = 5.minutes
+    }
 
     private lateinit var container: OracleContainer
 
@@ -92,7 +98,7 @@ class OracleJdbcIntegrationTest {
     private suspend fun openConnection(): Connection = JdbcConnectionFactory.open(descriptor(), container.password)
 
     @Test
-    fun `real driver download, introspection, and query execution`() = runTest {
+    fun `real driver download, introspection, and query execution`() = runTest(timeout = ORACLE_TIMEOUT) {
         openConnection().use { connection ->
             val catalog = Introspectors.forEngine(EngineKind.ORACLE).introspect(connection)
             val table = catalog.tables.first { it.name.equals("customers", ignoreCase = true) }
@@ -104,7 +110,7 @@ class OracleJdbcIntegrationTest {
     }
 
     @Test
-    fun `large NUMBER round-trips as an exact string, never a lossy double`() = runTest {
+    fun `large NUMBER round-trips as an exact string, never a lossy double`() = runTest(timeout = ORACLE_TIMEOUT) {
         openConnection().use { connection ->
             val result = JdbcExecutor.execute(connection, "SELECT balance FROM customers", maxRows = 10, timeoutMs = 5000, EngineKind.ORACLE)
             val cell = result.rows.first().first()
@@ -114,7 +120,7 @@ class OracleJdbcIntegrationTest {
     }
 
     @Test(expected = java.sql.SQLException::class)
-    fun `the per-query read-only re-arm rejects a write even with the AST guard bypassed`() = runTest {
+    fun `the per-query read-only re-arm rejects a write even with the AST guard bypassed`() = runTest(timeout = ORACLE_TIMEOUT) {
         openConnection().use { connection ->
             // Arm exactly as JdbcExecutor does: autoCommit=false so SET TRANSACTION READ ONLY isn't
             // committed away before the write. Oracle then rejects the INSERT (ORA-01456).
@@ -127,7 +133,7 @@ class OracleJdbcIntegrationTest {
     }
 
     @Test
-    fun `the per-query re-arm does not freeze reads to a stale snapshot`() = runTest {
+    fun `the per-query re-arm does not freeze reads to a stale snapshot`() = runTest(timeout = ORACLE_TIMEOUT) {
         openConnection().use { readerConnection ->
             val before = JdbcExecutor.execute(readerConnection, "SELECT COUNT(*) AS n FROM customers", maxRows = 1, timeoutMs = 5000, EngineKind.ORACLE)
                 .rows.first().first().let { (it as CellValue.ExactNumeric).value.toDouble() }
@@ -153,7 +159,7 @@ class OracleJdbcIntegrationTest {
 
     /** Same concern as [PostgresJdbcIntegrationTest]'s concurrency test, for Oracle's per-query read-only re-arm. */
     @Test
-    fun `many concurrent queries against the same shared connection each get their own correct result`() = runTest {
+    fun `many concurrent queries against the same shared connection each get their own correct result`() = runTest(timeout = ORACLE_TIMEOUT) {
         val registry = ConnectionRegistry(fakeProject(), CoroutineScope(SupervisorJob() + Dispatchers.Default))
         val results = (1..20).map { n ->
             async {

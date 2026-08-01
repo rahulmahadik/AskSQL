@@ -2,6 +2,9 @@
 
 **[Install from the JetBrains Marketplace](https://plugins.jetbrains.com/plugin/33126-asksql)**
 
+[![Version](https://img.shields.io/jetbrains/plugin/v/33126?label=Marketplace)](https://plugins.jetbrains.com/plugin/33126-asksql)
+[![Downloads](https://img.shields.io/jetbrains/plugin/d/33126?label=Downloads)](https://plugins.jetbrains.com/plugin/33126-asksql)
+
 
 AI database chat inside any JetBrains IDE (IntelliJ IDEA, DataGrip, PyCharm, WebStorm,
 GoLand, PhpStorm, Rider, CLion, RubyMine, RustRover, Android Studio): ask a question in
@@ -168,11 +171,11 @@ Security and privacy invariants (see the plan doc for the full list):
   session/connection-level read-only flag to arm the same way, so for that
   engine `MongoGuard` is the only floor, not defense-in-depth alongside one
   (see its class doc).
-- Only schema is ever sent to the configured AI model. For low-cardinality
-  columns, a small sample of distinct **values** (up to 24, capped in length) is also sent so the
-  model can write correct `WHERE` clauses against real enum-like data (e.g. status
-  codes) instead of guessing. This is genuinely a sample of real column contents,
-  not schema metadata; full row data (arbitrary query results) is never sent.
+- Only schema is ever sent to the configured AI model. On the SQL engines that means declared
+  values only - a column's `ENUM` labels come from the DDL, not from anyone's rows. MongoDB has
+  no DDL to declare them, so its introspector samples a few distinct **values** per field (up to
+  24, capped in length) so the model can write correct filters against real status codes. Full
+  row data (arbitrary query results) is never sent on any engine.
 - Chat history and query results are **in-memory only**; nothing is written to disk
   except settings, and secrets live only in the OS keychain via PasswordSafe.
 - Zero telemetry.

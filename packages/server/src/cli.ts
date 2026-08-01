@@ -25,7 +25,7 @@ export const USAGE = `asksql serve - run a local AskSQL server
   --host <addr>         Interface to bind (default ${DEFAULTS.host}, i.e. this machine only)
   --provider <name>     ollama | openai | anthropic | google | azure | groq | nvidia | openai-compatible
                         (default ${DEFAULTS.provider})
-  --model <id>          Model id, e.g. qwen2.5-coder:14b or gpt-5
+  --model <id>          Model id, e.g. qwen2.5-coder:7b or gpt-5
   --base-url <url>      Provider endpoint override
   --api-key <key>       Provider API key (or set ASKSQL_API_KEY)
   --allow-host <host>   Only let clients open databases on this host. Repeatable.
@@ -119,12 +119,20 @@ export function createRequestListener(server: AskSqlServer): http.RequestListene
         const bodyText = Buffer.concat(chunks).toString('utf8');
         const url = new URL(req.url ?? '/', 'http://localhost');
 
+        // Keyed on the RESPONSE closing before it finished: the request stream also emits 'close'
+        // on a normal read, which would abort every call the moment its body was parsed.
+        const aborted = new AbortController();
+        res.on('close', () => {
+          if (!res.writableEnded) aborted.abort();
+        });
+
         const response = await server.handle({
           method: req.method ?? 'GET',
           path: url.pathname,
           query: Object.fromEntries(url.searchParams),
           headers: Object.fromEntries(Object.entries(req.headers).map(([k, v]) => [k, String(v)])),
           json: async () => (bodyText ? (JSON.parse(bodyText) as unknown) : {}),
+          signal: aborted.signal,
         });
 
         if (isStream(response)) {
@@ -136,12 +144,8 @@ export function createRequestListener(server: AskSqlServer): http.RequestListene
           // A Stop in the client aborts the fetch; writes to a closed response
           // are silently dropped, so without this check the loop would keep
           // pulling the stream (and paying for model tokens) for nobody.
-          let clientGone = false;
-          res.on('close', () => {
-            clientGone = true;
-          });
           for await (const event of response.stream) {
-            if (clientGone) break;
+            if (aborted.signal.aborted) break;
             res.write(`data: ${JSON.stringify(event)}\n\n`);
           }
           res.end();

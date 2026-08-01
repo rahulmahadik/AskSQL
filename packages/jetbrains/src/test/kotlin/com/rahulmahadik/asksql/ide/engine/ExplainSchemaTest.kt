@@ -49,22 +49,22 @@ class ExplainSchemaTest {
 
     @Test fun `passes prose that only names real tables and columns`() {
         val prose = "The orders table links to customers via customer_id, and total_cents holds the amount."
-        assertEquals(emptyList<String>(), EnginePipeline.unknownReferencesInProse(prose, catalog))
+        assertEquals(emptyList<String>(), Grounding.unknownReferencesInProse(prose, catalog))
     }
 
     @Test fun `flags an invented snake_case name`() {
         val prose = "Join orders to the customer_history table."
-        assertTrue(EnginePipeline.unknownReferencesInProse(prose, catalog).contains("customer_history"))
+        assertTrue(Grounding.unknownReferencesInProse(prose, catalog).contains("customer_history"))
     }
 
     @Test fun `flags backticked and quoted invented names`() {
-        assertTrue(EnginePipeline.unknownReferencesInProse("See `line_items`.", catalog).contains("line_items"))
-        assertTrue(EnginePipeline.unknownReferencesInProse("Look at \"audit_log\".", catalog).contains("audit_log"))
+        assertTrue(Grounding.unknownReferencesInProse("See `line_items`.", catalog).contains("line_items"))
+        assertTrue(Grounding.unknownReferencesInProse("Look at \"audit_log\".", catalog).contains("audit_log"))
     }
 
     @Test fun `does not flag ordinary English or SQL vocabulary`() {
         val prose = "Each order has a primary_key and a foreign_key to the customer. This is read_only."
-        assertEquals(emptyList<String>(), EnginePipeline.unknownReferencesInProse(prose, catalog))
+        assertEquals(emptyList<String>(), Grounding.unknownReferencesInProse(prose, catalog))
     }
 
     // ---- explainSchema end to end (file-backed SQLite + fixed LLM) ----
@@ -140,5 +140,27 @@ class ExplainSchemaTest {
         assertTrue(sa.isSchemaChange)
         assertTrue(sa.unknownReferences.contains("loyalty_points")) // surfaced as a proposal
         assertEquals(1, llm.calls) // no repair retry for a change request
+    }
+
+    @Test fun `an out-of-scope reply becomes an honest decline, not the raw sentinel`() = runTest {
+        val db = descriptor(seedDb())
+        val llm = FixedLlm("OUT_OF_SCOPE")
+        val sa = pipeline().explainSchema("Tell me a joke about penguins", db, null, llm)
+        assertFalse(sa.answer.contains("OUT_OF_SCOPE"))
+        assertTrue(sa.answer.contains("only help with databases"))
+        assertEquals(1, llm.calls) // no database words in the question, so the refusal stands
+    }
+
+    @Test fun `a refused database question is challenged once before being declined`() = runTest {
+        val db = descriptor(seedDb())
+        val llm = FixedLlm("OUT_OF_SCOPE")
+        val sa = pipeline().explainSchema("How do I write this as a SQL join?", db, null, llm)
+        assertEquals(2, llm.calls) // challenged; the model repeated itself, so the decline stands
+        assertTrue(sa.answer.contains("only help with databases"))
+    }
+
+    @Test fun `an alias the answer defines with AS is not a hallucination`() {
+        val prose = "Use SELECT count(*) AS customer_count FROM customers to count them."
+        assertEquals(emptyList<String>(), Grounding.unknownReferencesInProse(prose, catalog))
     }
 }

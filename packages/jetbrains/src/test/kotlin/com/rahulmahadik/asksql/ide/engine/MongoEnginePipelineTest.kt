@@ -288,4 +288,80 @@ class MongoEnginePipelineTest {
         assertNotNull(fix)
         assertEquals("expected the catalog's real casing, not the model's \"Orders\"", "orders", fix!!.collection)
     }
+
+    // ---- explainSchema: the prose path the chat panel falls back to ----
+
+    @Test
+    fun `explainSchema answers in prose without running an aggregation`() = runTest {
+        val (pipeline, history) = pipeline()
+        val llm = FakeLlmClient(listOf("The `orders` collection holds one document per order, with a `status` field."))
+
+        val sa = pipeline.explainSchema("what is this database for?", descriptor(), null, llm)
+
+        assertTrue(sa.answer.contains("orders"))
+        assertTrue(sa.tables.contains("orders"))
+        assertFalse(sa.isSchemaChange)
+        assertTrue("no query may run for a schema question", history.recent().isEmpty())
+    }
+
+    @Test
+    fun `explainSchema declines a question with nothing to do with data`() = runTest {
+        val (pipeline, _) = pipeline()
+        val llm = FakeLlmClient(listOf("OUT_OF_SCOPE"))
+
+        val sa = pipeline.explainSchema("tell me a joke about penguins", descriptor(), null, llm)
+
+        assertTrue(sa.answer.contains("only help with databases"))
+        assertTrue("the decline names the engine", sa.answer.contains("MongoDB"))
+        assertFalse(sa.answer.contains("OUT_OF_SCOPE"))
+        assertEquals("no retry: the question has no database vocabulary", 1, llm.callCount)
+    }
+
+    @Test
+    fun `explainSchema challenges a refusal when the question is plainly about data`() = runTest {
+        val (pipeline, _) = pipeline()
+        val llm = FakeLlmClient(
+            listOf("OUT_OF_SCOPE", "This connection is MongoDB: use a `${'$'}lookup` stage rather than a SQL JOIN on `orders`."),
+        )
+
+        val sa = pipeline.explainSchema("how do I write a SQL JOIN here?", descriptor(), null, llm)
+
+        assertEquals(2, llm.callCount)
+        assertTrue(sa.answer.contains("lookup"))
+        assertFalse(sa.answer.contains("only help with databases"))
+    }
+
+    @Test
+    fun `explainSchema marks a proposed write as never executed`() = runTest {
+        val (pipeline, _) = pipeline()
+        val llm = FakeLlmClient(listOf("Run db.orders.deleteMany({ status: \"cancelled\" }) to remove them."))
+
+        val sa = pipeline.explainSchema("delete all cancelled orders", descriptor(), null, llm)
+
+        assertTrue(sa.isSchemaChange)
+        assertTrue(sa.answer.contains("read-only", ignoreCase = true))
+    }
+
+    @Test
+    fun `explainSchema grounds against the catalog without flagging MongoDB operators`() = runTest {
+        val (pipeline, _) = pipeline()
+        val good = FakeLlmClient(listOf("Join with `${'$'}lookup`; the `orders` collection has a `status` field."))
+        assertTrue(pipeline.explainSchema("how are these related?", descriptor(), null, good).grounded)
+
+        val invented = FakeLlmClient(listOf("Older documents live in the `order_history` collection."))
+        val sa = pipeline.explainSchema("where is history kept?", descriptor(), null, invented)
+        assertFalse(sa.grounded)
+        assertTrue(sa.unknownReferences.contains("order_history"))
+    }
+
+    @Test
+    fun `explainSchema rejects a question longer than the cap`() = runTest {
+        val (pipeline, _) = pipeline()
+        try {
+            pipeline.explainSchema("x".repeat(10_001), descriptor(), null, FakeLlmClient(listOf("unused")))
+            fail("expected the length cap to reject this")
+        } catch (e: AskSqlException) {
+            assertEquals(AskSqlErrorCode.INVALID_INPUT, e.code)
+        }
+    }
 }

@@ -151,9 +151,11 @@ function App(): JSX.Element {
   const [readyNotice, setReadyNotice] = useState('');
   const [providerLabel, setProviderLabel] = useState('');
   const [catalog, setCatalog] = useState<SchemaCatalog | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
   const [showTables, setShowTables] = useState(false);
   const [seedQuestion, setSeedQuestion] = useState<string | undefined>(undefined);
   const [requireApproval, setRequireApproval] = useState(false);
+  const [maxRows, setMaxRows] = useState<number | undefined>(undefined);
   const [sqlDisplayPlacement, setSqlDisplayPlacement] = useState<'before' | 'after'>('after');
   const [answerSchemaQuestions, setAnswerSchemaQuestions] = useState(false);
   const [pendingQuestion, setPendingQuestion] = useState<string | undefined>(undefined);
@@ -182,6 +184,7 @@ function App(): JSX.Element {
         setRequireApproval(s.requireApproval);
         setSqlDisplayPlacement(s.sqlDisplayPlacement);
         setAnswerSchemaQuestions(s.answerSchemaQuestions);
+        setMaxRows(s.maxRows);
       });
     applyEngineSettings();
 
@@ -271,12 +274,33 @@ function App(): JSX.Element {
     return c.introspect();
   };
 
-  const loadSidecarCatalog = async (connection: SidecarConnection): Promise<SchemaCatalog> => {
+  const loadSidecarCatalog = async (connection: SidecarConnection, refresh = false): Promise<SchemaCatalog> => {
     const transport = new HttpTransport({
       baseUrl: connection.baseUrl,
       headers: connection.authHeader ? { Authorization: connection.authHeader } : undefined,
     });
-    return transport.schema(connection.remoteConnectionId);
+    return transport.schema(connection.remoteConnectionId, refresh);
+  };
+
+  /** Re-read the schema of the open connection: a table added elsewhere is otherwise invisible
+   *  until the connection is torn down and remade. */
+  const refreshCatalog = async () => {
+    const choice = choices?.find((c) => choiceId(c) === activeId);
+    if (!choice || refreshing) return;
+    setRefreshing(true);
+    try {
+      const fresh =
+        choice.kind === 'file'
+          ? await buildFileCatalog(choice.connection)
+          : await loadSidecarCatalog(choice.connection, true);
+      setCatalog(fresh);
+      // An unchanged schema looks exactly like a refresh that did nothing.
+      showReady(`Schema re-read: ${fresh.tables.length} ${fresh.tables.length === 1 ? 'table' : 'tables'}.`);
+    } catch (err) {
+      setStatus(reportError('Refresh schema', err));
+    } finally {
+      setRefreshing(false);
+    }
   };
 
   const disconnect = async () => {
@@ -360,7 +384,19 @@ function App(): JSX.Element {
       {showTables && (
         <div className="asksql-ext-tables">
           {catalog ? (
-            <SchemaBrowser catalog={catalog} onPick={(t) => setSeedQuestion(`Show me 10 rows from ${t.name}`)} />
+            <>
+              <div className="asksql-ext-tables-head">
+                <button
+                  className="asksql-ext-btn"
+                  onClick={() => void refreshCatalog()}
+                  disabled={refreshing}
+                  title="Re-read the schema from the database"
+                >
+                  {refreshing ? 'Refreshing...' : 'Refresh schema'}
+                </button>
+              </div>
+              <SchemaBrowser catalog={catalog} onPick={(t) => setSeedQuestion(`Show me 10 rows from ${t.name}`)} />
+            </>
           ) : (
             <p className="asksql-ext-status">Reading the schema...</p>
           )}
@@ -373,6 +409,9 @@ function App(): JSX.Element {
         key={activeId}
         transport={transport}
         requireApproval={requireApproval}
+        // Sent with every query, so the row cap applies to a sidecar connection too and not
+        // only to the in-browser engine, which reads it from its own policy.
+        maxRows={maxRows}
         sqlDisplayPlacement={sqlDisplayPlacement}
         answerSchemaQuestions={answerSchemaQuestions}
         suggestions={pendingQuestion ? undefined : ['How many rows are there?', 'Show the first few rows']}

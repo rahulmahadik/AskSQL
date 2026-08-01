@@ -1,6 +1,6 @@
 # AskSQL Browser Extension — Privacy Policy
 
-Last updated: 2026-07-28.
+Last updated: 2026-08-01.
 
 ## What this extension does
 
@@ -19,7 +19,9 @@ anywhere except:
   Azure, NVIDIA, or an OpenAI-compatible endpoint you specify) receives your
   question and your database **schema** (table/column names and types) so it
   can write SQL. **It never receives your row data or query results** — only
-  schema and the question you typed.
+  schema and the question you typed. This is enforced in the engine, not left
+  to configuration: cell values are stripped from the schema before any prompt
+  is built unless a host explicitly opts in, and this extension does not.
 - **The sidecar server you configure**, if you use one, receives your
   question and, when you run a query, the query and its results — because
   that's the server you told the extension to talk to. AskSQL doesn't operate
@@ -57,10 +59,9 @@ excessive access) could read them. Only enter credentials you're comfortable
 storing this way.
 
 **Query results and row data are never written to any of the above.** Chat
-history, including results, exists only in the side panel's in-memory state
-and disappears when the panel closes. (The data files behind a connection persist as described
-**Save** on, which stores the question and SQL — never row data — as a saved
-query).
+history, including results, exists only in the side panel's in-memory state and
+disappears when the panel closes. The data files behind a data file connection
+persist as described in the table above, until you remove that connection.
 
 ## Requests to your AI provider are sent without an Origin header
 
@@ -79,8 +80,8 @@ it is removed when you use **Reset everything**.
 
 ## Your controls
 
-- **Reset everything** (Settings page): clears every setting, connection, saved
-  query, and every data file connection's stored data, and revokes every
+- **Reset everything** (Settings page): clears every setting and connection,
+  deletes every data file connection's stored data, and revokes every
   site-access permission the extension was granted.
 - **Remove** on a data file connection (Settings page): deletes that
   connection's database outright, without touching your other settings.

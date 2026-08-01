@@ -92,15 +92,82 @@ type Doc = Record<string, unknown>;
 
 const isDoc = (v: unknown): v is Doc => typeof v === 'object' && v !== null && !Array.isArray(v);
 
+/**
+ * Rewrite mongo-shell JSON into strict JSON: quoted keys, double-quoted strings, no
+ * trailing commas. The shell accepts `{$group: {...}}` and smaller models emit it, so
+ * rejecting it would fail a correct pipeline on syntax alone. String contents are
+ * walked, never regex-replaced, so a colon or brace inside a value is left intact.
+ * Only shape is relaxed - the guard still inspects every parsed stage afterwards.
+ */
+function relaxShellJson(text: string): string {
+  let out = '';
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]!;
+    if (ch === '"' || ch === "'") {
+      // Copy the whole literal, re-quoting a single-quoted one as it goes.
+      const quote = ch;
+      let body = '';
+      i++;
+      for (; i < text.length && text[i] !== quote; i++) {
+        if (text[i] === '\\') {
+          const escaped = text[++i] ?? '';
+          // \' is valid in a single-quoted literal but not in JSON; it needs no escape once re-quoted.
+          body += escaped === "'" && quote === "'" ? "'" : `\\${escaped}`;
+        } else if (text[i] === '"' && quote === "'") {
+          body += '\\"';
+        } else {
+          body += text[i]!;
+        }
+      }
+      out += `"${body}"`;
+      continue;
+    }
+    if (/[A-Za-z_$]/.test(ch)) {
+      // A bare word: a key when the next non-space character is a colon, else a literal
+      // (true/false/null) that must be copied through untouched.
+      let word = '';
+      let j = i;
+      for (; j < text.length && /[\w$.]/.test(text[j]!); j++) word += text[j]!;
+      let k = j;
+      while (k < text.length && /\s/.test(text[k]!)) k++;
+      out += text[k] === ':' ? `"${word}"` : word;
+      i = j - 1;
+      continue;
+    }
+    if (ch === ',') {
+      let k = i + 1;
+      while (k < text.length && /\s/.test(text[k]!)) k++;
+      if (text[k] === '}' || text[k] === ']') continue; // trailing comma
+    }
+    out += ch;
+  }
+  return out;
+}
+
+/**
+ * The strict-JSON form of a pipeline string, or null when it is not one. Callers that
+ * inspect the TEXT (rather than the parsed value) must use this, never the raw input:
+ * the raw form may be shell JSON whose quoting a strict-JSON scanner reads differently.
+ */
+export function toStrictPipelineJson(pipelineJson: string): { json: string; pipeline: unknown[] } | null {
+  const attempt = (text: string): unknown[] | null => {
+    try {
+      const parsed: unknown = JSON.parse(text);
+      return Array.isArray(parsed) ? parsed : null;
+    } catch {
+      return null;
+    }
+  };
+  const direct = attempt(pipelineJson);
+  if (direct) return { json: pipelineJson, pipeline: direct };
+  const relaxed = relaxShellJson(pipelineJson);
+  const viaShell = attempt(relaxed);
+  return viaShell ? { json: relaxed, pipeline: viaShell } : null;
+}
+
 /** Parse a bare pipeline-array string into stages, or null if it is not a JSON array. */
 export function parsePipeline(pipelineJson: string): unknown[] | null {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(pipelineJson);
-  } catch {
-    return null;
-  }
-  return Array.isArray(parsed) ? parsed : null;
+  return toStrictPipelineJson(pipelineJson)?.pipeline ?? null;
 }
 
 type Violation = { ruleId: string; reason: string };
@@ -350,9 +417,13 @@ export function guardPipeline(
   pipelineJson: string,
   policy: MongoGuardPolicy = DEFAULT_MONGO_GUARD_POLICY,
 ): MongoGuardVerdict {
-  const pipeline = parsePipeline(pipelineJson);
-  if (!pipeline) return blocked('parse_failed', 'The pipeline is not valid JSON.');
-  if (hasUnsafeIntegerLiteral(pipelineJson)) {
+  const strict = toStrictPipelineJson(pipelineJson);
+  if (!strict) return blocked('parse_failed', 'The pipeline is not valid JSON.');
+  const pipeline = strict.pipeline;
+  // Scan the strict-JSON form, not the raw text: hasUnsafeIntegerLiteral only understands
+  // double-quoted strings, so a shell-quoted value would shift what it thinks is a literal -
+  // silently skipping the check on a real 64-bit number, or blocking a numeric string.
+  if (hasUnsafeIntegerLiteral(strict.json)) {
     return blocked(
       'integer_unsafe',
       'A number in the pipeline is too large to run safely. Wrap 64-bit integers in {"$numberLong": "..."}.',

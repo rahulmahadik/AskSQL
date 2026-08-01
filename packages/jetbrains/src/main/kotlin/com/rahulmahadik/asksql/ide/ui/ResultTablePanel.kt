@@ -30,7 +30,9 @@ import javax.swing.table.AbstractTableModel
 class ResultTablePanel(private val project: Project, private val resultSet: AskSqlResultSet) {
 
     companion object {
-        private const val SIZING_SAMPLE_ROWS = 50
+        /** Sizing scans this many rows: a value wider than every earlier one would otherwise be clipped in an undersized column. */
+        private const val SIZING_SAMPLE_ROWS = 2_000
+        private const val TOOLTIP_MAX_CHARS = 2_000
     }
 
     val component: JPanel = JPanel(BorderLayout())
@@ -42,13 +44,23 @@ class ResultTablePanel(private val project: Project, private val resultSet: AskS
             override fun getColumnName(column: Int) = resultSet.columns[column].name
             override fun getValueAt(rowIndex: Int, columnIndex: Int): Any = displayString(resultSet.rows[rowIndex][columnIndex])
         }
-        val table = JBTable(model)
+        val table = object : JBTable(model) {
+            /**
+             * Wide results overflow into the scroll pane's horizontal scrollbar; a result narrower
+             * than the pane stretches to fill it instead of leaving dead space beside the last column.
+             */
+            override fun getScrollableTracksViewportWidth(): Boolean {
+                val viewportWidth = parent?.width ?: return false
+                return preferredSize.width < viewportWidth
+            }
+        }
         TableSpeedSearch.installOn(table)
         table.emptyText.text = "No rows returned"
         // Columns hug their content (default JTable auto-resize stretches every column equally
         // across the full panel width, leaving huge gaps for narrow data); the scroll pane picks
         // up any horizontal overflow instead.
         table.autoResizeMode = javax.swing.JTable.AUTO_RESIZE_OFF
+        table.setDefaultRenderer(Any::class.java, CellRenderer())
         styleHeaderAndGrid(table)
         sizeColumnsToContent(table)
         if (resultSet.rows.isEmpty()) {
@@ -64,11 +76,15 @@ class ResultTablePanel(private val project: Project, private val resultSet: AskS
             )
         } else {
             table.visibleRowCount = resultSet.rows.size.coerceIn(3, 15)
-            component.add(JBScrollPane(table), BorderLayout.CENTER)
+            val scroll = JBScrollPane(table)
+            // A wide result is unreadable without the horizontal scrollbar, so both policies are explicit.
+            scroll.horizontalScrollBarPolicy = javax.swing.ScrollPaneConstants.HORIZONTAL_SCROLLBAR_AS_NEEDED
+            scroll.verticalScrollBarPolicy = javax.swing.ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED
+            component.add(scroll, BorderLayout.CENTER)
         }
 
         if (resultSet.truncated) {
-            val banner = javax.swing.JLabel("Showing ${resultSet.rows.size} rows (truncated) - use Export CSV for the full result.")
+            val banner = javax.swing.JLabel("Showing the first ${resultSet.rows.size} rows - raise the row cap in Settings to see more. Export CSV writes the rows shown here.")
             banner.border = javax.swing.BorderFactory.createEmptyBorder(2, 8, 2, 8)
             component.add(banner, BorderLayout.SOUTH)
         }
@@ -101,13 +117,56 @@ class ResultTablePanel(private val project: Project, private val resultSet: AskS
         val pad = com.intellij.util.ui.JBUI.scale(14)
         val minWidth = com.intellij.util.ui.JBUI.scale(48)
         val maxWidth = com.intellij.util.ui.JBUI.scale(320)
+        val sampled = minOf(resultSet.rows.size, SIZING_SAMPLE_ROWS)
         for (col in resultSet.columns.indices) {
             var width = headerMetrics.stringWidth(resultSet.columns[col].name)
-            for (row in 0 until minOf(resultSet.rows.size, SIZING_SAMPLE_ROWS)) {
-                width = maxOf(width, metrics.stringWidth(displayString(resultSet.rows[row][col])))
+            var longest = 0
+            for (row in 0 until sampled) {
+                val raw = displayString(resultSet.rows[row][col])
+                // Text layout and line flattening are O(rows x columns) on the EDT; character
+                // count is a cheap monotonic proxy, so only a new longest value pays for them.
+                if (raw.length <= longest) continue
+                longest = raw.length
+                width = maxOf(width, metrics.stringWidth(flattenLines(raw)))
             }
             table.columnModel.getColumn(col).preferredWidth = (width + pad).coerceIn(minWidth, maxWidth)
         }
+    }
+
+    /**
+     * Cells clamp at [sizeColumnsToContent]'s max width, so the full value is only recoverable
+     * from a tooltip. Multi-line values (JSON, TEXT) collapse to one line: a JLabel renders an
+     * embedded newline as a squashed glyph and throws the row's alignment off.
+     */
+    private inner class CellRenderer : javax.swing.table.DefaultTableCellRenderer() {
+        override fun getTableCellRendererComponent(
+            table: javax.swing.JTable,
+            value: Any?,
+            isSelected: Boolean,
+            hasFocus: Boolean,
+            row: Int,
+            column: Int,
+        ): java.awt.Component {
+            val text = value?.toString().orEmpty()
+            val c = super.getTableCellRendererComponent(table, flattenLines(text), isSelected, hasFocus, row, column)
+            (c as? javax.swing.JComponent)?.toolTipText = tooltipFor(text)
+            return c
+        }
+    }
+
+    private fun flattenLines(text: String): String =
+        if (text.contains('\n') || text.contains('\r')) text.replace(Regex("\\s*[\\r\\n]+\\s*"), " ⏎ ") else text
+
+    /** HTML so a multi-line value keeps its line breaks in the tooltip; capped so a large blob can't paint a full-screen popup. */
+    private fun tooltipFor(text: String): String? {
+        if (text.isEmpty()) return null
+        val capped = if (text.length > TOOLTIP_MAX_CHARS) text.take(TOOLTIP_MAX_CHARS) + "…" else text
+        val escaped = capped
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace("\n", "<br>")
+        return "<html>$escaped</html>"
     }
 
     private fun displayString(value: CellValue): String = when (value) {
