@@ -111,11 +111,13 @@ export function activate(ctx: vscode.ExtensionContext): void {
     // The same command sits in the view title (refresh everything) and on a connection's context
     // menu, where VS Code passes that node - refresh only what the user pointed at.
     vscode.commands.registerCommand('asksql.refreshSchema', (node?: Node) => {
-      const connectionId = node?.kind === 'connection' ? node.conn.id : undefined;
-      tree.refresh(connectionId);
+      // Bind the narrowed connection once: re-testing `node` below would widen it back to the
+      // whole Node union, which has variants with no connection on them.
+      const target = node?.kind === 'connection' ? node.conn : undefined;
+      tree.refresh(target?.id);
       // Refreshing an unchanged schema looks identical to a Refresh that did nothing.
       vscode.window.setStatusBarMessage(
-        connectionId ? `AskSQL: re-reading ${node!.conn.name}…` : 'AskSQL: re-reading the schema…',
+        target ? `AskSQL: re-reading ${target.name}…` : 'AskSQL: re-reading the schema…',
         3000,
       );
     }),
