@@ -61,8 +61,22 @@ jobs:
         env:
           PUBLISH_TOKEN: ${{ secrets.JETBRAINS_PUBLISH_TOKEN }}
 
+      - name: Release notes from the annotated tag
+        id: notes
+        working-directory: ${{ github.workspace }}
+        run: |
+          # The tag message is written when the release is cut and is the most accurate
+          # description of it; without a body the action creates an empty release.
+          git fetch --force --tags --quiet
+          {
+            echo 'body<<ASKSQL_EOF'
+            git tag -l --format='%(contents)' "$GITHUB_REF_NAME"
+            echo 'ASKSQL_EOF'
+          } >> "$GITHUB_OUTPUT"
+
       - name: Attach signed zip to the GitHub Release
         uses: softprops/action-gh-release@v3
         with:
+          body: ${{ steps.notes.outputs.body }}
           files: packages/jetbrains/build/distributions/*-signed.zip
           fail_on_unmatched_files: true
