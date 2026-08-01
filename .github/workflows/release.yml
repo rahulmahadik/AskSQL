@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: npm-publish
     permissions:
-      contents: read
+      contents: write # create the GitHub Release for this tag
       id-token: write # required for npm provenance
     steps:
       - uses: actions/checkout@v5
@@ -42,3 +42,20 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_CONFIG_PROVENANCE: 'true'
+
+      - name: Release notes from the annotated tag
+        id: notes
+        run: |
+          # The tag message is written when the release is cut and is the most accurate
+          # description of it; without a body the release is published empty.
+          git fetch --force --tags --quiet
+          {
+            echo 'body<<ASKSQL_EOF'
+            git tag -l --format='%(contents)' "$GITHUB_REF_NAME"
+            echo 'ASKSQL_EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Publish the GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          body: ${{ steps.notes.outputs.body }}
