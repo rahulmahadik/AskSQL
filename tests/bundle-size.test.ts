@@ -24,7 +24,16 @@ const CLI_ENTRY_POINTS = new Set(['cli.js', 'bin.js']);
 const BUDGETS: Record<string, number> = {
   // 45 -> 46 for real features: Oracle FETCH FIRST acceptance in the guard,
   // the 403 key-vs-origin message, browser-origin provider support.
-  core: 46,
+  // 46 -> 51: the scope guard (off-topic decline, challenged retry, sentinel stripping),
+  // MongoDB schema answers with their own grounding floor, and the mongo-shell JSON parser
+  // small models need. Kept just above the real figure so it still gates: a budget with
+  // slack stops measuring.
+  // 51 -> 54: correctness fixes with a real byte cost - the SQL-vocabulary list that stops
+  // backticked keywords being reported as invented names, the everyday-name list that stops the
+  // off-topic backstop matching "my name is", CJK/lowercase-any-script handling in the
+  // degenerate-answer check, and the case-sensitive sentinel forms that keep the English
+  // phrase "out of scope" from being read as the marker.
+  core: 54,
   react: 20,
   server: 12,
   postgres: 14,

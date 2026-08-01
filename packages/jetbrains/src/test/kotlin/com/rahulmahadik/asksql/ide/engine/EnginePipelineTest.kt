@@ -275,6 +275,44 @@ class EnginePipelineTest {
         dbFile.delete()
     }
 
+    /** The message is the whole value of blocking: a user told only "no" cannot rephrase. Mirrors core's wording so both IDEs say the same thing. */
+    @Test
+    fun `a table the schema never had is refused with the real table names and nothing run`() = runTest {
+        val dbFile = seedDb()
+        val (pipeline, _) = pipeline()
+        val llm = FixedResponseLlmClient("```sql\nSELECT * FROM ghosts\n```")
+
+        val error = try {
+            pipeline.ask(question = "show ghosts", descriptor = descriptor(dbFile), password = null, llmClient = llm)
+            null
+        } catch (e: AskSqlException) {
+            e
+        }
+        assertEquals(AskSqlErrorCode.LLM_BAD_OUTPUT, error?.code)
+        assertTrue(error?.userMessage.orEmpty().contains("nothing was run"))
+        assertTrue(error?.userMessage.orEmpty().contains("Available: customers"))
+        dbFile.delete()
+    }
+
+    /** Same contract for the column case, including the list of columns that table really has. */
+    @Test
+    fun `a column the table never had is refused with the real column names and nothing run`() = runTest {
+        val dbFile = seedDb()
+        val (pipeline, _) = pipeline()
+        val llm = FixedResponseLlmClient("```sql\nSELECT nickname FROM customers\n```")
+
+        val error = try {
+            pipeline.ask(question = "show nicknames", descriptor = descriptor(dbFile), password = null, llmClient = llm)
+            null
+        } catch (e: AskSqlException) {
+            e
+        }
+        assertEquals(AskSqlErrorCode.LLM_BAD_OUTPUT, error?.code)
+        assertTrue(error?.userMessage.orEmpty().contains("nothing was run"))
+        assertTrue(error?.userMessage.orEmpty().contains("customers has: id, name"))
+        dbFile.delete()
+    }
+
     /** A context-overflow error must trigger exactly one shrink-and-retry (not a hard failure), and that retry must not count against the repair budget - ported from core's `ask()` (packages/core/src/engine.ts, read-only reference). */
     @Test
     fun `ask shrinks the schema and retries once on a context-overflow error, without consuming a repair attempt`() = runTest {

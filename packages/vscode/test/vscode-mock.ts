@@ -210,6 +210,7 @@ export const window = {
   showWarningMessage: vi.fn(async (..._args: unknown[]): Promise<string | undefined> => undefined),
   showErrorMessage: vi.fn(async (..._args: unknown[]): Promise<string | undefined> => undefined),
   showOpenDialog: vi.fn(async (_opts?: unknown): Promise<Uri[] | undefined> => undefined),
+  setStatusBarMessage: vi.fn((_text: string, _hideAfter?: number) => new Disposable()),
   showTextDocument: vi.fn(async (_doc?: unknown, _opts?: unknown): Promise<unknown> => ({})),
   createOutputChannel: vi.fn((_name: string, _opts?: unknown) => ({
     info: vi.fn(),

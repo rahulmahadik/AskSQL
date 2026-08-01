@@ -4,6 +4,8 @@
 
 [![CI](https://github.com/rahulmahadik/AskSQL/actions/workflows/ci.yml/badge.svg)](https://github.com/rahulmahadik/AskSQL/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/@asksql/core?label=%40asksql%2Fcore)](https://www.npmjs.com/package/@asksql/core)
+[![VS Code Marketplace](https://vsmarketplacebadges.dev/version-short/RahulMahadik.asksql-vscode.svg?label=VS%20Code)](https://marketplace.visualstudio.com/items?itemName=RahulMahadik.asksql-vscode)
+[![JetBrains Marketplace](https://img.shields.io/jetbrains/plugin/v/33126?label=JetBrains)](https://plugins.jetbrains.com/plugin/33126-asksql)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
 All packages are published on npm under the [`@asksql`](https://www.npmjs.com/org/asksql) scope.
@@ -122,8 +124,10 @@ New here? This is the whole thing, fully local - no cloud, no API key, no server
 SQLite file and a model running on your own machine through [Ollama](https://ollama.com).
 
 ```bash
-# 1. Install: the engine + the SQLite adapter (and its driver) + the local-model SDK
-npm i @asksql/core @asksql/sqlite better-sqlite3 @ai-sdk/openai-compatible
+# 1. Install: the engine + the SQLite adapter + the local-model SDK.
+#    Node 22.5+ uses the built-in node:sqlite, so there is no driver to build. On older
+#    Node, or if you prefer that driver, add better-sqlite3 to this line.
+npm i @asksql/core @asksql/sqlite @ai-sdk/openai-compatible
 
 # 2. Get a local model (install Ollama first from ollama.com), then pull a small coder model:
 ollama pull qwen2.5-coder:7b
@@ -149,10 +153,12 @@ query CSV / Parquet files in the browser use `@asksql/duckdb`. The rest of this 
 each of those. Prefer a cloud model instead of Ollama? Swap step 2 for one `@ai-sdk/*` package
 and an API key - see [Install only what your mode needs](#install-only-what-your-mode-needs).
 
-**Schema Q&A**: turn on `answerSchemaQuestions` (or call `engine.explainSchema`) and
+**Schema Q&A** (on by default in the IDE extensions; `engine.explainSchema` in code):
 questions that aren't a data query - "how do these tables relate?", "how should I add a
 phone column?", "suggest an index" - get grounded prose answers, with any proposed
-INSERT/UPDATE/DELETE/DDL returned as text that is never executed.
+INSERT/UPDATE/DELETE/DDL returned as text that is never executed. Ask something with
+nothing to do with data and AskSQL says so plainly rather than guessing; ask about
+databases in general, or about another engine, and it answers for the one you're on.
 
 ## Packages
 
@@ -175,7 +181,7 @@ Every setup is **three parts**, and you install only the ones you use:
 
 1. **Engine** - `@asksql/core` (always).
 2. **Data layer** - a database adapter + its driver (`@asksql/postgres` + `pg`, `@asksql/mysql`
-   + `mysql2`, `@asksql/sqlite` + `better-sqlite3`), **or** `@asksql/duckdb` for browser
+   + `mysql2`, `@asksql/sqlite` on its own from Node 22.5), **or** `@asksql/duckdb` for browser
    file-analytics. Plus `@asksql/server` when you run the sidecar, and `@asksql/react` for the UI.
 3. **Model-provider SDK** - one `@ai-sdk/*` package for the LLM you picked (see the table below).
 
@@ -382,12 +388,14 @@ optional peer, needed only by `startAskSqlMcpServer`. See
 
 Beyond ask -> approve -> run, the engine and server ship these (all optional):
 
-- **EXPLAIN in plain language** - `engine.explain(sql)` / `useAskSql().planFor()` / server
-  `POST /explain` return a natural-language read of the query plan.
+- **Explain a query in plain language** - `engine.explain(sql)` / server `POST /explain` describe
+  what a statement does, grounded in the schema. `useAskSql().planFor()` is separate: it runs
+  `EXPLAIN` through the guard and returns the database's own plan.
 - **Streaming progress** - `config.onEvent` (and per-ask `onEvent`) emits stage + token events
   across the pipeline (`catalog`, `prompt`, `llm`, `guard`, `execute`, ...) for live UIs.
-- **Cancellation** - pass an `AbortSignal` to any ask/run/explain; `useAskSql().cancel()` stops
-  in flight, and Postgres/MySQL cancel the running query at the database.
+- **Cancellation** - pass an `AbortSignal` to any ask/run/explain and Postgres/MySQL cancel the
+  running query at the database. Through `@asksql/server` the signal is not yet threaded, so
+  `useAskSql().cancel()` stops the browser request but not the query behind it.
 - **Hallucination floor** - before a query runs, the engine deterministically checks every
   referenced table *and* column against your schema; if the model invents or mis-guesses a
   column (a common small-model slip), it is handed the real column list and re-asked, so the
@@ -399,14 +407,16 @@ Beyond ask -> approve -> run, the engine and server ship these (all optional):
   server's `suggestFixOnError` option (default on; set false to disable the extra model call).
 - **Follow-up context** - prior turns are threaded into the prompt so "now break that down by
   month" works; the UI sends the last few turns automatically.
-- **Query history + audit** - `config.history` records every attempt (status, tokens, duration)
-  behind a paginated `GET /history`; `config.audit` is a pluggable sink with the guard verdict.
+- **Query history + audit** - `config.history` records every attempt (status, duration) and
+  `@asksql/server` serves it at a paginated `GET /history`, backed by an in-memory store;
+  `config.audit` is a pluggable sink with the guard verdict.
 - **Saved queries** - `useSavedQueries` / `SavedQueryStore` pin and reuse questions
   (localStorage-backed, SSR-safe).
 - **Schema pruning + token budget** - large catalogs are pruned to the most relevant tables
   under a token budget (`config.pruner`) before prompting.
-- **Privacy by default** - only the schema is ever sent; `allowDataInPrompt` (default off) is
-  the explicit opt-in to include sampled cell values in repair prompts.
+- **Privacy by default** - only the schema is ever sent. `allowDataInPrompt` (default off) is the
+  opt-in for sampled cell values; with it off they are stripped from the catalog before any prompt
+  is built, so a connector that samples cannot leak them.
 - **Server hardening** - `GET /health`, a request-body size cap (`maxBodyBytes`), and built-in
   `cors` handling on the Express adapter.
 
@@ -485,6 +495,36 @@ more inconsistently-named your schema, the more model capability you need:
 
 In our testing the **7B** (for example `qwen2.5-coder:7b`) is the sweet spot for accuracy
 against speed, and it is easy to run locally.
+
+### Measured, and reproducible
+
+Load the fixtures in `packages/postgres/test/fixture.sql` and `packages/mysql/test/fixture.sql`,
+build the workspace (`pnpm install && pnpm build`), then run
+`node tools/benchmark/run.mjs qwen2.5-coder:1.5b qwen2.5-coder:7b qwen2.5-coder:14b`. It asks seven
+data questions, executes the SQL that comes back, and scores a question right only when the rows
+the database returned contain the expected value **and** number the same as a right answer would -
+so a `SELECT *` that happens to include the word is still wrong. Plus seven questions that test
+whether AskSQL stays in its lane.
+
+| Model | SQL correct | Blocked by the guard | Scope correct | DELETE request | Median ask | Median schema answer |
+|---|---|---|---|---|---|---|
+| `qwen2.5-coder:1.5b` | 5/7 | 2 | 7/7 | statement + note | 1.1s | 0.5s |
+| `qwen2.5-coder:7b` | 7/7 | 0 | 7/7 | statement + note | 2.7s | 1.6s |
+| `qwen2.5-coder:14b` | 7/7 | 0 | 7/7 | statement + note | 4.6s | 3.6s |
+
+*Apple M4 Pro, 24 GB, Ollama 0.20.3, 2026-08-01.* The **DELETE request** column is not a model
+score: every model returned the statement as text, and the "AskSQL is read-only and never executed
+this" note beside it is appended by AskSQL, not written by the model. It is there to show the
+safety net firing on all three.
+
+Read it for what it is: a small schema and a handful of questions, not a Spider-style benchmark,
+and latency is whatever your machine does. What it does show is the shape of the trade-off - a 7B
+matched a 14B here at roughly half the latency, which is why it is the default recommendation.
+
+The **blocked** column is the interesting one. Those are not wrong answers: the 1.5B invented a
+`product_id` column on a view, and AskSQL refused to run the query, told the user which columns
+that view really has, and left the database untouched. A small model fails loudly here rather
+than returning a confident wrong number.
 
 Practical guidance: **review the generated SQL** (it is always shown first; set
 `requireApproval` to force a click), give heavy analytics a more capable local model, and treat

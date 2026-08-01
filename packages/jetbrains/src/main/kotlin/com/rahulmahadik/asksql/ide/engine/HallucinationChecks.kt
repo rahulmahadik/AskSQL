@@ -20,11 +20,15 @@ object HallucinationChecks {
 
     private val SYSTEM_SCHEMAS = setOf("information_schema", "pg_catalog", "mysql", "performance_schema", "sys")
     private val CTE_NAME = Regex("""([A-Za-z_][A-Za-z0-9_]*)\s+as\s*\(""", RegexOption.IGNORE_CASE)
-    private val WITH_BLOCK = Regex("""\bwith\s+(?:recursive\s+)?([\s\S]*?)\bselect\b""", RegexOption.IGNORE_CASE)
+    private val HAS_WITH = Regex("""\bwith\b""", RegexOption.IGNORE_CASE)
 
+    /**
+     * Scans the whole statement: bounding it at the first SELECT ended inside the first CTE body,
+     * so later CTE names looked invented. Over-collecting only makes the floor more lenient.
+     */
     private fun collectCteNames(sql: String): Set<String> {
-        val block = WITH_BLOCK.find(sql)?.groupValues?.get(1) ?: return emptySet()
-        return CTE_NAME.findAll(block).map { it.groupValues[1].lowercase() }.toSet()
+        if (!HAS_WITH.containsMatchIn(sql)) return emptySet()
+        return CTE_NAME.findAll(sql).map { it.groupValues[1].lowercase() }.toSet()
     }
 
     /** JSqlParser preserves quote characters in identifiers (`"Users"`, `` `name` ``); must be undone before comparing against the catalog's bare names. */

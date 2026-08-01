@@ -500,6 +500,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             run: (execOpts) => mongo.execute(r.pipelineJson, r.collection, execOpts),
           };
         },
+        // The Mongo engine answers schema questions in its own vocabulary; the
+        // connectionId is implicit in the engine, so the option bag is dropped.
+        explainSchema: (question, opts) => mongo.explainSchema(question, { signal: opts?.signal }),
       };
     }
     if (configured) return this.engines.forConfiguredModel();

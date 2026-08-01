@@ -20,8 +20,12 @@ data class AskSqlAppState(
     @JvmField val requireApproval: Boolean = false,
     /** Auto-generate a plain-language description of each answer (one extra model call per query); the "Explain" button also produces it on demand. */
     @JvmField val explainAutomatically: Boolean = true,
-    /** When a question can't become SQL, answer it in prose from the schema (structure only, grounded, invented names flagged) instead of erroring. Off by default. */
-    @JvmField val answerSchemaQuestions: Boolean = false,
+    /**
+     * When a question can't become SQL, answer it in prose from the schema (structure only, grounded,
+     * invented names flagged) instead of erroring; write requests come back as a statement to run
+     * yourself, never executed. Only reached on the path that would otherwise be an error.
+     */
+    @JvmField val answerSchemaQuestions: Boolean = true,
     @JvmField val connections: List<ConnectionState> = emptyList(),
     /** Appended verbatim after the default system-prompt rules (see [com.rahulmahadik.asksql.ide.engine.Prompts.buildSqlSystem]); the AST guard still enforces read-only regardless. */
     @JvmField val customInstructions: String = "",

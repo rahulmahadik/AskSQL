@@ -1,0 +1,31 @@
+{
+  "looksDatabaseRelated": {
+    "tell me a joke about penguins": false,
+    "what is the weather in Mumbai today?": false,
+    "who won the football world cup in 2022?": false,
+    "write me a python function that reverses a string": false,
+    "what is this database for?": true,
+    "how do I write a SQL JOIN here?": true,
+    "how would I do this in MongoDB aggregation instead?": true,
+    "what is a database index and when should I add one?": true,
+    "delete my Spotify listening history": true,
+    "Write a DELETE removing orders older than 2020": true,
+    "summarise the tables": true,
+    "how should I normalise this schema?": true,
+    "should I denormalize for reporting?": true,
+    "hello": false
+  },
+  "isOffTopic": {
+    "OUT_OF_SCOPE": true,
+    "Sorry - OUT_OF_SCOPE.": true,
+    "  OUT_OF_SCOPE  ": true,
+    "The orders table records purchases.": false,
+    "This is OUT_OF_SCOPExx not the sentinel": false,
+    "The OUT_OF_SCOPE marker is what the model emits for questions unrelated to data. This answer is far longer than a refusal ever is, and describes the schema at length.": false,
+    "OUT_OF_SCOPE - not a database question.": true,
+    "OUT OF SCOPE": true,
+    "out-of-scope": true,
+    "**OUT_OF_SCOPE**": true,
+    "This is about scope creep in the project plan and how we manage it across teams.": false
+  }
+}

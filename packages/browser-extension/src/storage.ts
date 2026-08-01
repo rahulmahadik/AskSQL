@@ -53,7 +53,7 @@ export const DEFAULT_ENGINE_SETTINGS: EngineSettings = {
   maxRows: 200,
   requireApproval: false,
   sqlDisplayPlacement: 'after',
-  answerSchemaQuestions: false,
+  answerSchemaQuestions: true,
   maxSchemaTokens: 6000,
   customInstructions: '',
 };

@@ -77,9 +77,11 @@ prompt for that site - this is expected, not a bug.
 Ask about the schema itself - "what tables are there and how do they relate?",
 "how should I add a phone field?", "suggest an index for orders by customer and
 date" - and get grounded prose with DDL **proposals that are never executed**
-(enable *Answer schema questions* in Settings). Off-topic questions are
-declined; this is not a general chatbot. Works on every SQL engine; not yet
-available for MongoDB connections.
+(on by default; *Answer schema questions* in Settings turns it off). A question
+with nothing to do with data is declined in one line - this is not a general
+chatbot - while database questions in general are answered for the engine you are
+connected to. Works on every engine, MongoDB included, where the answer speaks in
+collections and `$lookup`.
 
 ## Data lifetime
 

@@ -11,6 +11,8 @@ nohup.out
 *.tsbuildinfo
 examples/**/dist/
 examples/plain-html/asksql-widget.js
+# Built the same way, by build-widget.mjs; the example documents the command.
+examples/express-postgres/public/asksql-widget.js
 
 # Internal-only working docs (design/BRD, plan, coverage + validation logs,
 # edge-case catalog). Kept locally; never published to the open-source repo.

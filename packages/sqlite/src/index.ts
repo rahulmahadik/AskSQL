@@ -92,6 +92,11 @@ export class SqliteConnector implements Connector {
   readonly name: string;
   readonly database?: string;
   private db: SqliteDriver | null = null;
+  /** Set once the handle in use has been proven read-only, so the check runs once per handle. */
+  private readOnlyAsserted = false;
+
+  /** `query_only` as a caller-supplied handle arrived, so close() can restore it. */
+  private restoreQueryOnly: boolean | null = null;
 
   constructor(private readonly config: SqliteConnectorConfig) {
     this.id = config.id;
@@ -102,7 +107,12 @@ export class SqliteConnector implements Connector {
   }
 
   async connect(): Promise<void> {
-    if (this.db) return;
+    if (this.db) {
+      // A caller-supplied handle is opened by the host, not here, so its read-only flag is
+      // the host's word. Verify it once - the promise this connector makes is its own.
+      if (!this.readOnlyAsserted) this.assertReadOnly(this.db);
+      return;
+    }
     if (!this.config.file) {
       throw new AskSqlError('CONFIG_ERROR', {
         detail: 'SqliteConnector needs either `database` or `file`',
@@ -114,6 +124,8 @@ export class SqliteConnector implements Connector {
     // one shared catch reported both as a missing driver even when the file was at
     // fault.
     let Ctor: new (f: string, o?: object) => SqliteDriver;
+    let openOptions: object = { readonly: true, fileMustExist: true };
+    let betterSqliteError: unknown;
     try {
       // Indirect specifier: better-sqlite3 is an optional peer with no
       // bundled types; the indirection keeps the type-checker from trying
@@ -122,16 +134,29 @@ export class SqliteConnector implements Connector {
       const mod = (await import(specifier)) as unknown as { default: new (f: string, o?: object) => SqliteDriver };
       Ctor = mod.default;
     } catch (err) {
-      throw new AskSqlError('CONFIG_ERROR', {
-        detail: `sqlite driver not available: ${err instanceof Error ? err.message : String(err)}`,
-        userMessage:
-          "No SQLite driver is installed. Pass a database handle from Node's built-in sqlite " +
-          '(Node 22.5+), or run: npm install better-sqlite3',
-        cause: err,
-      });
+      betterSqliteError = err;
+      try {
+        // Node ships a SQLite driver from 22.5; falling back to it means a plain
+        // `npm i @asksql/sqlite` works with no native module to build.
+        const builtin = (await import('node:sqlite')) as unknown as {
+          DatabaseSync: new (f: string, o?: object) => SqliteDriver;
+        };
+        Ctor = builtin.DatabaseSync;
+        // node:sqlite spells the flag differently and errors on a missing file already.
+        openOptions = { readOnly: true };
+      } catch {
+        throw new AskSqlError('CONFIG_ERROR', {
+          detail: `sqlite driver not available: ${betterSqliteError instanceof Error ? betterSqliteError.message : String(betterSqliteError)}`,
+          userMessage:
+            'No SQLite driver is available. Use Node 22.5 or newer (which has one built in), ' +
+            'or run: npm install better-sqlite3',
+          cause: betterSqliteError,
+        });
+      }
     }
+    let opened: SqliteDriver;
     try {
-      this.db = new Ctor(this.config.file, { readonly: true, fileMustExist: true });
+      opened = new Ctor(this.config.file, openOptions);
     } catch (err) {
       throw new AskSqlError('CONFIG_ERROR', {
         detail: `cannot open sqlite file "${this.config.file}": ${err instanceof Error ? err.message : String(err)}`,
@@ -139,16 +164,80 @@ export class SqliteConnector implements Connector {
         cause: err,
       });
     }
+    // Publish the handle only once it has proven read-only. Assigning first left a rejected
+    // handle on `this.db`, and connect()'s early return then served queries from it.
+    try {
+      this.assertReadOnly(opened);
+    } catch (err) {
+      opened.close?.();
+      throw err; // already the precise read-only diagnostic; do not rewrite it as a path problem
+    }
+    this.db = opened;
+  }
+
+  /**
+   * Belt and braces on the read-only promise. The two drivers spell the open flag
+   * differently and node:sqlite IGNORES option keys it does not recognise, so a wrong or
+   * unsupported key opens the file read-write with no error at all. `query_only` closes
+   * that gap at the connection level, and is read back so an unenforceable connection
+   * fails closed rather than quietly accepting writes.
+   */
+  private assertReadOnly(db: SqliteDriver): void {
+    const queryOnly = (): boolean => {
+      const rows = db.prepare('PRAGMA query_only').all() as Record<string, unknown>[];
+      return rows.length > 0 && Object.values(rows[0]!).some((v) => v === 1 || v === 1n || v === true);
+    };
+    // `query_only` belongs to the connection, and a caller-supplied handle is the host's:
+    // remember the flag so close() can restore it rather than leaving them unable to write.
+    if (this.config.database && this.restoreQueryOnly === null) this.restoreQueryOnly = queryOnly();
+    try {
+      db.exec?.('PRAGMA query_only = ON');
+    } catch {
+      // Some drivers refuse exec() on a read-only handle; the read-back below is the real check.
+    }
+    if (!queryOnly()) {
+      const supplied = !this.config.file;
+      throw new AskSqlError('CONFIG_ERROR', {
+        detail: `sqlite connection for ${supplied ? 'the supplied database handle' : `"${this.config.file}"`} could not be put into read-only mode`,
+        userMessage: supplied
+          ? 'The SQLite handle passed to AskSQL could not be put into read-only mode, so AskSQL will not use it.'
+          : 'This SQLite database could not be opened read-only, so AskSQL will not use it. ' +
+            'Update Node (22.5 or newer) or install better-sqlite3.',
+      });
+    }
+    this.readOnlyAsserted = true;
   }
 
   async close(): Promise<void> {
     // Only close a handle we opened ourselves.
     if (this.db && this.config.file && !this.config.database) this.db.close?.();
-    if (!this.config.database) this.db = null;
+    if (!this.config.database) {
+      this.db = null;
+      this.readOnlyAsserted = false;
+      return;
+    }
+    // Give the caller's connection back as it was: if it could write before, it can write again.
+    if (this.restoreQueryOnly === false) {
+      try {
+        this.db?.exec?.('PRAGMA query_only = OFF');
+      } catch {
+        // Nothing useful to do; the handle is the caller's and may already be closed.
+      }
+    }
+    this.restoreQueryOnly = null;
+    this.readOnlyAsserted = false;
   }
 
   private handle(): SqliteDriver {
     if (!this.db) throw new AskSqlError('DB_UNREACHABLE', { detail: 'sqlite not connected' });
+    // A caller-supplied handle reaches `this.db` from the constructor, so without this an
+    // execute() that skipped connect() would query a connection nobody proved read-only.
+    if (!this.readOnlyAsserted) {
+      throw new AskSqlError('DB_UNREACHABLE', {
+        detail: 'sqlite handle has not been verified read-only; connect() must run first',
+        userMessage: 'The SQLite connection is not ready yet.',
+      });
+    }
     return this.db;
   }
 
@@ -158,6 +247,9 @@ export class SqliteConnector implements Connector {
         .prepare(sql)
         .all(...params) as Record<string, unknown>[];
     } catch (err) {
+      // "not connected" and "not verified read-only" are already precise; re-labelling them as
+      // a query error would blame the SQL for a connection-state problem.
+      if (err instanceof AskSqlError) throw err;
       throw AskSqlError.from(err, 'DB_QUERY_ERROR');
     }
   }
@@ -314,6 +406,9 @@ export class SqliteConnector implements Connector {
         }
       }
     } catch (err) {
+      // A connection-state error ("not connected", "not verified read-only") is already precise;
+      // re-labelling it as a query error would blame the SQL for something else entirely.
+      if (err instanceof AskSqlError) throw err;
       const msg = err instanceof Error ? err.message : String(err);
       if (/readonly|attempt to write a readonly database/i.test(msg)) {
         throw new AskSqlError('GUARD_BLOCKED', {

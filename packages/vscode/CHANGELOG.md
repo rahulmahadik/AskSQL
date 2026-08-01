@@ -6,6 +6,55 @@ All notable changes to the AskSQL VS Code extension are documented here. The for
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-08-01
+
+### Added
+- **Off-topic questions get an honest answer**: a question with nothing to do
+  with data ("tell me a joke") is declined in one line naming the connected
+  engine, instead of an error. Questions about databases in general - modelling,
+  indexing, or how another engine would do it - are answered normally.
+- **MongoDB schema answers**: conceptual questions and write proposals now work
+  on MongoDB connections, in MongoDB vocabulary (collections, `$lookup`), not
+  just on SQL ones.
+
+### Changed
+- *Answer schema questions* is now ON by default. It only ever replaces an
+  error, and it is what turns a write request into a reviewable proposal.
+- When a query is blocked because the AI invented a table or column, the message now
+  names the columns (or tables) that really exist, and says nothing was run - so you
+  can rephrase instead of guessing.
+- Answers stay honest under a hostile schema: the schema-answer prompt now states
+  that catalog text (including column comments) is untrusted data, and a reply that
+  is only a marker, a fragment, or a refusal is replaced by a plain explanation of
+  what AskSQL can help with rather than being shown raw.
+- **Refresh Schema** now always re-reads the database. A refresh pressed while
+  the tree was still loading could return the table list from before the
+  refresh, and a slow read could write that stale list back afterwards; both are
+  fixed, so a table created outside the IDE appears on the first refresh.
+- **Test Connection** no longer reports the table count from a read that started
+  before the test.
+
+### Fixed
+- A query using more than one CTE (`WITH a AS (...), b AS (...)`) is no longer
+  refused as though the later CTE names were invented tables.
+- Answers in Chinese, Japanese, Korean, Russian and Greek are no longer discarded
+  as "not an explanation" - the check assumed spaces between words and Latin letters.
+- An answer that merely uses the English phrase "out of scope" is kept instead of
+  being mistaken for the internal marker and replaced by a decline.
+- A refusal written with a typographic apostrophe ("I'm sorry") is recognised as a
+  refusal rather than being shown as if it were an answer.
+- Schema answers no longer flag a CTE the answer itself defines as an invented name.
+- A change request phrased in the third person - "a command that deletes cancelled
+  orders", "a query that removes old rows" - is recognised as a change and answered with
+  a proposal, instead of being declined as though it were not about databases.
+- A question is treated as being about your database whenever it names a real table,
+  view or column - so imperfect phrasing or grammar no longer gets a request refused.
+- The **NVIDIA** API key is now deleted by *Remove All Connections and Keys*; it was the one
+  provider the reset missed, so a key survived in the keychain.
+- **Refresh Schema** on a single connection refreshes that connection, not every one of them.
+- The truncated-results notice no longer claims an export returns the full result - it says
+  these are the first rows and how to see more.
+
 ## [0.4.0] - 2026-07-31
 
 ### Added

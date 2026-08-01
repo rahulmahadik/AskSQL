@@ -326,6 +326,10 @@ function EngineSection({
           value={engine.maxSchemaTokens}
           onChange={(e) => edit({ ...engine, maxSchemaTokens: Number(e.target.value) || engine.maxSchemaTokens })}
         />
+        <p className="asksql-ext-status">
+          Applies to data file connections. A sidecar builds its own prompts, so it uses the budget configured
+          on the server.
+        </p>
       </div>
       <div className="asksql-ext-field">
         <label htmlFor="customInstructions">Custom instructions</label>
@@ -338,7 +342,8 @@ function EngineSection({
         />
         <p className="asksql-ext-status">
           <strong>Added to</strong> the built-in rules, not a replacement for them. Read-only is enforced by a SQL
-          guard after generation, so nothing written here can allow a write.
+          guard after generation, so nothing written here can allow a write. Applies to data file connections -
+          a sidecar builds its own prompts, so instructions for it go in the server's configuration.
         </p>
       </div>
       <p className="asksql-ext-status">
@@ -990,7 +995,7 @@ function ResetSection({ onSettingsReset }: { onSettingsReset: () => void }): JSX
       {confirming === 'all' && (
         <>
           <p>
-            This clears every setting, connection, and saved query, deletes the data behind every data file
+            This clears every setting and connection, deletes the data behind every data file
             connection, and revokes every granted site permission. This can't be undone.
           </p>
           <div className="asksql-ext-actions">

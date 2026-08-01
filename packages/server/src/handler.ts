@@ -294,10 +294,9 @@ export class AskSqlServer {
       this.mongoEngines.delete(id);
       return json(200, { removed: id });
     }
-    const connector = this.byId.get(id);
-    if (!connector) {
-      return json(404, { error: { code: 'INVALID_INPUT', userMessage: 'No such connection.', retryable: false } });
-    }
+    // assertAccess already rejected an id in neither map, and nothing awaits in between, so a
+    // non-mongo id is necessarily a SQL connector here.
+    const connector = this.byId.get(id)!;
     await connector.close?.();
     this.setConnectors(this.connectors.filter((c) => c.id !== id));
     return json(200, { removed: id });
@@ -306,9 +305,16 @@ export class AskSqlServer {
   private async getSchema(req: ServerRequest, auth: AuthContext): Promise<JsonResponse> {
     const connectionId = this.resolveConnectionId(req, auth);
     const refresh = req.query['refresh'] === '1' || req.query['refresh'] === 'true';
-    const catalog = this.isMongo(connectionId)
-      ? await this.mongoEngine(connectionId).catalog()
-      : await this.requireEngine().catalog(connectionId, { refresh });
+    let catalog;
+    if (this.isMongo(connectionId)) {
+      // The Mongo engine has no refresh parameter; drop its cached catalog so
+      // the next read re-samples, otherwise ?refresh=1 serves TTL-stale schema.
+      const engine = this.mongoEngine(connectionId);
+      if (refresh) engine.invalidateCatalog();
+      catalog = await engine.catalog();
+    } else {
+      catalog = await this.requireEngine().catalog(connectionId, { refresh });
+    }
     return json(200, { catalog });
   }
 
@@ -342,7 +348,13 @@ export class AskSqlServer {
       };
 
       let settled: { ok: true; result: Awaited<ReturnType<MongoAskEngine['ask']>> } | { ok: false; error: unknown } | undefined;
-      void engine.ask(question, { context: mongoContext, onEvent: (e: EngineEvent) => { queue.push(e); wake(); } }).then(
+      void engine
+        .ask(question, {
+          context: mongoContext,
+          onEvent: (e: EngineEvent) => { queue.push(e); wake(); },
+          signal: req.signal,
+        })
+        .then(
         (result) => { settled = { ok: true, result }; wake(); },
         (error: unknown) => { settled = { ok: false, error }; wake(); },
       );
@@ -405,7 +417,9 @@ export class AskSqlServer {
       };
 
       let settled: Settled | undefined;
-      void engine.ask(question, { connectionId, context: body.context, onEvent, userId: auth.userId }).then(
+      void engine
+        .ask(question, { connectionId, context: body.context, onEvent, userId: auth.userId, signal: req.signal })
+        .then(
         (result: AskResult) => {
           settled = { ok: true, result };
           wake();
@@ -466,6 +480,7 @@ export class AskSqlServer {
       try {
         const result = await this.mongoEngine(connectionId).execute(sql, collection, {
           ...(body.maxRows !== undefined ? { maxRows: body.maxRows } : {}),
+          signal: req.signal,
         });
         await this.audit(connectionId, auth, sql, 'allowed', 'ok', result.rowCount);
         return json(200, { result });
@@ -488,6 +503,7 @@ export class AskSqlServer {
         question: body.question,
         maxRows: body.maxRows,
         userId: auth.userId,
+        signal: req.signal,
       });
       await this.audit(connectionId, auth, sql, 'allowed', 'ok', result.rowCount);
       return json(200, { result });
@@ -516,23 +532,20 @@ export class AskSqlServer {
     const body = (await this.readBody(req)) as { sql?: string; connectionId?: string };
     const connectionId = this.resolveConnectionId(req, auth, body.connectionId);
     if (this.isMongo(connectionId)) {
-      const explanation = await this.mongoEngine(connectionId).explain(String(body.sql ?? ''));
+      const explanation = await this.mongoEngine(connectionId).explain(String(body.sql ?? ''), { signal: req.signal });
       return json(200, { explanation });
     }
-    const explanation = await this.requireEngine().explain(String(body.sql ?? ''), { connectionId });
+    const explanation = await this.requireEngine().explain(String(body.sql ?? ''), { connectionId, signal: req.signal });
     return json(200, { explanation });
   }
 
   private async explainSchema(req: ServerRequest, auth: AuthContext): Promise<JsonResponse> {
     const body = (await this.readBody(req)) as { question?: string; connectionId?: string };
     const connectionId = this.resolveConnectionId(req, auth, body.connectionId);
-    if (this.isMongo(connectionId)) {
-      throw new AskSqlError('INVALID_INPUT', {
-        detail: 'explainSchema unsupported for mongo',
-        userMessage: 'Plain-language schema answers are not available for MongoDB connections yet.',
-      });
-    }
-    const answer = await this.requireEngine().explainSchema(String(body.question ?? ''), { connectionId });
+    const question = String(body.question ?? '');
+    const answer = this.isMongo(connectionId)
+      ? await this.mongoEngine(connectionId).explainSchema(question, { signal: req.signal })
+      : await this.requireEngine().explainSchema(question, { connectionId, signal: req.signal });
     return json(200, answer);
   }
 

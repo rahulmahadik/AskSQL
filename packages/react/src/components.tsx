@@ -75,6 +75,8 @@ export interface AskSqlChatProps {
   readonly showConnectionPicker?: boolean;
   /** Answer questions that aren't a data query in plain language from the schema. Off by default. */
   readonly answerSchemaQuestions?: boolean;
+  /** Row cap sent with every query, so it applies to a sidecar as well as an in-page engine. */
+  readonly maxRows?: number;
   /** Where the SQL block renders relative to results (default 'before'). Forced to 'before' when `requireApproval` is on - a query can't be approved unseen. */
   readonly sqlDisplayPlacement?: 'before' | 'after';
   /**
@@ -116,6 +118,7 @@ export function AskSqlChat(props: AskSqlChatProps): JSX.Element {
     connectionId: activeConn ?? props.connectionId,
     requireApproval: props.requireApproval,
     answerSchemaQuestions: props.answerSchemaQuestions,
+    maxRows: props.maxRows,
   });
   const [text, setText] = useState('');
   const threadRef = useRef<HTMLDivElement>(null);
@@ -310,7 +313,10 @@ function TurnView({
       )}
       {turn.explanation && !editing && <Markdown className="asksql-explain" text={turn.explanation} />}
       {turn.autoLimited && (
-        <div className="asksql-warn">A row limit was added automatically - export to get everything.</div>
+        <div className="asksql-warn">
+          A row limit was added automatically, so these are the first rows only. Raise the row cap to see
+          more; an export writes the rows shown here.
+        </div>
       )}
       {!editing &&
         (turn.phase === 'sql_ready' || turn.phase === 'done' || turn.phase === 'error' || turn.phase === 'stopped') && (

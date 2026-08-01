@@ -78,10 +78,15 @@ AST guard is the sole barrier there.
 
 ### Can I ask general questions about the schema - or how to change it?
 
-Yes, if you turn on **Answer schema questions** (off by default, in the extension/plugin settings).
-With it on, a question that isn't a data query - "summarize this database", "how are customers and
-orders related?", or even "how would I add an index on email?" / "what column tracks loyalty points?"
-- is answered in plain language from the schema instead of erroring.
+Yes. **Answer schema questions** is on by default in the extension and the plugin (and is the
+`answerSchemaQuestions` option in code). A question that isn't a data query - "summarize this
+database", "how are customers and orders related?", or even "how would I add an index on email?" /
+"what column tracks loyalty points?" - is answered in plain language from the schema instead of
+erroring. This works on MongoDB connections too, in MongoDB terms (collections, `$lookup`).
+
+Ask something with nothing to do with data and AskSQL says so in one line rather than guessing;
+general database questions - modelling, indexing, or how another engine would express something -
+are answered for the engine you are connected to.
 
 Two guarantees hold. It is **grounded**: it only names tables, columns, and relationships that exist;
 any name it can't find is flagged, and an ungrounded answer is regenerated once. And it stays
@@ -136,16 +141,19 @@ capable model. See "Accuracy depends on the model and the question" in the READM
 
 ### Which local model should I use?
 
-A coder-tuned model is what you want. In our testing against a real database, a **7B**
-(`qwen2.5-coder:7b`) was the sweet spot - it matched a 14B on accuracy while running about twice
-as fast, and it is a comfortable size to run locally. Rough guidance:
+A coder-tuned model is what you want. Use **`qwen2.5-coder:7b`** unless you have a reason not
+to. Across PostgreSQL, MySQL and MongoDB questions on a real database, a 7B answered every one
+correctly - the same as a 14B - at roughly half the latency (median ~3s against ~6s), and it is
+a comfortable size to run locally. Rough guidance:
 
 - **7B** (for example `qwen2.5-coder:7b`) - the recommended default: good on multi-join
   analytics, light enough for most machines.
 - **14B** (`qwen2.5-coder:14b`) - a bit more headroom on the hardest questions, at higher memory
   and latency.
 - **1.5B-3B** - fast and fine for simple, single-table or small-schema questions, but it slips
-  on complex joins or large, messily-named schemas, so use it only for lightweight cases.
+  on complex joins or large, messily-named schemas, so use it only for lightweight cases. It
+  invents column names more often; AskSQL blocks those before the database sees them and tells
+  you which columns the table really has, so the failure is safe rather than silent.
 
 You can point AskSQL at any Ollama, MLX, or OpenAI-compatible local runtime, and any coder model
 in that size range works. One thing that helps every size: a schema with **consistent, clear

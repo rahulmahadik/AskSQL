@@ -2,6 +2,23 @@
 
 All notable changes to the browser extension. Versions match `manifest.json`.
 
+## 0.1.1 — unreleased
+
+### Added
+
+- **Refresh schema** in the side panel. A table or column added elsewhere was invisible until the
+  connection was disconnected and remade; the button re-reads it in place and says how many tables
+  came back. For a server-backed connection this asks the sidecar for a fresh read, not its cache.
+
+### Fixed
+
+- The **row cap** now applies to server-backed connections. It was sent only to the in-browser
+  engine, so for a sidecar the setting silently did nothing and the server's own cap applied.
+- **Schema budget** and **Custom instructions** say that they apply to data file connections. Both
+  shape a prompt, and a sidecar builds its own prompts, so they never reached it - the settings
+  page presented them as global anyway.
+- **Reset everything** no longer says it clears saved queries. This extension has none.
+
 ## 0.1.0 — unreleased (first store submission)
 
 First release. AskSQL as a browser side panel: ask a database questions in plain

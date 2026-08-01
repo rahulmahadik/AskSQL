@@ -47,6 +47,12 @@ export interface UseAskSqlOptions {
    * data values. Off by default.
    */
   readonly answerSchemaQuestions?: boolean;
+  /**
+   * Row cap for every query this hook runs. Sent with the request, so it applies to a sidecar
+   * too - without it the server's own cap is the only one, and a client-side row-limit setting
+   * silently does nothing for server-backed connections.
+   */
+  readonly maxRows?: number;
 }
 
 let turnSeq = 0;
@@ -117,6 +123,7 @@ export function useAskSql(opts: UseAskSqlOptions): UseAskSqlResult {
           connectionId: opts.connectionId,
           question: turn?.question,
           ...(runCollection ? { collection: runCollection } : {}),
+          ...(opts.maxRows !== undefined ? { maxRows: opts.maxRows } : {}),
           signal: controller.signal,
         });
         patch(turnId, { phase: 'done', result });

@@ -13,8 +13,10 @@ class RefreshSchemaAction : DumbAwareAction() {
     override fun actionPerformed(e: AnActionEvent) {
         val project = e.project ?: return
         val toolWindow = ToolWindowManager.getInstance(project).getToolWindow("AskSQL") ?: return
-        val schemaContent = toolWindow.contentManager.contents.firstOrNull { it.getUserData(AskSqlToolWindowFactory.SCHEMA_PANEL_KEY) != null }
+        // show() first: on a tool window whose contents have not been created yet, the
+        // lookup finds nothing and the refresh is silently dropped.
         toolWindow.show()
+        val schemaContent = toolWindow.contentManager.contents.firstOrNull { it.getUserData(AskSqlToolWindowFactory.SCHEMA_PANEL_KEY) != null }
         schemaContent?.let { content ->
             toolWindow.contentManager.setSelectedContent(content)
             content.getUserData(AskSqlToolWindowFactory.SCHEMA_PANEL_KEY)?.reload(forceRefresh = true)

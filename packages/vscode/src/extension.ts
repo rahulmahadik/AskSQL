@@ -108,7 +108,17 @@ export function activate(ctx: vscode.ExtensionContext): void {
       chat.refresh();
     }),
 
-    vscode.commands.registerCommand('asksql.refreshSchema', () => tree.refresh()),
+    // The same command sits in the view title (refresh everything) and on a connection's context
+    // menu, where VS Code passes that node - refresh only what the user pointed at.
+    vscode.commands.registerCommand('asksql.refreshSchema', (node?: Node) => {
+      const connectionId = node?.kind === 'connection' ? node.conn.id : undefined;
+      tree.refresh(connectionId);
+      // Refreshing an unchanged schema looks identical to a Refresh that did nothing.
+      vscode.window.setStatusBarMessage(
+        connectionId ? `AskSQL: re-reading ${node!.conn.name}…` : 'AskSQL: re-reading the schema…',
+        3000,
+      );
+    }),
 
     /** Connect for real and read the schema, then say what happened. */
     vscode.commands.registerCommand(
@@ -209,7 +219,9 @@ export function activate(ctx: vscode.ExtensionContext): void {
           await ctx.secrets.delete(passwordKey(c.id));
           await ctx.secrets.delete(connectionStringKey(c.id));
         }
-        for (const p of ['ollama', 'openai', 'anthropic', 'google', 'groq', 'openai-compatible']) {
+        // Every provider that can hold a key. `nvidia` was missing, so a reset left an NVIDIA
+        // key in the keychain while telling the user everything had been cleared.
+        for (const p of ['ollama', 'openai', 'anthropic', 'google', 'groq', 'nvidia', 'openai-compatible']) {
           await ctx.secrets.delete(apiKeyKey(p));
         }
         await ctx.globalState.update('asksql.modelChoice', undefined);

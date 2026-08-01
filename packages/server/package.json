@@ -63,20 +63,20 @@
     "text2sql"
   ],
   "devDependencies": {
-    "@asksql/postgres": "workspace:*",
-    "@asksql/mysql": "workspace:*",
-    "@asksql/oracle": "workspace:*",
-    "@asksql/mongodb": "workspace:*",
-    "@asksql/sqlite": "workspace:*",
-    "@asksql/duckdb": "workspace:*"
+    "@asksql/postgres": "workspace:>=0.1.0",
+    "@asksql/mysql": "workspace:>=0.1.0",
+    "@asksql/oracle": "workspace:>=0.1.0",
+    "@asksql/mongodb": "workspace:>=0.1.0",
+    "@asksql/sqlite": "workspace:>=0.1.0",
+    "@asksql/duckdb": "workspace:>=0.1.0"
   },
   "peerDependencies": {
-    "@asksql/postgres": "workspace:*",
-    "@asksql/mysql": "workspace:*",
-    "@asksql/oracle": "workspace:*",
-    "@asksql/mongodb": "workspace:*",
-    "@asksql/sqlite": "workspace:*",
-    "@asksql/duckdb": "workspace:*"
+    "@asksql/postgres": "workspace:>=0.1.0",
+    "@asksql/mysql": "workspace:>=0.1.0",
+    "@asksql/oracle": "workspace:>=0.1.0",
+    "@asksql/mongodb": "workspace:>=0.1.0",
+    "@asksql/sqlite": "workspace:>=0.1.0",
+    "@asksql/duckdb": "workspace:>=0.1.0"
   },
   "peerDependenciesMeta": {
     "@asksql/postgres": {

@@ -92,6 +92,23 @@ git push
 git tag v0.1.2 && git push origin v0.1.2
 ```
 
+`changeset:version` runs `tools/release-preflight.mjs` first, which refuses to continue if any
+package would be bumped to a **major** that no changeset asked for. That is not hypothetical:
+changesets majors any package whose *peer* dependency receives a non-patch bump, so a changeset
+saying `'@asksql/server': minor` once produced `1.0.0` because `@asksql/sqlite` went up a minor.
+npm versions cannot be withdrawn, so this is checked before the numbers are written rather than
+after. If a major genuinely is intended, declare it in a changeset and the preflight passes.
+
+Two rules keep that trap shut, both enforced by `tests/peer-ranges.test.ts`:
+
+- **Never use `workspace:*` (or `workspace:~`) in `peerDependencies`.** pnpm replaces it with the
+  exact current version on publish, so `@asksql/server` would demand one precise connector build
+  and every connector release would put consumers into a peer conflict. Use `workspace:>=0.1.0`:
+  what a connector must satisfy is the `Connector` interface from `@asksql/core`, which is a
+  normal dependency, so any published connector version is genuinely compatible.
+- **Keep `onlyUpdatePeerDependentsWhenOutOfRange` set** in `.changeset/config.json`. Without it
+  changesets ignores the range entirely and majors on any non-patch peer bump.
+
 The tag triggers `.github/workflows/release.yml`, which installs, builds, runs the
 tests, then waits for an approval before publishing all nine packages with provenance.
 The VS Code extension is `private: true`, so changesets skips it - it is versioned and

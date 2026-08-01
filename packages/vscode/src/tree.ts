@@ -62,8 +62,8 @@ export class SchemaTreeProvider implements vscode.TreeDataProvider<Node>, vscode
    * read straight back through to EngineManager's still-stale one, so a new
    * table never appeared until the window was reloaded.
    */
-  refresh(): void {
-    this.engines.invalidateCatalogs();
+  refresh(connectionId?: string): void {
+    this.engines.invalidateCatalogs(connectionId);
     this._onDidChange.fire(undefined);
   }
 

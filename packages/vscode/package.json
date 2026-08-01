@@ -3,7 +3,7 @@
   "private": true,
   "displayName": "AskSQL",
   "description": "AI database chat: ask in plain language, review the query, get answers. Read-only by design, bring your own model.",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "publisher": "RahulMahadik",
   "license": "Apache-2.0",
   "pricing": "Free",
@@ -276,9 +276,9 @@
         },
         "asksql.answerSchemaQuestions": {
           "type": "boolean",
-          "default": false,
+          "default": true,
           "scope": "window",
-          "markdownDescription": "When a question can't be turned into a SQL query (for example \"what is this database for?\" or \"how are these tables related?\"), answer it in plain language from the schema instead of erroring. The answer is grounded in the tables, columns, and relationships only - it never reports data values, and names it invents are flagged. **Accuracy depends on your model:** the text is generated, so treat it as guidance, not fact. Off by default."
+          "markdownDescription": "When a question can't be turned into a SQL query (for example \"what is this database for?\" or \"how are these tables related?\"), answer it in plain language from the schema instead of erroring. The answer is grounded in the tables, columns, and relationships only - it never reports data values, and names it invents are flagged. **Accuracy depends on your model:** the text is generated, so treat it as guidance, not fact. It also covers write requests: an INSERT/UPDATE/DELETE/DDL statement is written out as a proposal for you to run yourself, never executed. On by default; turn it off to get a plain error instead."
         }
       }
     },

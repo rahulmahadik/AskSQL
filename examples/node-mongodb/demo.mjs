@@ -19,7 +19,7 @@ const model = process.env.GROQ_API_KEY
   ? await resolveModel({ provider: 'groq', model: 'llama-3.3-70b-versatile', apiKey: process.env.GROQ_API_KEY })
   : await resolveModel({
       provider: 'ollama',
-      model: process.env.OLLAMA_MODEL ?? 'qwen2.5-coder:14b',
+      model: process.env.OLLAMA_MODEL ?? 'qwen2.5-coder:7b',
       baseURL: 'http://localhost:11434/v1',
     });
 

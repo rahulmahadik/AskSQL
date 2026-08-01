@@ -4,7 +4,10 @@
  * renders the bubble, opens its panel, and - critically - that the host
  * page's hostile global CSS does NOT bleed into the widget.
  *
- * Skips gracefully when Chrome or the pre-built bundle is unavailable.
+ * The bundle is built on demand: it is gitignored, and gating the suite on its
+ * presence turned every test here into a silent skip.
+ *
+ * Skips gracefully when Chrome is unavailable.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createServer, type Server } from 'node:http';
@@ -22,10 +25,14 @@ const CHROME = resolveChrome();
 let browser: Browser | null = null;
 let server: Server | null = null;
 let baseUrl = '';
-let ready = existsSync(bundlePath) && !!CHROME;
+let ready = !!CHROME;
 
 beforeAll(async () => {
   if (!ready) return;
+  // Always rebuild: building only when missing meant a stale bundle from an older source
+  // tree was tested forever locally, which is how this suite drifted out of date before.
+  const { execFileSync } = await import('node:child_process');
+  execFileSync(process.execPath, [join(htmlDir, 'build-widget.mjs')], { stdio: 'ignore' });
   // Serve the plain-html dir (the page's mount() points at a sidecar that
   // isn't running - that's fine, the bubble renders before any request).
   server = createServer(async (req, res) => {
@@ -61,6 +68,23 @@ afterAll(async () => {
   await new Promise<void>((r) => (server ? server.close(() => r()) : r()));
 });
 
+/**
+ * A page whose shadow roots are inspectable. The widget deliberately uses a CLOSED root,
+ * which nothing outside can query - including Puppeteer's pierce/ selectors. Forcing the
+ * mode open in the page under test keeps these assertions possible while the shipped
+ * bundle stays exactly as published.
+ */
+async function newInspectablePage() {
+  const page = await browser!.newPage();
+  await page.evaluateOnNewDocument(() => {
+    const attach = Element.prototype.attachShadow;
+    Element.prototype.attachShadow = function (init: ShadowRootInit) {
+      return attach.call(this, { ...init, mode: 'open' });
+    };
+  });
+  return page;
+}
+
 const maybe = (name: string, fn: () => Promise<void>, timeout = 30_000) =>
   it(
     name,
@@ -76,7 +100,7 @@ const maybe = (name: string, fn: () => Promise<void>, timeout = 30_000) =>
 
 describe('widget in real Chrome', () => {
   maybe('mounts into a shadow root and renders the bubble', async () => {
-    const page = await browser!.newPage();
+    const page = await newInspectablePage();
     await page.goto(baseUrl, { waitUntil: 'networkidle0' });
 
     // A shadow host exists and contains the bubble button.
@@ -91,7 +115,7 @@ describe('widget in real Chrome', () => {
   });
 
   maybe('clicking the bubble opens the chat panel', async () => {
-    const page = await browser!.newPage();
+    const page = await newInspectablePage();
     await page.goto(baseUrl, { waitUntil: 'networkidle0' });
     await page.evaluate(() => {
       const host = [...document.querySelectorAll('*')].find((el) => el.shadowRoot);
@@ -115,7 +139,7 @@ describe('widget in real Chrome', () => {
   });
 
   maybe('host hostile CSS does not bleed into the widget', async () => {
-    const page = await browser!.newPage();
+    const page = await newInspectablePage();
     await page.goto(baseUrl, { waitUntil: 'networkidle0' });
     // Host sets Comic Sans + content-box globally. The widget must keep its
     // own sans-serif + border-box inside the shadow root.
@@ -127,12 +151,15 @@ describe('widget in real Chrome', () => {
       return { bodyFont, widgetFont };
     });
     expect(fonts.bodyFont).toMatch(/comic sans/i);
+    // Assert the widget actually rendered first: an empty string trivially "is not Comic Sans",
+    // so without this the headline isolation claim passed even when nothing mounted.
+    expect(fonts.widgetFont).not.toBe('');
     expect(fonts.widgetFont).not.toMatch(/comic sans/i);
     await page.close();
   });
 
   maybe('bubble sits in the configured corner (bottom-left), clear of host UI', async () => {
-    const page = await browser!.newPage();
+    const page = await newInspectablePage();
     await page.setViewport({ width: 800, height: 600 });
     await page.goto(baseUrl, { waitUntil: 'networkidle0' });
     const geom = await page.evaluate(() => {
@@ -156,7 +183,7 @@ describe('widget in real Chrome', () => {
   });
 
   maybe('mounting twice yields a single bubble', async () => {
-    const page = await browser!.newPage();
+    const page = await newInspectablePage();
     await page.goto(baseUrl, { waitUntil: 'networkidle0' });
     await page.evaluate(() => {
       // A second mount into a fresh target; the AskSqlBubble single-instance
@@ -179,7 +206,7 @@ describe('widget in real Chrome', () => {
   });
 
   maybe('mobile viewport: panel fits within the screen', async () => {
-    const page = await browser!.newPage();
+    const page = await newInspectablePage();
     await page.setViewport({ width: 360, height: 720, isMobile: true });
     await page.goto(baseUrl, { waitUntil: 'networkidle0' });
     await page.evaluate(() => {
@@ -204,7 +231,7 @@ describe('widget in real Chrome', () => {
   });
 
   maybe('RTL page: widget renders and SQL area stays LTR-capable', async () => {
-    const page = await browser!.newPage();
+    const page = await newInspectablePage();
     await page.goto(baseUrl, { waitUntil: 'networkidle0' });
     await page.evaluate(() => document.documentElement.setAttribute('dir', 'rtl'));
     const ok = await page.evaluate(() => {
@@ -216,7 +243,7 @@ describe('widget in real Chrome', () => {
   });
 
   maybe('a11y: no critical axe violations in the open panel', async () => {
-    const page = await browser!.newPage();
+    const page = await newInspectablePage();
     await page.goto(baseUrl, { waitUntil: 'networkidle0' });
     await page.evaluate(() => {
       const host = [...document.querySelectorAll('*')].find((el) => el.shadowRoot);
@@ -245,6 +272,21 @@ describe('widget in real Chrome', () => {
     });
     // No critical/serious WCAG A/AA violations in the widget UI.
     expect(violations).toEqual([]);
+    await page.close();
+  });
+
+  // newInspectablePage() forces shadow roots open so the rest of this suite can assert on the
+  // widget's internals. That would silently mask the widget shipping an OPEN root, which is a
+  // real isolation regression - so check the untouched page separately.
+  maybe('the shipped widget uses a CLOSED shadow root, unreachable from page scripts', async () => {
+    const page = await browser!.newPage();
+    await page.goto(baseUrl, { waitUntil: 'networkidle0' });
+    const probe = await page.evaluate(() => {
+      const mount = document.querySelector('[data-asksql-widget]');
+      return { mounted: !!mount, shadowRootVisible: !!(mount as HTMLElement | null)?.shadowRoot };
+    });
+    expect(probe.mounted).toBe(true);
+    expect(probe.shadowRootVisible).toBe(false);
     await page.close();
   });
 });
