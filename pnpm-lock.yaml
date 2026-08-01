@@ -402,22 +402,22 @@ importers:
         version: link:../core
     devDependencies:
       '@asksql/duckdb':
-        specifier: workspace:>=0.1.0
+        specifier: workspace:>=0.2.5
         version: link:../duckdb
       '@asksql/mongodb':
-        specifier: workspace:>=0.1.0
+        specifier: workspace:>=0.1.3
         version: link:../mongodb
       '@asksql/mysql':
-        specifier: workspace:>=0.1.0
+        specifier: workspace:>=0.2.4
         version: link:../mysql
       '@asksql/oracle':
-        specifier: workspace:>=0.1.0
+        specifier: workspace:>=0.1.2
         version: link:../oracle
       '@asksql/postgres':
-        specifier: workspace:>=0.1.0
+        specifier: workspace:>=0.2.5
         version: link:../postgres
       '@asksql/sqlite':
-        specifier: workspace:>=0.1.0
+        specifier: workspace:>=0.3.0
         version: link:../sqlite
 
   packages/sqlite:

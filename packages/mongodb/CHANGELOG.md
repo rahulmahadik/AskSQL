@@ -1,5 +1,12 @@
 # @asksql/mongodb
 
+## 0.1.3
+
+### Patch Changes
+
+- Updated dependencies [3c4c92b]
+  - @asksql/core@0.4.0
+
 ## 0.1.2
 
 ### Patch Changes
