@@ -51,7 +51,12 @@ const duckFile = join(scratch, 'shop.duckdb');
 const ENGINES = [
   {
     key: 'postgres',
-    make: () => new PostgresConnector({ id: 'postgres', name: 'postgres', connectionString: 'postgres://postgres:root@localhost:5432/asksql_test' }),
+    make: () =>
+      new PostgresConnector({
+        id: 'postgres',
+        name: 'postgres',
+        connectionString: 'postgres://postgres:root@localhost:5432/asksql_test',
+      }),
     truth: 'SELECT count(*) FROM shop.customers',
     countQuestion: 'How many customers are there?',
     joinQuestion: 'List each order with its customer name',
@@ -61,7 +66,16 @@ const ENGINES = [
   },
   {
     key: 'mysql',
-    make: () => new MysqlConnector({ id: 'mysql', name: 'mysql', host: '127.0.0.1', port: 3306, user: 'root', password: '', database: 'asksql_test' }),
+    make: () =>
+      new MysqlConnector({
+        id: 'mysql',
+        name: 'mysql',
+        host: '127.0.0.1',
+        port: 3306,
+        user: 'root',
+        password: '',
+        database: 'asksql_test',
+      }),
     truth: 'SELECT count(*) FROM products',
     countQuestion: 'How many products are there?',
     joinQuestion: 'Show each product with the name of the shop that sells it',
@@ -97,7 +111,16 @@ const ENGINES = [
   },
   {
     key: 'oracle',
-    make: () => new OracleConnector({ id: 'oracle', name: 'oracle', host: '127.0.0.1', port: 1521, user: 'asksql', password: 'asksql', database: 'FREEPDB1' }),
+    make: () =>
+      new OracleConnector({
+        id: 'oracle',
+        name: 'oracle',
+        host: '127.0.0.1',
+        port: 1521,
+        user: 'asksql',
+        password: 'asksql',
+        database: 'FREEPDB1',
+      }),
     truth: 'SELECT count(*) FROM shop_customers',
     countQuestion: 'How many rows are in shop_customers?',
     joinQuestion: 'List each order in shop_orders with the customer name from shop_customers',
@@ -107,7 +130,13 @@ const ENGINES = [
   },
   {
     key: 'mongodb',
-    make: () => new MongodbConnector({ id: 'mongodb', name: 'mongodb', connectionString: 'mongodb://127.0.0.1:27017', database: 'shop' }),
+    make: () =>
+      new MongodbConnector({
+        id: 'mongodb',
+        name: 'mongodb',
+        connectionString: 'mongodb://127.0.0.1:27017',
+        database: 'shop',
+      }),
     document: true,
     collection: 'customers',
     truth: '[{"$count":"n"}]',
@@ -135,21 +164,24 @@ for (const engine of ENGINES) {
   const row = { engine: engine.key, checks: {}, notes: [] };
   const connector = engine.make();
   try {
-    await connector.connect();
-
+    // The connector opens read-only and cannot create the file, so seed before connecting.
     if (engine.seed) {
-      // DuckDB starts empty; seed through the raw driver, since the connector is read-only.
-      const { DuckDBInstance } = await import('@duckdb/node-api').catch(() => import('../packages/duckdb/node_modules/@duckdb/node-api/lib/duckdb.js'));
+      const { DuckDBInstance } = await import('@duckdb/node-api').catch(
+        () => import('../packages/duckdb/node_modules/@duckdb/node-api/lib/duckdb.js'),
+      );
       const instance = await DuckDBInstance.create(duckFile);
       const raw = await instance.connect();
       for (const stmt of engine.seed) await raw.run(stmt);
       raw.closeSync?.();
-      await connector.close();
-      await connector.connect();
+      instance.closeSync?.();
     }
 
+    await connector.connect();
+
     const engineOpts = engine.document ? { collection: engine.collection } : {};
-    const askOpts = engine.document ? { connectionId: engine.key, collection: engine.collection } : { connectionId: engine.key };
+    const askOpts = engine.document
+      ? { connectionId: engine.key, collection: engine.collection }
+      : { connectionId: engine.key };
 
     const model = await resolveModel({ provider: 'ollama', model: MODEL_ID, baseURL: OLLAMA });
     const asksql = engine.document
@@ -158,7 +190,8 @@ for (const engine of ENGINES) {
     // The two engines take their target differently: a collection argument, or a connection id.
     const run = (statement, collection) =>
       engine.document ? asksql.execute(statement, collection ?? engine.collection) : asksql.execute(statement, askOpts);
-    const explain = (question) => (engine.document ? asksql.explainSchema(question) : asksql.explainSchema(question, askOpts));
+    const explain = (question) =>
+      engine.document ? asksql.explainSchema(question) : asksql.explainSchema(question, askOpts);
     const ask = (question) => (engine.document ? asksql.ask(question) : asksql.ask(question, askOpts));
 
     // 1. Introspection reaches real objects.
@@ -219,7 +252,9 @@ for (const engine of ENGINES) {
     await connector.close().catch(() => {});
   }
 
-  const failed = Object.entries(row.checks).filter(([, ok]) => !ok).map(([k]) => k);
+  const failed = Object.entries(row.checks)
+    .filter(([, ok]) => !ok)
+    .map(([k]) => k);
   failures += failed.length + (row.notes.some((n) => n.startsWith('FATAL')) ? 1 : 0);
   row.failed = failed;
   results.push(row);
@@ -245,7 +280,9 @@ console.log(`\n### Release regression - \`${MODEL_ID}\`\n`);
 console.log(`| Engine | ${COLUMNS.map(([, l]) => l).join(' | ')} |`);
 console.log(`|---|${COLUMNS.map(() => '---').join('|')}|`);
 for (const r of results) {
-  console.log(`| ${r.engine} | ${COLUMNS.map(([k]) => (r.checks[k] === undefined ? '-' : r.checks[k] ? 'yes' : 'NO')).join(' | ')} |`);
+  console.log(
+    `| ${r.engine} | ${COLUMNS.map(([k]) => (r.checks[k] === undefined ? '-' : r.checks[k] ? 'yes' : 'NO')).join(' | ')} |`,
+  );
 }
 for (const r of results) for (const n of r.notes) console.log(`\n- ${r.engine}: ${n}`);
 console.log(`\n${failures === 0 ? 'ALL PASSED' : failures + ' CHECK(S) FAILED'}`);

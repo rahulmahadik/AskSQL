@@ -57,7 +57,14 @@ describe('MongoDB connector (live)', () => {
 
   maybe('discrete user/password authenticates against admin by default (not the query db)', async () => {
     // With authSource wrongly defaulted to the query db, a root/admin user fails here.
-    const c = new MongodbConnector({ id: 'm', name: 'm', database: DB, connectionString: `mongodb://${HOST}`, user: USER, password: PASS });
+    const c = new MongodbConnector({
+      id: 'm',
+      name: 'm',
+      database: DB,
+      connectionString: `mongodb://${HOST}`,
+      user: USER,
+      password: PASS,
+    });
     await c.connect();
     const res = await c.aggregate('orders', [{ $count: 'n' }]);
     expect(Number(res.rows[0]![0])).toBe(3);

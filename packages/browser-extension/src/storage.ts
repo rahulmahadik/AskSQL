@@ -34,8 +34,7 @@ export interface SidecarConnection {
   readonly authHeader?: string;
   /**
    * Set when this entry was created by sending database details to the server,
-   * so the side panel can ask that server for this database specifically rather
-   * than whatever it happens to expose first.
+   * so the side panel can ask that server for this database specifically.
    */
   readonly remoteConnectionId?: string;
   readonly engine?: string;
@@ -81,10 +80,32 @@ export async function setProviderSettings(settings: ProviderSettings): Promise<v
   await chrome.storage.local.set({ [KEYS.provider]: settings });
 }
 
+/** Bounds on the numeric engine settings, shared by the options inputs and the read path. */
+export const ENGINE_LIMITS = {
+  maxRows: { min: 1, max: 10_000 },
+  maxSchemaTokens: { min: 1000, max: 60_000 },
+} as const;
+
+/** Rounds down into range, taking the fallback when the value is not a number or sits below the floor. */
+export function boundedInt(value: unknown, bounds: { min: number; max: number }, fallback: number): number {
+  const n = Math.floor(Number(value));
+  if (!Number.isFinite(n) || n < bounds.min) return fallback;
+  return Math.min(n, bounds.max);
+}
+
 export async function getEngineSettings(): Promise<EngineSettings> {
   const got = await chrome.storage.local.get([KEYS.engine]);
   const stored = got[KEYS.engine] as Partial<EngineSettings> | undefined;
-  return { ...DEFAULT_ENGINE_SETTINGS, ...stored };
+  const merged = { ...DEFAULT_ENGINE_SETTINGS, ...stored };
+  return {
+    ...merged,
+    maxRows: boundedInt(merged.maxRows, ENGINE_LIMITS.maxRows, DEFAULT_ENGINE_SETTINGS.maxRows),
+    maxSchemaTokens: boundedInt(
+      merged.maxSchemaTokens,
+      ENGINE_LIMITS.maxSchemaTokens,
+      DEFAULT_ENGINE_SETTINGS.maxSchemaTokens,
+    ),
+  };
 }
 
 export async function setEngineSettings(settings: EngineSettings): Promise<void> {

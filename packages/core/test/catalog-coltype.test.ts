@@ -132,7 +132,9 @@ describe('formatCatalogForPrompt', () => {
     // Only the stable/immutable FUNCTION is callable; the volatile fn and the procedure are excluded.
     expect(text).toContain('total_sales(year int) -> numeric');
     expect(text).not.toContain('now_ish');
-    expect(text).not.toContain('do_work');
+    // Listed under STORED PROCEDURES so a DBA question can be answered, never as callable.
+    expect(text).toContain('STORED PROCEDURES');
+    expect(text.split('CALLABLE READ-ONLY FUNCTIONS')[1] ?? '').not.toContain('do_work');
   });
 
   it('qualifies names and prefixes ref schema when more than one schema is present', () => {

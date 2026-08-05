@@ -1,6 +1,6 @@
 {
   "name": "@asksql/core",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "AskSQL engine: schema catalog, AST SQL guard, prompt pipeline, LLM orchestration. Zero database drivers.",
   "type": "module",
   "main": "./dist/index.js",
@@ -24,7 +24,8 @@
   },
   "dependencies": {
     "ai": "^7.0.26",
-    "node-sql-parser": "^5.4.0"
+    "node-sql-parser": "^5.4.0",
+    "zod": "^3.25.76 || ^4.1.8"
   },
   "peerDependencies": {
     "@ai-sdk/anthropic": "^4",

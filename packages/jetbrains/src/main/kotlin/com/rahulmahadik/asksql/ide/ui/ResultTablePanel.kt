@@ -30,7 +30,7 @@ import javax.swing.table.AbstractTableModel
 class ResultTablePanel(private val project: Project, private val resultSet: AskSqlResultSet) {
 
     companion object {
-        /** Sizing scans this many rows: a value wider than every earlier one would otherwise be clipped in an undersized column. */
+        /** Column sizing scans this many rows for the widest value. */
         private const val SIZING_SAMPLE_ROWS = 2_000
         private const val TOOLTIP_MAX_CHARS = 2_000
     }
@@ -45,10 +45,7 @@ class ResultTablePanel(private val project: Project, private val resultSet: AskS
             override fun getValueAt(rowIndex: Int, columnIndex: Int): Any = displayString(resultSet.rows[rowIndex][columnIndex])
         }
         val table = object : JBTable(model) {
-            /**
-             * Wide results overflow into the scroll pane's horizontal scrollbar; a result narrower
-             * than the pane stretches to fill it instead of leaving dead space beside the last column.
-             */
+            /** Wide results overflow into the scroll pane's horizontal scrollbar; a narrower result stretches to fill the viewport. */
             override fun getScrollableTracksViewportWidth(): Boolean {
                 val viewportWidth = parent?.width ?: return false
                 return preferredSize.width < viewportWidth
@@ -56,16 +53,13 @@ class ResultTablePanel(private val project: Project, private val resultSet: AskS
         }
         TableSpeedSearch.installOn(table)
         table.emptyText.text = "No rows returned"
-        // Columns hug their content (default JTable auto-resize stretches every column equally
-        // across the full panel width, leaving huge gaps for narrow data); the scroll pane picks
-        // up any horizontal overflow instead.
+        // Columns hug their content instead of stretching equally across the panel; the scroll pane takes any horizontal overflow.
         table.autoResizeMode = javax.swing.JTable.AUTO_RESIZE_OFF
         table.setDefaultRenderer(Any::class.java, CellRenderer())
         styleHeaderAndGrid(table)
         sizeColumnsToContent(table)
         if (resultSet.rows.isEmpty()) {
-            // A JBTable's emptyText overlay gets clipped at the small height an empty table asks for,
-            // so an empty result is its own label rather than a table with nothing in it.
+            // A JBTable's emptyText overlay is clipped at the small height an empty table asks for, so an empty result gets its own label.
             component.add(
                 JBLabel("No rows returned").apply {
                     horizontalAlignment = javax.swing.SwingConstants.CENTER
@@ -77,7 +71,7 @@ class ResultTablePanel(private val project: Project, private val resultSet: AskS
         } else {
             table.visibleRowCount = resultSet.rows.size.coerceIn(3, 15)
             val scroll = JBScrollPane(table)
-            // A wide result is unreadable without the horizontal scrollbar, so both policies are explicit.
+            // Both scrollbar policies are set explicitly.
             scroll.horizontalScrollBarPolicy = javax.swing.ScrollPaneConstants.HORIZONTAL_SCROLLBAR_AS_NEEDED
             scroll.verticalScrollBarPolicy = javax.swing.ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED
             component.add(scroll, BorderLayout.CENTER)
@@ -110,7 +104,7 @@ class ResultTablePanel(private val project: Project, private val resultSet: AskS
         table.gridColor = com.intellij.ui.JBColor.border()
     }
 
-    /** Header width vs. the widest of the first [SIZING_SAMPLE_ROWS] cells, clamped: an IDE data grid, not evenly stretched Swing defaults. */
+    /** Sizes each column to the header width or the widest of the first [SIZING_SAMPLE_ROWS] cells, clamped. */
     private fun sizeColumnsToContent(table: JBTable) {
         val metrics = table.getFontMetrics(table.font)
         val headerMetrics = table.tableHeader.getFontMetrics(table.tableHeader.font)
@@ -123,8 +117,7 @@ class ResultTablePanel(private val project: Project, private val resultSet: AskS
             var longest = 0
             for (row in 0 until sampled) {
                 val raw = displayString(resultSet.rows[row][col])
-                // Text layout and line flattening are O(rows x columns) on the EDT; character
-                // count is a cheap monotonic proxy, so only a new longest value pays for them.
+                // Character count is a cheap proxy, so only a new longest value pays for text layout and line flattening on the EDT.
                 if (raw.length <= longest) continue
                 longest = raw.length
                 width = maxOf(width, metrics.stringWidth(flattenLines(raw)))
@@ -134,9 +127,8 @@ class ResultTablePanel(private val project: Project, private val resultSet: AskS
     }
 
     /**
-     * Cells clamp at [sizeColumnsToContent]'s max width, so the full value is only recoverable
-     * from a tooltip. Multi-line values (JSON, TEXT) collapse to one line: a JLabel renders an
-     * embedded newline as a squashed glyph and throws the row's alignment off.
+     * Cells clamp at [sizeColumnsToContent]'s max width, so the full value lives in the tooltip.
+     * Multi-line values collapse to one line: a JLabel renders an embedded newline as a squashed glyph.
      */
     private inner class CellRenderer : javax.swing.table.DefaultTableCellRenderer() {
         override fun getTableCellRendererComponent(
@@ -169,21 +161,13 @@ class ResultTablePanel(private val project: Project, private val resultSet: AskS
         return "<html>$escaped</html>"
     }
 
-    private fun displayString(value: CellValue): String = when (value) {
-        is CellValue.Null -> "∅ NULL"
-        is CellValue.Text -> value.value
-        is CellValue.Number -> value.value.toString()
-        is CellValue.Boolean -> value.value.toString()
-        is CellValue.ExactNumeric -> value.value
-        is CellValue.Binary -> "⟨${value.preview.bytes} bytes: ${value.preview.hexPreview}${if (value.preview.bytes > 32) "…" else ""}⟩"
-    }
 
-    /** Building the text is O(rows × columns), up to the connection's `maxRows` (100,000), so it runs off the EDT via a cancellable background progress rather than freezing the IDE while it joins. */
+    /** Builds the tab-separated text off the EDT under a cancellable progress; it is O(rows × columns) up to the connection's `maxRows`. */
     fun copyToClipboard() {
         try {
             val text = runBlockingWithProgress(project, "Preparing copy") {
-                val header = resultSet.columns.joinToString("\t") { it.name }
-                val body = resultSet.rows.joinToString("\n") { row -> row.joinToString("\t") { displayString(it) } }
+                val header = resultSet.columns.joinToString("\t") { tsvEscape(it.name) }
+                val body = resultSet.rows.joinToString("\n") { row -> row.joinToString("\t") { tsvEscape(displayString(it)) } }
                 "$header\n$body"
             }
             com.intellij.openapi.ide.CopyPasteManager.getInstance().setContents(StringSelection(text))
@@ -192,7 +176,7 @@ class ResultTablePanel(private val project: Project, private val resultSet: AskS
         }
     }
 
-    /** See [copyToClipboard]'s doc; same reason this builds its (potentially large) CSV text off the EDT. */
+    /** Builds the CSV text off the EDT, like [copyToClipboard]. */
     fun openInEditor() {
         try {
             val text = runBlockingWithProgress(project, "Preparing editor view") {
@@ -207,10 +191,7 @@ class ResultTablePanel(private val project: Project, private val resultSet: AskS
         }
     }
 
-    /**
-     * Writes the currently displayed rows to a CSV file the user picks. These are already capped
-     * at the connection's `maxRows` setting (same rows the table shows), not an uncapped re-query.
-     */
+    /** Writes the currently displayed rows - already capped at the connection's `maxRows` - to a CSV file the user picks. */
     fun exportCsv() {
         val descriptor = FileSaverDescriptor("Export AskSQL Result", "Choose where to save the CSV file", "csv")
         val wrapper = com.intellij.openapi.fileChooser.FileChooserFactory.getInstance()
@@ -235,10 +216,33 @@ class ResultTablePanel(private val project: Project, private val resultSet: AskS
         }
     }
 
-    private fun csvEscape(value: String): String =
-        if (value.contains(',') || value.contains('"') || value.contains('\n')) {
-            "\"${value.replace("\"", "\"\"")}\""
-        } else {
-            value
-        }
+}
+
+/** The fidelity-safe string form of a cell; null and empty string render distinctly. */
+internal fun displayString(value: CellValue): String = when (value) {
+    is CellValue.Null -> "∅ NULL"
+    is CellValue.Text -> value.value
+    is CellValue.Number -> value.value.toString()
+    is CellValue.Boolean -> value.value.toString()
+    is CellValue.ExactNumeric -> value.value
+    is CellValue.Binary -> "⟨${value.preview.bytes} bytes: ${value.preview.hexPreview}${if (value.preview.bytes > 32) "…" else ""}⟩"
+}
+
+/** Leading characters Excel and Sheets evaluate as a formula rather than reading as text. */
+private val FORMULA_LEAD_RE = Regex("""^[=+\-@\t\r]""")
+
+/** RFC 4180 quoting for one CSV field; a formula lead that is not a number gets a leading apostrophe. */
+/** A pasted cell lands in a spreadsheet like an exported one, so it gets the same formula guard. */
+internal fun tsvEscape(value: String): String {
+    val field = if (FORMULA_LEAD_RE.containsMatchIn(value) && value.toDoubleOrNull()?.isFinite() != true) "'$value" else value
+    return field.replace('\t', ' ').replace('\n', ' ').replace('\r', ' ')
+}
+
+internal fun csvEscape(value: String): String {
+    val field = if (FORMULA_LEAD_RE.containsMatchIn(value) && value.toDoubleOrNull()?.isFinite() != true) "'$value" else value
+    return if (field.contains(',') || field.contains('"') || field.contains('\n') || field.contains('\r')) {
+        "\"${field.replace("\"", "\"\"")}\""
+    } else {
+        field
+    }
 }

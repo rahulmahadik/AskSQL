@@ -4,7 +4,7 @@ about: Suggest an idea
 labels: enhancement
 ---
 
-**Problem** — what are you trying to do?
+**Problem**: what are you trying to do?
 
 **Proposed solution**
 

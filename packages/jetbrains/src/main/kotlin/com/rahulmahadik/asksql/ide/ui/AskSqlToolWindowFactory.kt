@@ -17,19 +17,16 @@ import javax.swing.JComponent
 import javax.swing.JPanel
 import javax.swing.JTextArea
 
-/**
- * Registers the AskSQL tool window. Schema and Chat share ONE [com.intellij.ui.content.Content] in a
- * vertical [Splitter] rather than two separate `Content`s, which would render as a tab strip.
- */
+/** Registers the AskSQL tool window; Schema and Chat share ONE [com.intellij.ui.content.Content] in a vertical [Splitter], since two would render as a tab strip. */
 class AskSqlToolWindowFactory : ToolWindowFactory, DumbAware {
 
     companion object {
         private val LOG = Logger.getInstance(AskSqlToolWindowFactory::class.java)
 
-        /** Stashed on the tool window's [com.intellij.ui.content.Content] so [com.rahulmahadik.asksql.ide.actions.RefreshSchemaAction] can reach the live panel without a separate registry. */
+        /** Stashed on the tool window's [com.intellij.ui.content.Content] for [com.rahulmahadik.asksql.ide.actions.RefreshSchemaAction]. */
         val SCHEMA_PANEL_KEY: Key<SchemaTreePanel> = Key.create("asksql.schemaPanel")
 
-        /** Stashed on the tool window's [com.intellij.ui.content.Content] so [com.rahulmahadik.asksql.ide.actions.AskAboutSelectionAction] can hand off a pending question even when the tool window content already existed (not just on first open). */
+        /** Stashed on the tool window's [com.intellij.ui.content.Content] for [com.rahulmahadik.asksql.ide.actions.AskAboutSelectionAction]. */
         val CHAT_PANEL_KEY: Key<ChatPanel> = Key.create("asksql.chatPanel")
     }
 
@@ -75,7 +72,7 @@ class AskSqlToolWindowFactory : ToolWindowFactory, DumbAware {
 
         val content = contentFactory.createContent(root, "", false)
         content.isCloseable = false
-        // Disposer.dispose also frees each panel's child Disposables (messageBus); a direct dispose() would leak them.
+        // Disposer.dispose also frees each panel's child Disposables (messageBus).
         content.setDisposer(Disposable { schemaPanel?.let { Disposer.dispose(it) }; chatPanel?.let { Disposer.dispose(it) } })
         schemaPanel?.let { content.putUserData(SCHEMA_PANEL_KEY, it) }
         chatPanel?.let { content.putUserData(CHAT_PANEL_KEY, it) }

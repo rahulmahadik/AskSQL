@@ -1,11 +1,8 @@
 /**
- * The AskSQL security boundary for MongoDB.
- *
- * MongoDB has no read-only session flag, so this guard is the only safety floor.
- * It is an allowlist over a parsed aggregation pipeline: only known read-only
- * stages pass, writes ($out/$merge) and JS-execution operators ($where/$function/
- * $accumulator) are refused, and a final $limit is injected/lowered to the row cap.
- * Fail-closed: anything unparseable or shaped wrong is blocked.
+ * The AskSQL security boundary for MongoDB. MongoDB has no read-only session flag, so this guard
+ * is the only safety floor: an allowlist over a parsed aggregation pipeline, with writes
+ * ($out/$merge) and JS-execution operators ($where/$function/$accumulator) refused and a final
+ * $limit injected or lowered to the row cap. Fail-closed.
  */
 
 export interface MongoGuardPolicy {
@@ -32,11 +29,7 @@ export interface MongoGuardVerdict {
   readonly collections: readonly string[];
 }
 
-/**
- * Read-only aggregation stages. This is an allowlist: writes ($out, $merge) and
- * server-introspection stages ($currentOp, $collStats, $indexStats, $listSessions,
- * $listLocalSessions, $planCacheStats) are simply absent, so they are refused.
- */
+/** Read-only aggregation stages; writes ($out, $merge) and server-introspection stages are simply absent. */
 const ALLOWED_STAGES = new Set([
   '$match',
   '$project',
@@ -93,11 +86,8 @@ type Doc = Record<string, unknown>;
 const isDoc = (v: unknown): v is Doc => typeof v === 'object' && v !== null && !Array.isArray(v);
 
 /**
- * Rewrite mongo-shell JSON into strict JSON: quoted keys, double-quoted strings, no
- * trailing commas. The shell accepts `{$group: {...}}` and smaller models emit it, so
- * rejecting it would fail a correct pipeline on syntax alone. String contents are
- * walked, never regex-replaced, so a colon or brace inside a value is left intact.
- * Only shape is relaxed - the guard still inspects every parsed stage afterwards.
+ * Rewrite mongo-shell JSON into strict JSON: quoted keys, double-quoted strings, no trailing
+ * commas. String contents are walked, never regex-replaced. Only shape is relaxed.
  */
 function relaxShellJson(text: string): string {
   let out = '';
@@ -123,8 +113,7 @@ function relaxShellJson(text: string): string {
       continue;
     }
     if (/[A-Za-z_$]/.test(ch)) {
-      // A bare word: a key when the next non-space character is a colon, else a literal
-      // (true/false/null) that must be copied through untouched.
+      // A bare word: a key when the next non-space character is a colon, else a literal.
       let word = '';
       let j = i;
       for (; j < text.length && /[\w$.]/.test(text[j]!); j++) word += text[j]!;
@@ -144,11 +133,7 @@ function relaxShellJson(text: string): string {
   return out;
 }
 
-/**
- * The strict-JSON form of a pipeline string, or null when it is not one. Callers that
- * inspect the TEXT (rather than the parsed value) must use this, never the raw input:
- * the raw form may be shell JSON whose quoting a strict-JSON scanner reads differently.
- */
+/** The strict-JSON form of a pipeline string, or null; callers inspecting the TEXT must use this. */
 export function toStrictPipelineJson(pipelineJson: string): { json: string; pipeline: unknown[] } | null {
   const attempt = (text: string): unknown[] | null => {
     try {
@@ -294,8 +279,7 @@ function walkPipeline(
 ): WalkResult {
   if (depth > policy.maxDepth)
     return { violation: { ruleId: 'too_deep', reason: 'The pipeline is nested too deeply.' }, collections };
-  // A $push/$addToSet with no earlier bound collects the whole collection into one
-  // document, sliding past the row cap; require a preceding $limit/$sample.
+  // A $push/$addToSet with no earlier bound collects the whole collection into one document.
   let bounded = false;
   for (const stage of pipeline) {
     if (!isDoc(stage))
@@ -344,10 +328,7 @@ function limitDecision(pipeline: unknown[], maxRows: number): 'none' | 'high' | 
   return 'none';
 }
 
-/**
- * Cap a (sub)pipeline's output at maxRows by injecting or lowering a trailing $limit,
- * recursing into every $facet branch so a facet cannot embed an unbounded array.
- */
+/** Cap a (sub)pipeline at maxRows with a trailing $limit, recursing into every $facet branch. */
 function capPipeline(pipeline: unknown[], maxRows: number): { autoLimited: boolean; loweredLimit: boolean } {
   let autoLimited = false;
   let loweredLimit = false;
@@ -374,11 +355,7 @@ function capPipeline(pipeline: unknown[], maxRows: number): { autoLimited: boole
   return { autoLimited, loweredLimit };
 }
 
-/**
- * True if the JSON text holds a bare integer literal outside the JS safe-integer
- * range. JSON.parse silently rounds such literals before EJSON can preserve them,
- * corrupting 64-bit ids; callers must wrap them in {$numberLong:"..."}.
- */
+/** True if the JSON text holds a bare integer outside the JS safe range, which JSON.parse silently rounds. */
 function hasUnsafeIntegerLiteral(json: string): boolean {
   let inString = false;
   for (let i = 0; i < json.length; i++) {
@@ -409,10 +386,7 @@ function hasUnsafeIntegerLiteral(json: string): boolean {
   return false;
 }
 
-/**
- * Validate a MongoDB aggregation pipeline (a bare JSON-array string). Returns an
- * allowed verdict with the capped pipeline, or a blocked verdict with a stable ruleId.
- */
+/** Validate a MongoDB aggregation pipeline; returns the capped pipeline, or a blocked verdict with a ruleId. */
 export function guardPipeline(
   pipelineJson: string,
   policy: MongoGuardPolicy = DEFAULT_MONGO_GUARD_POLICY,
@@ -420,9 +394,7 @@ export function guardPipeline(
   const strict = toStrictPipelineJson(pipelineJson);
   if (!strict) return blocked('parse_failed', 'The pipeline is not valid JSON.');
   const pipeline = strict.pipeline;
-  // Scan the strict-JSON form, not the raw text: hasUnsafeIntegerLiteral only understands
-  // double-quoted strings, so a shell-quoted value would shift what it thinks is a literal -
-  // silently skipping the check on a real 64-bit number, or blocking a numeric string.
+  // Scan the strict-JSON form: hasUnsafeIntegerLiteral only understands double-quoted strings.
   if (hasUnsafeIntegerLiteral(strict.json)) {
     return blocked(
       'integer_unsafe',

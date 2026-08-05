@@ -17,10 +17,7 @@ data class HistoryEntry(
     val rowCount: Int? = null,
 )
 
-/**
- * Audit trail for executed statements. Deliberately in-memory only and bounded: history is
- * never written to disk, since questions and generated SQL can reveal schema/business structure.
- */
+/** Audit trail for executed statements, in-memory and bounded; never written to disk. */
 interface HistoryStore {
     fun add(entry: HistoryEntry)
     fun recent(limit: Int = 200): List<HistoryEntry>

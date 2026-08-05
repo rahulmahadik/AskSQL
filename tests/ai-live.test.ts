@@ -209,7 +209,7 @@ groqDescribe('Groq model matrix (live)', () => {
 // 3. Ollama - fully local.
 // ---------------------------------------------------------------------------
 const OLLAMA_URL = process.env['OLLAMA_URL'] ?? 'http://localhost:11434/v1';
-const OLLAMA_MODEL = process.env['ASKSQL_OLLAMA_MODEL'] ?? 'qwen2.5-coder:14b';
+const OLLAMA_MODEL = process.env['ASKSQL_OLLAMA_MODEL'] ?? 'qwen2.5-coder:7b';
 
 describe('Ollama end-to-end (live)', () => {
   let up = false;

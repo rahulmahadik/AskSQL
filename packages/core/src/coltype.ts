@@ -1,9 +1,6 @@
 /**
- * Map a raw database type name to a coarse {@link ColumnKind} used for result
- * rendering and the numeric-fidelity rule. The shared fallback across engines;
- * connectors with their own type map (Oracle, DuckDB, Postgres OIDs) call this
- * for anything their map does not cover. Unrecognized types return 'unknown'
- * and render as text, so a novel type never breaks a result.
+ * Map a raw database type name to a coarse {@link ColumnKind} used for result rendering and the
+ * numeric-fidelity rule. The shared fallback across engines; unrecognized types return 'unknown'.
  */
 
 import type { ColumnKind } from './types.js';
@@ -12,8 +9,7 @@ export function classifyColumnKind(dbType: string | null | undefined): ColumnKin
   if (!dbType) return 'unknown';
   const t = dbType.toLowerCase();
 
-  // Boolean before the numeric families: MySQL BOOLEAN is tinyint(1) (no trailing
-  // word boundary, so matched directly); a bit string (bit varying / bit(n>1)) is not a boolean.
+  // Boolean before the numeric families: MySQL BOOLEAN is tinyint(1), and bit varying / bit(n>1) is not a boolean.
   if (
     /\btinyint\(1\)/.test(t) ||
     /(^|\b)(bool|boolean)\b/.test(t) ||
@@ -37,8 +33,7 @@ export function classifyColumnKind(dbType: string | null | undefined): ColumnKin
   // bytea/blob (+ long/medium/tiny), binary/varbinary, Oracle RAW/LONG RAW/BFILE.
   if (/\b(bytea|binary|varbinary|image|raw|bfile)\b|\b(long|medium|tiny)?blob\b/.test(t)) return 'binary';
 
-  // Text families, including the compound names other classifiers miss
-  // (longtext/mediumtext/tinytext, varchar2/nvarchar2, nchar).
+  // Text families, including compound names (longtext/mediumtext/tinytext, varchar2/nvarchar2, nchar).
   if (
     /(^|\b)(long|medium|tiny)text\b|\bn?text\b|\bn?(var)?char\d*\b|\bcharacter\b|\bstring\b|\bn?clob\b|\benum\b|\bset\b|\bname\b|\bcitext\b|\b(uuid|inet|cidr|macaddr|xml)\b/.test(
       t,

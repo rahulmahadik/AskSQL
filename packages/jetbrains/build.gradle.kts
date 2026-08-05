@@ -13,6 +13,7 @@ plugins {
     kotlin("jvm") version "2.1.20"
     id("org.jetbrains.intellij.platform") version "2.18.1"
     id("org.jetbrains.changelog") version "2.5.0"
+    id("org.jetbrains.kotlinx.kover") version "0.9.1"
 }
 
 group = providers.gradleProperty("pluginGroup").get()
@@ -108,9 +109,9 @@ intellijPlatform {
         }
 
         ideaVersion {
-            // Floor 2025.2 (build 252), open-ended upper bound: the plugin stays installable on new
+            // Floor 2025.1 (build 251), open-ended upper bound: the plugin stays installable on new
             // majors until the Plugin Verifier's EAP run proves otherwise (a verifier failure blocks release).
-            sinceBuild = "252"
+            sinceBuild = "251"
             untilBuild = provider { null }
         }
 
@@ -121,10 +122,10 @@ intellijPlatform {
 
     pluginVerification {
         ides {
-            recommended()
             // ideaIC publishes both build-number and marketing-version Maven
             // artifacts; build numbers pin the exact floor/latest builds.
-            create(IntelliJPlatformType.IntellijIdeaCommunity, "252.28539.54")  // 2025.2.6.2 (compatibility floor)
+            create(IntelliJPlatformType.IntellijIdeaCommunity, "251.29188.72")  // 2025.1 (compatibility floor)
+            create(IntelliJPlatformType.IntellijIdeaCommunity, "252.28539.54")  // 2025.2.6.2
             create(IntelliJPlatformType.IntellijIdeaCommunity, "253.28294.334") // 2025.3 (IC's own latest stable)
             // Full cross-IDE matrix only when ASKSQL_VERIFY_FULL=true (the release workflow sets it); per-push CI verifies the IC floor+latest above to avoid ~10 cold IDE downloads.
             if (providers.environmentVariable("ASKSQL_VERIFY_FULL").orNull == "true") {
@@ -172,6 +173,21 @@ changelog {
 
 kotlin {
     jvmToolchain(21)
+}
+
+// Coverage floor for the Kotlin engine. Set just under the current line coverage so it cannot
+// slide; the UI packages are Swing and largely undriven by tests, which is what holds it here.
+kover {
+    reports {
+        verify {
+            rule {
+                bound {
+                    minValue = 40
+                    coverageUnits = kotlinx.kover.gradle.plugin.dsl.CoverageUnit.LINE
+                }
+            }
+        }
+    }
 }
 
 tasks {

@@ -4,9 +4,7 @@ import { hasOriginPermission, requestOriginPermission } from './permissions.js';
 function isFetchableHttpUrl(url: string): boolean {
   try {
     const parsed = new URL(url);
-    // `new URL('localhost:3000')` does NOT throw - "localhost" parses as a bogus
-    // scheme with an empty hostname, not as a hostname with a port - so scheme
-    // and hostname both need an explicit check, not just catching a parse error.
+    // `new URL('localhost:3000')` parses as a scheme rather than throwing, so check both explicitly.
     return (parsed.protocol === 'http:' || parsed.protocol === 'https:') && parsed.hostname !== '';
   } catch {
     return false;

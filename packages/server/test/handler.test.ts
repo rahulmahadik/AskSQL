@@ -94,7 +94,7 @@ const req = (method: string, path: string, body?: unknown, query: Record<string,
   method,
   path,
   query,
-  headers: {},
+  headers: { 'content-type': 'application/json' },
   json: async () => body ?? {},
 });
 
@@ -140,7 +140,7 @@ describe('/history is per-user', () => {
   });
   const withUser = (u: string, m: string, p: string, b?: unknown, q: Record<string, string> = {}): ServerRequest => ({
     ...req(m, p, b, q),
-    headers: { 'x-user': u },
+    headers: { 'x-user': u, 'content-type': 'application/json' },
   });
 
   it("one user cannot read another user's history on a shared connection", async () => {

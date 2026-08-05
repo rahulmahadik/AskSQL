@@ -1,5 +1,7 @@
 package com.rahulmahadik.asksql.ide.engine
 
+import com.rahulmahadik.asksql.ide.model.ColumnInfo
+import com.rahulmahadik.asksql.ide.model.EngineKind
 import com.rahulmahadik.asksql.ide.model.RoutineKind
 import com.rahulmahadik.asksql.ide.model.RoutineVolatility
 import com.rahulmahadik.asksql.ide.model.SchemaCatalog
@@ -19,12 +21,12 @@ object CatalogPruner {
     private const val VALUE_SAMPLE_CAP = 80
     private const val COMMENT_CAP = 200
 
-    /** How many foreign-key hops to walk out from a term-matched table, so a chain of joins reaches tables that match no search term themselves. */
+    /** How many foreign-key hops to walk out from a term-matched table. */
     private const val FK_CLOSURE_HOPS = 2
 
     enum class Strategy { NONE, TERM_MATCH_FK_CLOSURE, BUDGET_TRIM }
 
-    data class PrunerSettings(val maxTables: Int = 40, val maxSchemaTokens: Int = 5000)
+    data class PrunerSettings(val maxTables: Int = 40, val maxSchemaTokens: Int = 6000)
 
     data class PruneResult(
         val catalog: SchemaCatalog,
@@ -43,20 +45,69 @@ object CatalogPruner {
         return if (flat.length > COMMENT_CAP) "${flat.take(COMMENT_CAP)}..." else flat
     }
 
-    /**
-     * Sample/enum values come from live data, unlike comments, so they aren't guaranteed
-     * short or whitespace-free. Flattened, capped, and `|` replaced since it's the join separator.
-     */
+    /** Flattens and caps a live-data sample value, replacing `|` (the join separator). */
     private fun sanitizeValue(value: String): String {
         val flat = value.replace(Regex("""\s+"""), " ").replace("|", "/").trim()
-        return if (flat.length > VALUE_SAMPLE_CAP) "${flat.take(VALUE_SAMPLE_CAP)}..." else flat
+        return if (flat.length > VALUE_SAMPLE_CAP) flat.take(VALUE_SAMPLE_CAP) else flat
     }
 
-    private fun qualifiedName(t: TableInfo, multiSchema: Boolean): String =
-        if (multiSchema && t.schema != null) "${t.schema}.${t.name}" else t.name
+    /** A name that can be written without quotes; anything else is rendered quoted. */
+    private val PLAIN_IDENTIFIER_RE = Regex("""^[A-Za-z_][A-Za-z0-9_]*$""")
+
+    /**
+     * The quote character for prompt text. Not [com.rahulmahadik.asksql.ide.model.Dialects.of],
+     * which throws for MongoDB; this formatter renders the document catalog too.
+     */
+    private fun quoteCharFor(engine: EngineKind): Char = if (engine == EngineKind.MYSQL) '`' else '"'
+
+    /** Words an engine will not accept as a bare identifier; the ones that turn up as real column names, not every dialect. */
+    private val RESERVED_WORDS = (
+        "select from where group by order having limit offset union all distinct join inner outer left " +
+            "right full cross natural on using as into insert update delete set values create drop alter " +
+            "table column view index key primary foreign unique constraint references default check null " +
+            "not and or in is like between case when then else end exists any some cast collate with " +
+            "recursive returning window over partition range rows current session system user grant revoke " +
+            "to begin commit rollback transaction lock database schema trigger procedure function " +
+            "desc asc date time timestamp interval level size type comment position language"
+        ).split(" ").toSet()
+
+    /**
+     * True when the engine would not read the bare name back as itself: an unquoted identifier
+     * folds case - PostgreSQL to lower, Oracle to upper.
+     */
+    private fun needsQuoting(name: String, engine: EngineKind): Boolean {
+        if (!PLAIN_IDENTIFIER_RE.matches(name)) return true
+        if (name.lowercase() in RESERVED_WORDS) return true
+        return when (engine) {
+            EngineKind.ORACLE -> name != name.uppercase()
+            // MySQL, SQLite and DuckDB match identifiers case-insensitively.
+            EngineKind.MYSQL, EngineKind.SQLITE, EngineKind.DUCKDB -> false
+            else -> name != name.lowercase()
+        }
+    }
+
+    private fun promptIdentifier(name: String, quote: Char, engine: EngineKind): String {
+        if (!needsQuoting(name, engine)) return name
+        // Doubling is how every supported engine escapes its own quote character in an identifier.
+        return "$quote${name.replace(quote.toString(), "$quote$quote")}$quote"
+    }
+
+    private fun qualifiedName(t: TableInfo, multiSchema: Boolean, quote: Char, engine: EngineKind): String {
+        val name = promptIdentifier(t.name, quote, engine)
+        return if (multiSchema && t.schema != null) "${promptIdentifier(t.schema, quote, engine)}.$name" else name
+    }
+
+    /** Bounds so a large catalog cannot crowd out the tables themselves; matches core. */
+    /** Never trim a table below this many columns. */
+    private const val MIN_COLUMNS_KEPT = 12
+
+    private const val MAX_INDEXES_PER_TABLE = 8
+    private const val MAX_OBJECTS = 30
 
     fun formatCatalogForPrompt(catalog: SchemaCatalog): String {
         val multiSchema = catalog.schemas.size > 1
+        val quote = quoteCharFor(catalog.engine)
+        val engine = catalog.engine
         val lines = mutableListOf<String>()
 
         for (t in catalog.tables) {
@@ -68,12 +119,15 @@ object CatalogPruner {
             }
             val comment = sanitizeComment(t.comment)
             val est = t.rowEstimate?.takeIf { it >= 0 }?.let { " [~${it} rows]" } ?: ""
-            lines += "$head ${qualifiedName(t, multiSchema)}$est${if (comment != null) " -- $comment" else ""}${if (t.source == TableSource.FILE) " [from uploaded file]" else ""}"
+            lines += "$head ${qualifiedName(t, multiSchema, quote, engine)}$est${if (comment != null) " -- $comment" else ""}${if (t.source == TableSource.FILE) " [from uploaded file]" else ""}"
             for (c in t.columns) {
-                val bits = mutableListOf(" ${c.name} ${c.dbType}")
+                val bits = mutableListOf(" ${promptIdentifier(c.name, quote, engine)} ${c.dbType}")
                 if (t.primaryKey.contains(c.name)) bits += "PK"
                 val fk = t.foreignKeys.firstOrNull { it.columns.contains(c.name) }
-                if (fk != null) bits += "FK->${if (fk.refSchema != null) "${fk.refSchema}." else ""}${fk.refTable}.${fk.refColumns.joinToString(",")}"
+                if (fk != null) {
+                    val target = if (fk.refSchema != null) "${promptIdentifier(fk.refSchema, quote, engine)}." else ""
+                    bits += "FK->$target${promptIdentifier(fk.refTable, quote, engine)}.${fk.refColumns.joinToString(",") { promptIdentifier(it, quote, engine) }}"
+                }
                 if (!c.nullable) bits += "NOT NULL"
                 if (c.enumValues.isNotEmpty()) {
                     bits += "values: ${c.enumValues.take(VALUE_SAMPLE_MAX_DISTINCT).joinToString("|") { sanitizeValue(it) }}"
@@ -84,6 +138,38 @@ object CatalogPruner {
                 if (colComment != null) bits += "-- $colComment"
                 lines += bits.joinToString(" ")
             }
+            // Indexes are what a "should I add an index?" or "why is this slow?" question is about.
+            if (t.indexes.isNotEmpty()) {
+                val shown = t.indexes.take(MAX_INDEXES_PER_TABLE).joinToString(", ") { i ->
+                    "${i.name}(${i.columns.joinToString(",")})" +
+                        (if (i.unique) " UNIQUE" else "") +
+                        (if (i.predicate != null) " WHERE ..." else "")
+                }
+                lines += " INDEXES: $shown"
+            }
+        }
+
+        if (catalog.triggers.isNotEmpty()) {
+            lines += "TRIGGERS:"
+            for (tr in catalog.triggers.take(MAX_OBJECTS)) {
+                val on = if (tr.schema != null) "${tr.schema}.${tr.table}" else tr.table
+                lines += " ${tr.name} ${tr.timing} ${tr.events.joinToString("/")} ON $on" + if (tr.enabled) "" else " [disabled]"
+            }
+        }
+
+        val procedures = catalog.routines.filter { it.kind == RoutineKind.PROCEDURE }
+        if (procedures.isNotEmpty()) {
+            // Listed so "what procedures exist" can be answered; never offered as something to call.
+            lines += "STORED PROCEDURES (reference only - NEVER call these; a read-only query cannot invoke them):"
+            for (r in procedures.take(MAX_OBJECTS)) {
+                lines += " ${if (multiSchema && r.schema != null) "${r.schema}.${r.name}" else r.name}(${r.args})"
+            }
+        }
+
+        if (catalog.sequences.isNotEmpty()) {
+            val names = catalog.sequences.take(MAX_OBJECTS)
+                .joinToString(", ") { if (multiSchema && it.schema != null) "${it.schema}.${it.name}" else it.name }
+            lines += "SEQUENCES: $names"
         }
 
         if (catalog.enums.isNotEmpty()) {
@@ -113,18 +199,18 @@ object CatalogPruner {
 
     fun joinGraph(catalog: SchemaCatalog): List<String> {
         val multiSchema = catalog.schemas.size > 1
+        val quote = quoteCharFor(catalog.engine)
+        val engine = catalog.engine
         val edges = mutableListOf<String>()
         val declared = mutableSetOf<String>()
         for (t in catalog.tables) {
             for (fk in t.foreignKeys) {
-                edges += "${qualifiedName(t, multiSchema)}.${fk.columns.joinToString(",")} = ${if (fk.refSchema != null && multiSchema) "${fk.refSchema}." else ""}${fk.refTable}.${fk.refColumns.joinToString(",")}"
+                edges += "${qualifiedName(t, multiSchema, quote, engine)}.${fk.columns.joinToString(",") { promptIdentifier(it, quote, engine) }} = ${if (fk.refSchema != null && multiSchema) "${promptIdentifier(fk.refSchema, quote, engine)}." else ""}${promptIdentifier(fk.refTable, quote, engine)}.${fk.refColumns.joinToString(",") { promptIdentifier(it, quote, engine) }}"
                 declared += "${t.name.lowercase()}.${(fk.columns.firstOrNull() ?: "").lowercase()}"
             }
         }
-        // Many real databases (esp. MySQL apps) declare few or no FK constraints, so the
-        // declared graph is near-empty. Infer relationships from `<name>_id` / `<name>Id`
-        // columns that point at a table whose name matches - conservative (a matching table
-        // must exist), and marked so the model treats them as likely, not guaranteed.
+        // Many real databases declare few or no FK constraints, so `<name>_id` / `<name>Id` columns
+        // that point at a matching table name are also inferred, marked as likely rather than guaranteed.
         edges += inferredRelationships(catalog, declared, multiSchema)
         return edges
     }
@@ -146,6 +232,8 @@ object CatalogPruner {
 
     /** Naming-convention relationships (`<table>_id` -> that table), skipping ones already declared as FKs. */
     private fun inferredRelationships(catalog: SchemaCatalog, declared: Set<String>, multiSchema: Boolean): List<String> {
+        val quote = quoteCharFor(catalog.engine)
+        val engine = catalog.engine
         // Index every table by its lowercase name and its singular form, so `client_id` finds `clients`.
         val byName = mutableMapOf<String, TableInfo>()
         for (t in catalog.tables) {
@@ -164,7 +252,7 @@ object CatalogPruner {
                 val target = byName[base] ?: byName[base.substringAfterLast('_')] ?: continue
                 if (target.name.lowercase() == t.name.lowercase()) continue
                 val pk = target.primaryKey.firstOrNull() ?: "id"
-                val edge = "${qualifiedName(t, multiSchema)}.${c.name} ~ ${qualifiedName(target, multiSchema)}.$pk  [inferred from naming]"
+                val edge = "${qualifiedName(t, multiSchema, quote, engine)}.${promptIdentifier(c.name, quote, engine)} ~ ${qualifiedName(target, multiSchema, quote, engine)}.${promptIdentifier(pk, quote, engine)}  [inferred from naming]"
                 if (seen.contains(edge)) continue
                 seen += edge
                 out += edge
@@ -191,7 +279,7 @@ object CatalogPruner {
             .map { it.lowercase() }
             .filter { it.length > 1 }
 
-    /** Word-level scoring beats raw substring: a term matching a whole word in a name ranks above an incidental substring, cutting false positives on large schemas. */
+    /** Word-level scoring: a term matching a whole word in a name ranks above an incidental substring. */
     private fun scoreTable(t: TableInfo, qTerms: List<String>): Int {
         val name = t.name.lowercase()
         val nameTokens = tokenizeIdentifier(t.name).toSet()
@@ -212,16 +300,62 @@ object CatalogPruner {
         return score
     }
 
+    /**
+     * Keeps the columns a question is most likely to need when one table alone blows the budget:
+     * keys first, then question-term matches, then declaration order. The omitted count is stated.
+     */
+    private fun trimColumns(
+        t: TableInfo,
+        qTerms: Set<String>,
+        budgetTokens: Int,
+        referencedByOthers: Set<String> = emptySet(),
+    ): TableInfo {
+        if (estimateTableTokens(t) <= budgetTokens || t.columns.size <= MIN_COLUMNS_KEPT) return t
+        // Columns another table's FK points at must survive; the prompt and join graph still name them.
+        val keyNames = (t.primaryKey + t.foreignKeys.flatMap { it.columns } + referencedByOthers).toSet()
+        fun rank(name: String): Int = when {
+            keyNames.contains(name) || keyNames.contains(name.lowercase()) -> 0
+            qTerms.any { name.lowercase().contains(it) } -> 1
+            else -> 2
+        }
+        val ordered = t.columns.withIndex().sortedWith(compareBy({ rank(it.value.name) }, { it.index }))
+        // Indices, not names, so duplicate spreadsheet headers do not all survive together.
+        val keptIndices = mutableSetOf<Int>()
+        var used = estimateTableTokens(t.copy(columns = emptyList()))
+        for ((index, c) in ordered) {
+            val cost = ceil(columnChars(c) / 4.0).toInt()
+            if (keptIndices.size >= MIN_COLUMNS_KEPT && used + cost > budgetTokens) break
+            keptIndices += index
+            used += cost
+        }
+        val omitted = t.columns.size - keptIndices.size
+        if (omitted <= 0) return t
+        // The marker has to survive the comment cap, so the original comment yields room for it.
+        val marker = "[$omitted of ${t.columns.size} columns not shown]"
+        val room = COMMENT_CAP - marker.length - 1
+        val existing = sanitizeComment(t.comment) ?: ""
+        val prefix = if (existing.isNotEmpty() && room > 0) "${existing.take(room)} " else ""
+        return t.copy(
+            // Restore declaration order so the table still reads like the table.
+            columns = t.columns.filterIndexed { i, _ -> keptIndices.contains(i) },
+            comment = "$prefix$marker",
+        )
+    }
+
+    /** One column's rendered size. Shared with [trimColumns] so the trim loop and the estimator charge the same. */
+    private fun columnChars(c: ColumnInfo): Int {
+        var chars = c.name.length + c.dbType.length + (c.comment?.length ?: 0) + 24
+        val values = if (c.enumValues.isNotEmpty()) c.enumValues else c.sampledValues
+        for (v in values.take(VALUE_SAMPLE_MAX_DISTINCT)) chars += minOf(v.length, VALUE_SAMPLE_CAP) + 1
+        return chars
+    }
+
     private fun estimateTableTokens(t: TableInfo): Int {
         var chars = t.name.length + (t.schema?.length ?: 0) + (t.comment?.length ?: 0) + 24
-        for (c in t.columns) {
-            chars += c.name.length + c.dbType.length + (c.comment?.length ?: 0) + 24
-            // Sample/enum values are capped in formatCatalogForPrompt too; must be counted
-            // here so a column with many values isn't budgeted as if it had none.
-            val values = if (c.enumValues.isNotEmpty()) c.enumValues else c.sampledValues
-            for (v in values.take(VALUE_SAMPLE_MAX_DISTINCT)) chars += minOf(v.length, VALUE_SAMPLE_CAP) + 1
-        }
+        for (c in t.columns) chars += columnChars(c)
         chars += t.foreignKeys.size * 40
+        // Indexes are rendered too (capped at MAX_INDEXES_PER_TABLE), so budget for them.
+        for (i in t.indexes.take(MAX_INDEXES_PER_TABLE)) chars += i.name.length + i.columns.joinToString(",").length + 12
         return ceil(chars / 4.0).toInt()
     }
 
@@ -230,8 +364,7 @@ object CatalogPruner {
         val maxSchemaTokens = settings.maxSchemaTokens
         val all = catalog.tables.filter { it.partitionOf == null }
 
-        // Skip formatting (real work on large schemas) when the table count alone already
-        // means pruning is needed; this branch only fires when it would have returned anyway.
+        // Format only when the table count already fits; formatting a large schema is real work.
         if (all.size <= maxTables) {
             val fullText = formatCatalogForPrompt(catalog.copy(tables = all))
             if (estimateTokens(fullText) <= maxSchemaTokens) {
@@ -292,12 +425,31 @@ object CatalogPruner {
             used += cost
         }
 
-        val prunedCatalog = catalog.copy(tables = kept)
+        // Column trimming is a last resort, so it runs only when the rendered schema is still over budget.
+        var finalTables: List<TableInfo> = kept
+        var text = formatCatalogForPrompt(catalog.copy(tables = kept))
+        if (estimateTokens(text) > maxSchemaTokens) {
+            val perTableBudgetTokens = maxOf(200, maxSchemaTokens / maxOf(1, kept.size))
+            // Built from EVERY table: a referencing table may have been pruned, yet the join graph still names the column.
+            val referenced = HashMap<String, MutableSet<String>>()
+            for (t in all) {
+                for (fk in t.foreignKeys) {
+                    val set = referenced.getOrPut(fk.refTable.lowercase()) { mutableSetOf() }
+                    for (c in fk.refColumns) set += c.lowercase()
+                }
+            }
+            finalTables = kept.map {
+                trimColumns(it, qTerms.toSet(), perTableBudgetTokens, referenced[it.name.lowercase()] ?: emptySet())
+            }
+            text = formatCatalogForPrompt(catalog.copy(tables = finalTables))
+        }
+        val prunedCatalog = catalog.copy(tables = finalTables)
         return PruneResult(
             catalog = prunedCatalog,
-            schemaText = formatCatalogForPrompt(prunedCatalog),
+            schemaText = text,
             dropped = all.size - kept.size,
-            strategy = if (kept.size < all.size) Strategy.TERM_MATCH_FK_CLOSURE else Strategy.BUDGET_TRIM,
+            // Column trimming is the more severe outcome and the one worth reporting.
+            strategy = if (finalTables.indices.any { finalTables[it] !== kept[it] }) Strategy.BUDGET_TRIM else Strategy.TERM_MATCH_FK_CLOSURE,
         )
     }
 }

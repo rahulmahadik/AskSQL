@@ -8,9 +8,14 @@ import com.rahulmahadik.asksql.ide.model.CellValue
 import com.rahulmahadik.asksql.ide.model.ColumnKind
 import com.rahulmahadik.asksql.ide.model.EngineKind
 import com.rahulmahadik.asksql.ide.model.ResultColumn
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.job
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -29,12 +34,10 @@ object JdbcExecutor {
 
     private const val HEX_PREVIEW_BYTES = 32
 
-    // Serializes per-connection query work against ConnectionRegistry's concurrent-lease sharing where
-    // the driver needs it: Oracle's arm-then-query pair, and DuckDB (its connection rejects concurrent
-    // statements). Unbounded but tiny: one entry per Connection ever seen, not per query.
+    // Serializes per-connection work where the driver needs it: Oracle's arm-then-query pair, and DuckDB, which rejects concurrent statements.
     private val perConnectionLocks = ConcurrentHashMap<Connection, Mutex>()
 
-    /** Called by [ConnectionRegistry] right before it closes a [Connection] for good; without this, every connection this plugin ever opened pins a tiny (but permanent) entry here for the life of the IDE process. */
+    /** Drops [connection]'s lock entry; called by [ConnectionRegistry] right before it closes the connection for good. */
     fun forgetConnection(connection: Connection) {
         perConnectionLocks.remove(connection)
     }
@@ -46,16 +49,11 @@ object JdbcExecutor {
     suspend fun execute(connection: Connection, sql: String, maxRows: Int, timeoutMs: Long, engine: EngineKind): AskSqlResultSet =
         withContext(Dispatchers.IO) {
           suspend fun onStatement(): AskSqlResultSet =
-            // .use{} (not a manual close-on-error-only): a Statement left open after a successful
-            // query leaks a server-side cursor, and on Oracle that exhausts open_cursors after a
-            // few hundred queries.
+            // A Statement left open leaks a server-side cursor; on Oracle that exhausts open_cursors.
             connection.createStatement().use { statement ->
-                registerCancellation(statement)
                 statement.queryTimeout = (timeoutMs / 1000).toInt().coerceAtLeast(1)
-                // Fetch one extra row so truncation can be detected without a separate COUNT(*);
-                // the (n+1)th row is discarded, never shown. Oracle's OCI prefetch buffers the
-                // whole batch client-side per column, so a wide-column result set gets a tighter
-                // ceiling than other engines to bound worst-case client memory.
+                // Fetches one extra row, so truncation is detectable without a separate COUNT(*).
+                // Oracle's OCI prefetch buffers the whole batch client-side per column, hence its tighter ceiling.
                 val fetchSizeCeiling = if (engine == EngineKind.ORACLE) 1_000 else 10_000
                 statement.fetchSize = (maxRows + 1).coerceAtMost(fetchSizeCeiling)
 
@@ -66,6 +64,8 @@ object JdbcExecutor {
                         if (engine == EngineKind.ORACLE) statement.execute("SET TRANSACTION READ ONLY")
                         statement.executeQuery(sql)
                     } catch (e: SQLException) {
+                        // A statement cancelled by Stop fails with a driver error; the cancellation is the outcome to report.
+                        currentCoroutineContext().ensureActive()
                         throw AskSqlException(AskSqlErrorCode.DB_QUERY_ERROR, detail = e.message, cause = e)
                     }
                     return rs.use { resultSet ->
@@ -92,27 +92,26 @@ object JdbcExecutor {
                     }
                 }
 
-                if (engine == EngineKind.ORACLE) {
-                    // Oracle's read-only transaction covers only itself, not the session, so it's
-                    // re-armed before every query with explicit transaction control (autocommit
-                    // would leave it ambiguous whether the arm and the query share one transaction),
-                    // toggled locally per call so other code sharing this connection is unaffected.
-                    withConnectionLock(connection) {
-                        val hadAutoCommit = connection.autoCommit
-                        connection.autoCommit = false
-                        try {
-                            runAndBuild()
-                        } finally {
+                withStatementCancellation(statement) {
+                    if (engine == EngineKind.ORACLE) {
+                        // Oracle's read-only transaction covers only itself, not the session, so it is re-armed per query with autocommit off.
+                        withConnectionLock(connection) {
+                            val hadAutoCommit = connection.autoCommit
+                            connection.autoCommit = false
                             try {
-                                connection.commit()
-                            } catch (e: SQLException) {
-                                /* best-effort; the next arm fails loudly if the transaction truly didn't end */
+                                runAndBuild()
+                            } finally {
+                                try {
+                                    connection.commit()
+                                } catch (e: SQLException) {
+                                    /* best-effort */
+                                }
+                                connection.autoCommit = hadAutoCommit
                             }
-                            connection.autoCommit = hadAutoCommit
                         }
+                    } else {
+                        runAndBuild()
                     }
-                } else {
-                    runAndBuild()
                 }
             }
 
@@ -124,23 +123,27 @@ object JdbcExecutor {
             }
         }
 
-    /**
-     * Cancelling the calling coroutine invokes [Statement.cancel], which most drivers honor by
-     * aborting the query server-side rather than merely abandoning the client-side wait.
-     */
-    private suspend fun registerCancellation(statement: Statement) {
-        val job = currentCoroutineContext().job
-        job.invokeOnCompletion { cause ->
-            if (cause is kotlinx.coroutines.CancellationException) {
-                try { statement.cancel() } catch (_: SQLException) { /* best-effort */ }
+    /** Runs [block] alongside a watcher that calls [Statement.cancel] from its own thread as soon as the caller's coroutine is cancelled. */
+    private suspend fun <T> withStatementCancellation(statement: Statement, block: suspend () -> T): T = coroutineScope {
+        val query = coroutineContext.job
+        // Starts undispatched, so the watcher is already awaiting cancellation before the blocking call below begins.
+        val watcher = launch(start = CoroutineStart.UNDISPATCHED) {
+            try {
+                awaitCancellation()
+            } finally {
+                if (query.isCancelled) {
+                    try { statement.cancel() } catch (e: Exception) { /* best-effort */ }
+                }
             }
+        }
+        try {
+            block()
+        } finally {
+            watcher.cancel()
         }
     }
 
-    // Types.BIT covers both a single-bit flag (Postgres bit(1), MySQL BIT(1)) and a multi-bit
-    // string (bit(8), BIT(8)); the JDBC type code alone can't tell them apart. getBoolean() throws
-    // on Postgres's multi-bit form and silently collapses MySQL's to true/false, losing the value.
-    // Precision is the only signal that distinguishes them.
+    // Types.BIT covers both a single-bit flag (bit(1)/BIT(1)) and a multi-bit string (bit(8)/BIT(8)); precision is the only signal that tells them apart.
     private fun isSingleBit(meta: ResultSetMetaData, index: Int): Boolean =
         try { meta.getPrecision(index) <= 1 } catch (e: Exception) { true }
 
@@ -180,8 +183,7 @@ object JdbcExecutor {
                 val value = rs.getBoolean(index)
                 if (rs.wasNull()) CellValue.Null else CellValue.Boolean(value)
             } else {
-                // A multi-bit value (e.g. bit(8)/BIT(8)): getBoolean() either throws (Postgres) or
-                // silently collapses it to true/false (MySQL), losing the bit pattern; read as text.
+                // A multi-bit value: getBoolean() throws (Postgres) or collapses it to true/false (MySQL), so it is read as text.
                 val text = rs.getString(index)
                 if (rs.wasNull() || text == null) CellValue.Null else CellValue.Text(text)
             }
@@ -200,10 +202,7 @@ object JdbcExecutor {
                 }
             }
             else -> {
-                // Checking only `text == null` (not also wasNull()) is correct here: MariaDB's driver
-                // returns the correct non-null string for a MySQL zero-value DATETIME
-                // ("0000-00-00 00:00:00") from getString(), but wasNull() falsely reports true right
-                // after, so trusting wasNull() would render a real value as a misleading "NULL".
+                // wasNull() is not consulted: MariaDB's driver reports true after a valid getString() of a MySQL zero-value DATETIME ("0000-00-00 00:00:00").
                 val text = rs.getString(index)
                 if (text == null) CellValue.Null else CellValue.Text(text)
             }

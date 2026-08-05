@@ -115,5 +115,24 @@ class PromptParityTest {
         for (e in obj.getAsJsonObject("isOffTopic").entrySet()) {
             assertEquals("isOffTopic(${e.key})", e.value.asBoolean, Scope.isOffTopic(e.key))
         }
+
+        // Every routing decision, not just the two scope classifiers. This is the check that was
+        // missing while the Kotlin advice and metadata vocabularies sat months behind core's.
+        for (e in obj.getAsJsonObject("routing").entrySet()) {
+            val q = e.key
+            val want = e.value.asJsonObject
+            val got = mapOf(
+                "metadata" to EnginePipeline.isMetadataQuestion(q),
+                "advice" to EnginePipeline.isSchemaAdviceQuestion(q),
+                "overview" to EnginePipeline.isDatabaseOverviewQuestion(q),
+                "proposal" to EnginePipeline.isSchemaProposalQuestion(q),
+                "write" to EnginePipeline.isWriteRequest(q),
+                "capability" to Scope.isCapabilityQuestion(q),
+                "injection" to Scope.isPromptInjection(q),
+            )
+            for ((name, actual) in got) {
+                assertEquals("$name(\"$q\")", want.get(name).asBoolean, actual)
+            }
+        }
     }
 }

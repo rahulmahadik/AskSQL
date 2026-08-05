@@ -2,8 +2,7 @@
  * @asksql/react - UI for AskSQL.
  *
  * Components: <AskSqlChat/> (full-page) and <AskSqlBubble/> (floating
- * chat-head). Headless: useAskSql. Transports: HttpTransport (sidecar) and
- * LocalTransport (in-browser engine).
+ * chat-head). Headless: useAskSql. Transports: HttpTransport, LocalTransport.
  */
 
 export { AskSqlChat, AskSqlBubble, SqlBlock, ResultTable } from './components.js';
@@ -12,7 +11,14 @@ export { SchemaBrowser, type SchemaBrowserProps } from './SchemaBrowser.js';
 export { ResultChart, isChartable } from './ResultChart.js';
 export { inferChart, type ChartSpec, type ChartKind, type ChartSeries } from './chart.js';
 export { SavedQueryStore, useSavedQueries, type SavedQuery, type KeyValueStore } from './saved.js';
-export { useAskSql, formatPlan, type Turn, type TurnPhase, type UseAskSqlResult, type UseAskSqlOptions } from './useAskSql.js';
+export {
+  useAskSql,
+  formatPlan,
+  type Turn,
+  type TurnPhase,
+  type UseAskSqlResult,
+  type UseAskSqlOptions,
+} from './useAskSql.js';
 export {
   HttpTransport,
   LocalTransport,

@@ -15,6 +15,7 @@ import com.rahulmahadik.asksql.ide.model.EngineKind
 import com.rahulmahadik.asksql.ide.test.IntegrationTest
 import com.rahulmahadik.asksql.ide.test.fakeProject
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.test.runTest
@@ -42,6 +43,12 @@ class MongoEnginePipelineTest {
     private lateinit var container: MongoDBContainer
     private val databaseName = "asksql_pipeline_test"
 
+    /**
+     * Every registry's scope, cancelled between tests. Left running, a connect attempt outlives
+     * the container @After stopped and fails an unrelated later test with a connection timeout.
+     */
+    private val scopes = mutableListOf<CoroutineScope>()
+
     @Before
     fun startContainer() {
         container = MongoDBContainer("mongo:7.0")
@@ -54,6 +61,8 @@ class MongoEnginePipelineTest {
 
     @After
     fun stopContainer() {
+        scopes.forEach { it.cancel() }
+        scopes.clear()
         container.stop()
     }
 
@@ -63,7 +72,9 @@ class MongoEnginePipelineTest {
     )
 
     private fun pipeline(): Pair<MongoEnginePipeline, InMemoryHistoryStore> {
-        val registry = MongoClientRegistry(fakeProject(), CoroutineScope(SupervisorJob() + Dispatchers.Default))
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        scopes += scope
+        val registry = MongoClientRegistry(fakeProject(), scope)
         val history = InMemoryHistoryStore()
         return MongoEnginePipeline(registry, history) to history
     }
@@ -127,6 +138,8 @@ class MongoEnginePipelineTest {
 
     // ---- MAX_REPAIRS exhaustion on a guard rejection ----
 
+    // The question must read as a data question. One that asks for a write is refused before any
+    // model call, so it would never reach the guard-repair loop this test is about.
     @Test
     fun `ask throws GUARD_BLOCKED after MAX_REPAIRS repeated guard rejections`() = runTest {
         val (pipeline, history) = pipeline()
@@ -134,14 +147,30 @@ class MongoEnginePipelineTest {
 
         var thrownCode: AskSqlErrorCode? = null
         try {
-            pipeline.ask(question = "delete everything", descriptor = descriptor(), password = null, llmClient = llm)
+            pipeline.ask(question = "orders by status", descriptor = descriptor(), password = null, llmClient = llm)
             fail("expected GUARD_BLOCKED after repeated guard rejections")
         } catch (e: AskSqlException) {
             thrownCode = e.code
         }
         assertEquals(AskSqlErrorCode.GUARD_BLOCKED, thrownCode)
         assertEquals(3, llm.callCount) // attempts 0, 1, 2 (MAX_REPAIRS = 2)
-        assertTrue(history.recent().any { it.question == "delete everything" && it.status == HistoryStatus.BLOCKED })
+        assertTrue(history.recent().any { it.question == "orders by status" && it.status == HistoryStatus.BLOCKED })
+    }
+
+    @Test
+    fun `ask refuses a write request before calling the model`() = runTest {
+        val (pipeline, _) = pipeline()
+        val llm = FakeLlmClient(listOf(fence("""[{"${'$'}match": {}}]""")))
+
+        var thrown: AskSqlException? = null
+        try {
+            pipeline.ask(question = "delete everything", descriptor = descriptor(), password = null, llmClient = llm)
+            fail("expected a write request to be routed to the prose path")
+        } catch (e: AskSqlException) {
+            thrown = e
+        }
+        assertEquals(AskSqlErrorCode.LLM_CANNOT_ANSWER, thrown!!.code)
+        assertEquals("the model must not be called for a write request", 0, llm.callCount)
     }
 
     // ---- IMPOSSIBLE sentinel ----

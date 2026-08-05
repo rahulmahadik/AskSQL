@@ -101,7 +101,17 @@ otherwise; see [`PRIVACY.md`](PRIVACY.md) for the full breakdown.
 
 ![Connections: a data-file connection plus the database form with per-engine defaults](images/connections.png)
 
+## Known limitations
+
+- Edge has an open, Microsoft-acknowledged bug where the side panel reloads when you
+  switch tabs (microsoft/MicrosoftEdge-Extensions#222). Your connections and loaded
+  files survive it: they are held in OPFS and restored when the panel comes back.
+
 ## Development
+
+`chrome.permissions.request()` cannot be driven by headless browser automation (there is no CDP
+hook to dismiss the native prompt), so the automated suite stops short of a full live round-trip
+for a sidecar connection.
 
 ```bash
 pnpm install
@@ -133,13 +143,3 @@ node test/e2e-smoke.mjs <path-to-chrome-for-testing>
 `test/e2e-smoke.mjs` needs **Chrome for Testing** specifically, not branded
 Chrome/Edge - branded Chrome removed `--load-extension` support in Chrome 137.
 Get one with `pnpm dlx @puppeteer/browsers install chrome@stable`.
-
-## Known limitations
-
-- Edge has an open, Microsoft-acknowledged bug where the side panel reloads on tab
-  switch (microsoft/MicrosoftEdge-Extensions#222). The OPFS-backed persistence above
-  is the mitigation, verified in Chrome; it has not yet been verified against a real
-  Edge install.
-- `chrome.permissions.request()` cannot be driven by headless browser automation
-  (there's no CDP hook to dismiss the native prompt), which is why the automated
-  suite stops short of a full live round-trip for a sidecar connection.

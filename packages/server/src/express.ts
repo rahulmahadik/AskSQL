@@ -1,10 +1,7 @@
 /**
  * Express adapter - mount the AskSQL sidecar in an existing app:
- *
- * app.use('/asksql', asksqlMiddleware({ connectors, engine, auth }))
- *
- * Streams /chat as SSE with heartbeats + no-buffering headers so it
- * survives reverse proxies.
+ *   app.use('/asksql', asksqlMiddleware({ connectors, engine, auth }))
+ * Streams /chat as SSE with heartbeats and no-buffering headers for reverse proxies.
  */
 
 import { AskSqlError } from '@asksql/core';
@@ -39,9 +36,8 @@ export type ExpressMiddleware = (req: ExpressLikeReq, res: ExpressLikeRes, next:
 
 export interface ExpressAdapterOptions {
   /**
-   * CORS for cross-origin frontends. Pass `true` to reflect the
-   * request Origin, or a fixed origin / list of allowed origins. Omit for
-   * same-origin deployments (no CORS headers emitted).
+   * CORS for cross-origin frontends: `true` reflects the request Origin, or pass a fixed
+   * origin / list of allowed origins. Omit for same-origin deployments (no CORS headers).
    */
   readonly cors?: boolean | string | readonly string[];
   /** Header the client sends auth in; echoed in Allow-Headers. Default common set. */
@@ -55,10 +51,7 @@ export function asksqlMiddleware(config: AskSqlServerConfig, adapter: ExpressAda
     if (adapter.cors === undefined || adapter.cors === false) return;
     const origin = String(req.headers['origin'] ?? '');
     let allow: string | null = null;
-    // `credentialed` is true ONLY when the request origin matched an explicit
-    // allowlist. Never combine a reflected/`*` origin with Allow-Credentials -
-    // that lets any site make credentialed cross-origin calls (a classic CORS
-    // misconfig). `cors: true` reflects the origin but WITHOUT credentials.
+    // Credentialed only when the origin matched an explicit allowlist; a reflected or `*` origin never is.
     let credentialed = false;
     if (adapter.cors === true) {
       allow = origin || '*';
@@ -93,10 +86,8 @@ export function asksqlMiddleware(config: AskSqlServerConfig, adapter: ExpressAda
         res.end();
         return;
       }
-      // CSRF: a cross-origin POST with text/plain (or no type) is a CORS "simple
-      // request" - no preflight - so it would reach /chat, /execute and /explain
-      // and run, using the caller's cookies. Requiring application/json forces a
-      // preflight, which our CORS policy then decides on.
+      // CSRF: requiring application/json forces a preflight that a cross-origin "simple request"
+      // (text/plain or no content type) would otherwise skip.
       if (req.method === 'POST') {
         const ct = String(req.headers['content-type'] ?? '')
           .split(';')[0]!
@@ -111,9 +102,7 @@ export function asksqlMiddleware(config: AskSqlServerConfig, adapter: ExpressAda
           return;
         }
       }
-      // The client hanging up is the only cancellation an HTTP server gets. Keyed on the RESPONSE
-      // closing before it finished: the request stream also emits 'close' on a normal read, which
-      // would abort every call the moment its body was parsed.
+      // Cancel when the RESPONSE closes early; the request stream also emits 'close' on a normal body read.
       const aborted = new AbortController();
       res.on?.('close', () => {
         if (!res.writableEnded) aborted.abort();
@@ -171,8 +160,8 @@ function toServerRequest(req: ExpressLikeReq, maxBodyBytes: number, signal?: Abo
     headers,
     signal,
     json: async () => {
-      // Prefer body-parser output when present; else read the raw stream.
-      // An upstream express.json() bypasses readRawJson's size guard; re-check its serialized size.
+      // Prefer body-parser output when present, re-checking its size: an upstream
+      // express.json() never passes through readRawJson's guard.
       if (req.body !== undefined && req.body !== null && req.body !== '') {
         enforceBodyCap(req.body, maxBodyBytes);
         return req.body;
@@ -184,7 +173,7 @@ function toServerRequest(req: ExpressLikeReq, maxBodyBytes: number, signal?: Abo
 
 /** Reject a pre-parsed (upstream body-parser) body whose serialized size exceeds the cap. */
 function enforceBodyCap(body: unknown, maxBytes: number): void {
-  const raw = typeof body === 'string' ? body : JSON.stringify(body) ?? '';
+  const raw = typeof body === 'string' ? body : (JSON.stringify(body) ?? '');
   if (Buffer.byteLength(raw, 'utf8') > maxBytes) {
     throw new AskSqlError('INVALID_INPUT', {
       userMessage: 'The request body is too large.',

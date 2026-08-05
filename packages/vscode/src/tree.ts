@@ -1,9 +1,8 @@
 /**
  * Native schema explorer: Connections > tables/views > columns.
  *
- * A real TreeView (not a webview) so it themes, keyboard-navigates, and reads to
- * a screen reader like every other VS Code panel. It also doubles as the honest
- * answer to "what can I even ask about?" - the same catalog the model is given.
+ * A real TreeView (not a webview) so it themes, keyboard-navigates, and reads to a
+ * screen reader. It shows the same catalog the model is given.
  */
 
 import * as vscode from 'vscode';
@@ -54,14 +53,7 @@ export class SchemaTreeProvider implements vscode.TreeDataProvider<Node>, vscode
 
   constructor(private readonly engines: EngineManager) {}
 
-  /**
-   * Drop the cached schema and redraw.
-   *
-   * The catalog is cached in EngineManager and NOWHERE else. A second cache here
-   * is what made "Refresh Schema" a no-op: this class cleared its own copy, then
-   * read straight back through to EngineManager's still-stale one, so a new
-   * table never appeared until the window was reloaded.
-   */
+  /** Drop the cached schema and redraw. The catalog is cached in EngineManager and nowhere else. */
   refresh(connectionId?: string): void {
     this.engines.invalidateCatalogs(connectionId);
     this._onDidChange.fire(undefined);
@@ -91,12 +83,9 @@ export class SchemaTreeProvider implements vscode.TreeDataProvider<Node>, vscode
     }
     if (node.kind === 'connection') {
       const item = new vscode.TreeItem(node.conn.name, vscode.TreeItemCollapsibleState.Collapsed);
-      // Ids must be stable and unique: VS Code falls back to the LABEL, and two
-      // connections can share one (the wizard defaults the name to the engine).
+      // Ids must be stable and unique: VS Code falls back to the LABEL, which two connections can share.
       item.id = `conn:${node.conn.id}`;
-      // Show the actual database/file being queried, not the settings scope - that
-      // is what tells two same-engine connections apart. Engine leads, scope is in
-      // the tooltip.
+      // Show the actual database/file being queried, not the settings scope, which is in the tooltip.
       const target =
         node.conn.engine === 'sqlite'
           ? ((node.conn.file ?? '').split(/[\\/]/).pop() ?? '')
@@ -122,13 +111,11 @@ export class SchemaTreeProvider implements vscode.TreeDataProvider<Node>, vscode
       const t = node.table;
       const item = new vscode.TreeItem(t.name, vscode.TreeItemCollapsibleState.Collapsed);
       item.id = `table:${node.connId}:${tableKeyOf(t)}`;
-      // Inside a "Tables"/"Views" group the kind is implied, so spend the
-      // description on what actually differs: the schema and the column count.
+      // Inside a "Tables"/"Views" group the kind is implied, so the description carries schema and columns.
       item.description = `${t.schema ? `${t.schema} · ` : ''}${t.columns.length} col${t.columns.length === 1 ? '' : 's'}`;
       item.iconPath = new vscode.ThemeIcon(ICON[t.kind] ?? 'table');
       item.contextValue = 'asksql.table';
-      // Names come from the connected database (untrusted); appendText escapes
-      // markdown so a crafted table/column name cannot inject a link or an image beacon.
+      // Names come from the connected database (untrusted); appendText escapes markdown.
       const tip = new vscode.MarkdownString();
       tip.appendText(`${t.schema ? `${t.schema}.` : ''}${t.name} (${t.kind.replace('_', ' ')})`);
       for (const c of t.columns) tip.appendText(`\n• ${c.name}  ${c.dbType}${c.nullable ? '' : ' not null'}`);
@@ -150,13 +137,10 @@ export class SchemaTreeProvider implements vscode.TreeDataProvider<Node>, vscode
 
   async getChildren(node?: Node): Promise<Node[]> {
     if (!node) {
-      // Return nothing when unconfigured: an empty view lets VS Code render the
-      // `viewsWelcome` contribution, which gives the user real buttons instead
-      // of a dead-end "nothing here" row.
+      // Return nothing when unconfigured: an empty view lets VS Code render the `viewsWelcome` contribution.
       const conns = connectionConfigs();
       if (conns.length === 0) return [];
-      // Lead with the active AI so it is visible above the databases; the welcome
-      // still handles the first-run (no-connection) case above.
+      // Lead with the active AI so it is visible above the databases.
       return [{ kind: 'ai' }, ...conns.map((conn) => ({ kind: 'connection' as const, conn }))];
     }
 
@@ -164,17 +148,14 @@ export class SchemaTreeProvider implements vscode.TreeDataProvider<Node>, vscode
       try {
         const cat = await this.engines.catalogFor(node.conn.id);
         if (cat.tables.length === 0) return [{ kind: 'message', label: 'No tables found' }];
-        // Group by kind. A flat list mixes a materialized view in among the
-        // tables, and the two are not interchangeable when you are deciding
-        // what to ask about.
+        // Group by kind: a flat list mixes materialized views in among the tables.
         return GROUPS.flatMap((group) => {
           const tables = cat.tables.filter((t) => t.kind === group.kind);
           // No empty groups: "Views 0" is noise, not information.
           return tables.length ? [{ kind: 'group' as const, connId: node.conn.id, group, tables }] : [];
         });
       } catch (err) {
-        // Say what to do, not what threw: a driver message here is unreadable in
-        // a tree row and can carry the host and user name. Detail goes to the log.
+        // Say what to do, not what threw: a driver message can carry the host and user name.
         log.error(`could not read the schema of "${node.conn.id}"`, err);
         return [{ kind: 'message', label: userMessage(err) }];
       }

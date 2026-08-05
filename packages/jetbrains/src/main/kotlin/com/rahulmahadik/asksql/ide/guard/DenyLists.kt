@@ -42,16 +42,13 @@ object DenyLists {
         "pg_stat_statements_reset", "pg_import_system_collations",
         "gin_clean_pending_list", "brin_summarize_new_values", "brin_desummarize_range",
         "brin_summarize_range", "pgstattuple", "pgstatindex", "pgstatginindex",
-        // A function that takes SQL (or a whole table/schema/db) as a STRING and executes it:
-        // an AST check on the outer statement cannot see inside a string literal, so these must
-        // be denied by name regardless of arguments.
+        // Take SQL (or a whole table/schema/db) as a STRING and execute it; an AST check cannot see inside a string literal.
         "query_to_xml", "query_to_xmlschema", "query_to_xml_and_xmlschema",
         "table_to_xml", "table_to_xmlschema", "table_to_xml_and_xmlschema",
         "cursor_to_xml", "cursor_to_xmlschema",
         "schema_to_xml", "schema_to_xmlschema", "schema_to_xml_and_xmlschema",
         "database_to_xml", "database_to_xmlschema", "database_to_xml_and_xmlschema",
-        // Sequence mutation: read-only on the other three engines via their
-        // read-only session, but DuckDB has none, so denied universally.
+        // Sequence mutation, denied on every dialect - DuckDB has no read-only session to block it.
         "nextval", "setval",
     )
 
@@ -132,10 +129,7 @@ object DenyLists {
     /** Prefix analogue of [UNIVERSAL_DENY]: never real user functions, so denied on every dialect. DuckDB's read_/scan_ stay DuckDB-only. */
     private val UNIVERSAL_DENY_PREFIXES: List<String> = PG_DENY_PREFIXES + ORACLE_DENY_PREFIXES
 
-    /**
-     * Defense in depth: every known-dangerous function is blocked on every dialect, not only its
-     * native one; "dangerous in A, allowed in B" is exactly the gap a cross-dialect fuzz pass finds.
-     */
+    /** Defense in depth: every known-dangerous function is blocked on every dialect, not only its native one. */
     fun denySetFor(engine: EngineKind, policy: com.rahulmahadik.asksql.ide.model.GuardPolicy): Set<String> {
         val base = UNIVERSAL_DENY.toMutableSet()
         if (engine == EngineKind.DUCKDB && !policy.allowFileFunctions) {

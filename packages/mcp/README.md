@@ -1,17 +1,22 @@
 # @asksql/mcp
 
-Model Context Protocol tools for [AskSQL](https://github.com/rahulmahadik/AskSQL). Exposes four
+Model Context Protocol tools for [AskSQL](https://github.com/rahulmahadik/AskSQL). Exposes five
 tools to any MCP client (Claude Desktop, Claude Code, IDE agents):
 
 | Tool | What it does |
 |---|---|
 | `asksql_list_connections` | The databases you configured, with engine and name |
 | `asksql_schema` | The schema catalog for one connection: tables, columns, keys |
-| `asksql_query` | Turns a question into SQL and returns it — **never executes it** |
+| `asksql_query` | Turns a question into SQL and returns it (**never executes it**) |
+| `asksql_explain_schema` | Answers a question about the schema itself in prose (how tables relate, what to index); runs nothing |
 | `asksql_run` | Executes an approved read-only SELECT and returns rows |
 
 The same AST guard applies to every call, so an agent can never write: a `DELETE` through
 `asksql_run` comes back `GUARD_BLOCKED`, and so does a write smuggled in as a second statement.
+
+Every tool takes an optional `connectionId`; `asksql_run` also takes `maxRows`. The engine passed
+in is a `createAskSql` engine, so this covers PostgreSQL, MySQL, SQLite, DuckDB and Oracle.
+MongoDB uses the separate `createMongoAskSql` engine and is not exposed over MCP.
 
 ```bash
 npm i @asksql/core @asksql/mcp @modelcontextprotocol/sdk
@@ -20,8 +25,7 @@ npm i @asksql/core @asksql/mcp @modelcontextprotocol/sdk
 ## Setting it up in an MCP host
 
 An MCP host launches your server as a subprocess and talks to it over stdin/stdout, so you
-write one small file that says which databases to expose and which model to use. There is no
-`asksql-mcp` binary on purpose — connection details and credentials are yours to control.
+write one small file that says which databases to expose and which model to use. There is no `asksql-mcp` binary on purpose: connection details and credentials are yours to control.
 
 Save this as `asksql-mcp-server.mjs` anywhere, and install the connector for your database
 alongside the packages above (here, `@asksql/postgres` and `pg`):
@@ -45,7 +49,7 @@ const engine = createAskSql({
 await startAskSqlMcpServer(engine); // speaks MCP over stdin/stdout
 ```
 
-Then register it. **Claude Desktop** — edit `claude_desktop_config.json`, which lives at
+Then register it. **Claude Desktop** - edit `claude_desktop_config.json`, which lives at
 `~/Library/Application Support/Claude/` on macOS and `%APPDATA%\Claude\` on Windows, and
 restart the app:
 
@@ -61,7 +65,7 @@ restart the app:
 }
 ```
 
-**Claude Code** — one command instead of editing a file:
+**Claude Code** - one command instead of editing a file:
 
 ```bash
 claude mcp add asksql -- node /absolute/path/to/asksql-mcp-server.mjs
@@ -74,8 +78,7 @@ log to stderr (`console.error`) if you need to debug, never `console.log`.
 ## Checking it works
 
 Ask the assistant to list your connections. It should call `asksql_list_connections` and come
-back with the `id` and `name` you configured. If nothing appears, the server failed to start —
-run `node /absolute/path/to/asksql-mcp-server.mjs` in a terminal and look for the error. It
+back with the `id` and `name` you configured. If nothing appears, the server failed to start - run `node /absolute/path/to/asksql-mcp-server.mjs` in a terminal and look for the error. It
 should sit there silently waiting for protocol input; anything else is the problem.
 
 To confirm the read-only guarantee for yourself, ask it to delete a row. The statement comes

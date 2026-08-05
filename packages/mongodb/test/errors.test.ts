@@ -69,7 +69,12 @@ describe('connect error mapping', () => {
   it('an Atlas (srv / *.mongodb.net) connection failure points at Network Access (IP allow-list)', async () => {
     // A TLS handshake alert - exactly what Atlas returns for a non-allow-listed IP.
     state.behavior = { ping: () => Promise.reject(new Error('tlsv1 alert internal error')) };
-    const atlas = new MongodbConnector({ id: 'm', name: 'm', connectionString: 'mongodb+srv://u:p@cluster0.abc12.mongodb.net', database: 'appdb' });
+    const atlas = new MongodbConnector({
+      id: 'm',
+      name: 'm',
+      connectionString: 'mongodb+srv://u:p@cluster0.abc12.mongodb.net',
+      database: 'appdb',
+    });
     await expect(atlas.connect()).rejects.toMatchObject({
       code: 'DB_UNREACHABLE',
       userMessage: expect.stringMatching(/Network Access/i),

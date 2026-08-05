@@ -3,22 +3,14 @@
  * Robust to fenced blocks, prose wrapping, and multiple fences.
  */
 
-// Any language tag is consumed (```sql, ```postgresql, ```oracle, ```plsql, ...); the
-// candidate is still gated by SQL_START_RE, so a non-SQL fence can't slip through.
+// Any language tag is consumed; the candidate is still gated by SQL_START_RE.
 const FENCE_RE = /```[A-Za-z0-9+_-]*\s*\n?([\s\S]*?)```/gu;
 
-/**
- * Any statement-shaped start - including write/DDL verbs. Extraction is
- * deliberately permissive so that a model replying with e.g. DELETE is
- * still captured and handed to the guard, which produces the authoritative
- * GUARD_BLOCKED verdict (a clear "not allowed") rather than a vague
- * "no SQL found". The guard, not the extractor, decides what may run.
- */
+/** Any statement-shaped start, including write/DDL verbs: the guard, not the extractor, decides what may run. */
 const SQL_START_RE =
   /^(select|with|explain|show|describe|desc|pragma|insert|update|delete|drop|create|alter|truncate|merge|replace|call|grant|revoke|copy|values|table)\b/iu;
 
-/** Conservative set for inline extraction from prose - read verbs only, to
- * avoid grabbing English sentences that begin with "Update"/"Insert". */
+/** Conservative set for inline extraction from prose - read verbs only. */
 const INLINE_START_RE = /(?:^|\n)\s*((?:select|with|explain)\b[\s\S]*?)(?=\n\s*\n|$)/iu;
 
 export interface Extraction {
@@ -61,10 +53,7 @@ function truncateAtWordBoundary(text: string, max: number): string {
   return `${(lastSpace > max / 2 ? cut.slice(0, lastSpace) : cut).trimEnd()}…`;
 }
 
-/**
- * The prompt asks for "IMPOSSIBLE: <one-line reason>"; a noncompliant model rambles on, so only
- * the first line is the reason, the sentinel word is stripped, and stiff phrasing is humanized.
- */
+/** The first line after "IMPOSSIBLE:" is the reason; the sentinel is stripped and stiff phrasing humanized. */
 export function extractImpossible(text: string): string | null {
   const m = IMPOSSIBLE_SENTINEL.exec(text.trim());
   if (!m) return null;
@@ -105,7 +94,10 @@ export function extractSql(text: string): Extraction | null {
   return null;
 }
 
+/** A hedging "IMPOSSIBLE:" line. The query wins (see extractSql), so the hedge must not travel with it. */
+const SENTINEL_LINE = /^[^\S\n]*IMPOSSIBLE\b[^\n]*$/gimu;
+
 // Normalize whitespace; no length cap - the description stays complete.
 function tidy(explanation: string): string {
-  return explanation.replace(/\s+/gu, ' ').trim();
+  return explanation.replace(SENTINEL_LINE, ' ').replace(SENTINEL_WORD, '').replace(/\s+/gu, ' ').trim();
 }

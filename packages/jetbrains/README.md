@@ -10,36 +10,6 @@ AI database chat inside any JetBrains IDE (IntelliJ IDEA, DataGrip, PyCharm, Web
 GoLand, PhpStorm, Rider, CLion, RubyMine, RustRover, Android Studio): ask a question in
 plain language, review the generated SQL, approve it, and get results.
 
-## Compatibility
-
-AskSQL depends only on `com.intellij.modules.platform`, so it installs in **every
-IntelliJ-Platform IDE, 2025.2 and newer** (build 252+), including the Ultimate/paid and
-free editions alike. Fleet is not supported (it does not use the IntelliJ Platform plugin
-model).
-
-Every release is run through the JetBrains **Plugin Verifier** against 12 IDEs, all
-reporting **Compatible** with zero compatibility problems:
-
-| IDE | IDE |
-| --- | --- |
-| IntelliJ IDEA Community (2025.2 floor) | IntelliJ IDEA Community (2025.3) |
-| IntelliJ IDEA Ultimate | PyCharm Professional |
-| WebStorm | PhpStorm |
-| GoLand | Rider |
-| CLion | RubyMine |
-| RustRover | Android Studio |
-
-DataGrip is supported at runtime on the same platform APIs, but is not in the automated
-matrix: the Plugin Verifier's release-feed lookup for its product code is broken upstream,
-which is a tooling limitation rather than an incompatibility.
-
-This is a **standalone Gradle project**: it is deliberately invisible to the root
-pnpm workspace (no `package.json` anywhere under this directory tree; see
-`.github/workflows/jetbrains-ci.yml`'s `isolation-guard` job, which fails the build if
-that ever changes). Everything here is **pure Kotlin/JVM**: no Node.js runtime, no
-child process, no sidecar. See `../../internal/JETBRAINS-PLUGIN-PLAN.md` (repo-internal)
-for the full architecture rationale.
-
 ## Screenshots
 
 ![AskSQL tool window after install: no connections yet, with steps to connect a database and choose an AI model](https://github.com/rahulmahadik/AskSQL/raw/HEAD/packages/jetbrains/images/onboarding.png)
@@ -68,7 +38,7 @@ for the full architecture rationale.
 6. Type a question in plain language, review the generated SQL (and, unless you turned
    off "require approval" in Settings, click **Run**), and see the result. Nothing
    executes without going through the read-only guard first, regardless of this setting;
-   see "Security and privacy invariants" below.
+   see "Security and privacy" below.
 
 The schema tree above the chat browses every configured connection's tables/columns
 without needing to ask a question first; drag the divider to resize either panel.
@@ -76,14 +46,94 @@ without needing to ask a question first; drag the divider to resize either panel
 ## Querying CSV, Excel and Parquet files (no database needed)
 
 Click **Query CSV, Excel or Parquet Files** (the import icon in the AskSQL tool window title bar) to
-query flat files without a database server. Select one or more **CSV, JSON, NDJSON, Parquet,
-XLSX, or portable `.sql`** files at once; each becomes a table in a single DuckDB connection,
+query flat files without a database server. Select one or more **CSV, TSV, TXT, JSON, NDJSON,
+Parquet, Excel (`.xlsx`/`.xls`), or portable `.sql`** files at once; each becomes a table in a single DuckDB connection,
 so you can join across them straight away. Pick a fresh connection or add the files to an
 existing set. DuckDB powers this under the hood, so there is no server to install.
 
-(A DuckDB connection's **File path** in the Add Connection wizard points at one existing
-`.duckdb` database file, or is left blank for a private in-memory database; use **Query CSV,
-Excel or Parquet Files** above to load data files, not the wizard's file browser.)
+(A DuckDB connection's **File path** in the connection editor takes an existing `.duckdb`
+database, data files to load as tables, or nothing at all for a private in-memory database.
+Adding data files to a connection that already has some keeps what is already there.)
+
+## Troubleshooting
+
+**"Fetch Models" returns nothing.** For Ollama or LM Studio, the runtime has to be running first
+(`ollama serve`, or start LM Studio's server) and the Base URL has to point at it. For a hosted
+provider, the API key must be saved before models can be listed, and Anthropic, Google and Azure
+publish no listing endpoint at all - type the model name instead.
+
+**Test Provider fails.** It makes a real model call, so it fails for a real reason: a wrong key
+(`LLM_AUTH`), a model name the provider does not have (usually a 404), or a Base URL pointing
+somewhere else. The message says which.
+
+**A query is blocked because a column "does not exist".** The model invented a name. AskSQL checks
+every table and column against your schema before running anything, hands the model the real column
+list, and asks again. If it still fails you get the names that do exist, so you can rephrase.
+
+**The numbers are out by a factor of 100.** Almost always a column that stores a minor unit, like
+`total_cents`. Nothing in the column's type says so, so tell AskSQL once: comment the column in your
+database (`COMMENT ON COLUMN orders.total_cents IS 'cents; divide by 100 for dollars'`), and every
+answer after that converts it. Comments travel into the prompt with the rest of the schema.
+
+**A total looks too high on a query with joins.** Joining a table to its children multiplies the
+rows being summed. AskSQL detects this from your foreign keys and rewrites the query, but review
+the SQL on anything involving several one-to-many joins.
+
+**New tables are missing after loading files.** Use **Refresh Schema** in the tool window. Schemas
+are cached for five minutes, and a refresh re-reads every connection.
+
+**Answers are weak on complex questions.** Model size is the biggest factor. A 7B such as
+`qwen2.5-coder:7b` handles multi-join analytics; a 1.5B-3B is fine for single-table questions but
+slips on window functions and deep joins.
+
+## Required database privileges
+
+AskSQL only ever runs read-only statements (enforced by the guard and, on most engines, by the session itself; see above), so the connecting user needs no write
+grants. A dedicated, read-only account is recommended over reusing an
+application's own credentials:
+
+- **Postgres**: `GRANT CONNECT ON DATABASE <db> TO <user>;` plus
+  `GRANT USAGE ON SCHEMA <schema> TO <user>;` and
+  `GRANT SELECT ON ALL TABLES IN SCHEMA <schema> TO <user>;` (and
+  `ALTER DEFAULT PRIVILEGES ... GRANT SELECT ON TABLES` so future tables inherit
+  it). Introspection also reads `pg_catalog`/`information_schema`, which is
+  world-readable by default.
+- **MySQL**: `GRANT SELECT, SHOW VIEW ON <db>.* TO '<user>'@'%';` (`SHOW VIEW` is needed for view
+definitions during introspection, not for querying).
+- **Oracle**: `GRANT CREATE SESSION TO <user>;` plus `SELECT` on the target
+  objects (or `SELECT ANY TABLE` for a schema-wide read-only account).
+  Introspection reads only the `ALL_*` data dictionary views (`ALL_TAB_COMMENTS`,
+  `ALL_COL_COMMENTS`, `ALL_TABLES`, `ALL_OBJECTS`), never `DBA_*`, so no extra
+  catalog role is needed beyond the object grants above; `ALL_*` views already
+  show whatever the connecting user has been granted.
+- **MongoDB**: the built-in `read` role on the target database (`db.grantRolesToUser`)
+  is sufficient; introspection samples documents and reads `listCollections`/
+  `listIndexes`, all covered by `read`.
+- **SQLite / DuckDB**: file-based; whatever OS file permission lets the IDE
+  process open the file is the only "grant" that applies; the plugin additionally
+  opens the file itself in read-only mode (see `ReadOnlySession`).
+
+## Security and privacy
+
+These hold on every engine (the plan doc carries the full list):
+
+- The AST guard (`SqlGuard`) runs on **every** SQL string before **every** execution
+  (MongoDB: `MongoGuard`, on every generated pipeline).
+- Every JDBC session is additionally forced read-only at the engine level
+  (`ReadOnlySession`): defense in depth beyond the guard. MongoDB has no
+  session/connection-level read-only flag to arm the same way, so for that
+  engine `MongoGuard` is the only floor, not defense-in-depth alongside one
+  (see its class doc).
+- Only schema is ever sent to the configured AI model. On the SQL engines that means declared
+  values only - a column's `ENUM` labels come from the DDL, not from anyone's rows. MongoDB has
+  no DDL to declare them, so its introspector records a few distinct **values** per field while
+  sampling, but they are stripped at the single exit from the catalog and never reach a prompt
+  unless **Send sample column values to the model** is turned on in Settings. It defaults to off,
+  so out of the box the model sees field names, types and presence percentages only. Full row
+  data (arbitrary query results) is never sent on any engine.
+- Chat history and query results are **in-memory only**; nothing is written to disk
+  except settings, and secrets live only in the OS keychain via PasswordSafe.
+- Zero telemetry.
 
 ## Requirements
 
@@ -95,6 +145,42 @@ Excel or Parquet Files** above to load data files, not the wizard's file browser
 - Node.js 18+, only for `./gradlew parityVectors` (see below). Never required to build
   or run the plugin itself.
 
+## Compatibility
+
+AskSQL depends only on `com.intellij.modules.platform`, so it installs in **every
+IntelliJ-Platform IDE, 2025.1 and newer** (build 251+), paid and
+free editions alike. Fleet is not supported (it does not use the IntelliJ Platform plugin
+model).
+
+Every release is run through the JetBrains **Plugin Verifier**: 15 verifications across
+11 IDEs, all reporting **Compatible** with zero compatibility problems:
+
+| IDE | Versions verified |
+| --- | --- |
+| IntelliJ IDEA Community | 2025.1 (floor), 2025.2, 2025.3 |
+| IntelliJ IDEA Ultimate, PyCharm Professional, WebStorm, PhpStorm, GoLand, Rider, CLion, RubyMine, RustRover | 2026.1 (latest stable) |
+| Android Studio | whichever build is installed locally |
+
+IntelliJ IDEA Community is the version floor, so it is pinned at each supported major;
+the other IDEs track the latest stable release. The plugin is compiled against the floor,
+so an API the floor lacks fails the build rather than reaching the verifier.
+
+DataGrip is not in the table above, but the plugin declares no dependency beyond
+`com.intellij.modules.platform`, which DataGrip provides, so it installs and runs there on the
+same APIs as every other IDE listed.
+
+This is a **standalone Gradle project**: it is deliberately invisible to the root
+pnpm workspace (no `package.json` anywhere under this directory tree; see
+`.github/workflows/jetbrains-ci.yml`'s `isolation-guard` job, which fails the build if
+that ever changes). Everything here is **pure Kotlin/JVM**: no Node.js runtime, no
+child process, no sidecar. See `../../internal/JETBRAINS-PLUGIN-PLAN.md` (repo-internal)
+for the full architecture rationale.
+
+## Contributing
+
+Everything below is for working on the plugin itself. See the repo's
+[CONTRIBUTING.md](../../CONTRIBUTING.md) for the monorepo layout and release process.
+
 ## Dev loop
 
 ```bash
@@ -103,6 +189,7 @@ Excel or Parquet Files** above to load data files, not the wizard's file browser
 ./gradlew test -PintegrationTests=true # Testcontainers-backed tests (needs Docker)
 ./gradlew buildPlugin     # produces build/distributions/*.zip
 ./gradlew verifyPlugin    # IntelliJ Plugin Verifier against the configured IDE matrix
+./gradlew koverVerify     # coverage floor; koverHtmlReport for the browsable report
 ```
 
 ## Parity tooling (`tools/parity/`)
@@ -110,11 +197,17 @@ Excel or Parquet Files** above to load data files, not the wizard's file browser
 The Kotlin SQL guard and prompt builders are ports of `@asksql/core` (the npm engine
 used by the VS Code extension and `@asksql/server`), re-architected around JSqlParser
 and JDBC instead of node-sql-parser and Node's DB drivers. To keep the Kotlin guard
-from silently drifting from the published core's security behavior, `tools/parity/`
-runs a corpus of SQL statements through the **published** `@asksql/core` package and
-records the verdicts as committed JSON vectors (`vectors/guard.json`,
-`vectors/prompts.json`). `GuardVectorTest` and `PromptParityTest` replay those vectors
-against this Kotlin port in every `./gradlew test` run.
+from silently drifting from core's security behavior, `tools/parity/` runs a corpus of
+SQL statements and questions through `@asksql/core` and records the verdicts as
+committed JSON vectors (`vectors/guard.json`, `vectors/prompts.json`,
+`vectors/classifiers.json`). `GuardVectorTest`, `PromptParityTest` and the classifier
+tests replay those vectors against this Kotlin port in every `./gradlew test` run.
+
+Which core the vectors come from is set by the `@asksql/core` pin in
+`tools/parity/package.json`. It is `file:../../../core` between releases, so a change to
+core's guard, prompts or routing must be ported to Kotlin and the vectors regenerated in
+the same commit; CI fails on any uncommitted difference. The pin returns to a published
+version after each release.
 
 ```bash
 ./gradlew parityVectors   # regenerates tools/parity/vectors/*.json (needs Node + npm)
@@ -161,52 +254,6 @@ com.rahulmahadik.asksql.ide/
 │                OpenSettings, AskAboutSelection, OpenSqlInScratch, CollectDiagnostics
 └── integrations/database/  Optional, purely-reflective DataGrip datasource import
 ```
-
-Security and privacy invariants (see the plan doc for the full list):
-
-- The AST guard (`SqlGuard`) runs on **every** SQL string before **every** execution
-  (MongoDB: `MongoGuard`, on every generated pipeline).
-- Every JDBC session is additionally forced read-only at the engine level
-  (`ReadOnlySession`): defense in depth beyond the guard. MongoDB has no
-  session/connection-level read-only flag to arm the same way, so for that
-  engine `MongoGuard` is the only floor, not defense-in-depth alongside one
-  (see its class doc).
-- Only schema is ever sent to the configured AI model. On the SQL engines that means declared
-  values only - a column's `ENUM` labels come from the DDL, not from anyone's rows. MongoDB has
-  no DDL to declare them, so its introspector samples a few distinct **values** per field (up to
-  24, capped in length) so the model can write correct filters against real status codes. Full
-  row data (arbitrary query results) is never sent on any engine.
-- Chat history and query results are **in-memory only**; nothing is written to disk
-  except settings, and secrets live only in the OS keychain via PasswordSafe.
-- Zero telemetry.
-
-## Required database privileges
-
-AskSQL only ever runs read-only statements (enforced by the guard plus, on most
-engines, the session itself, see above), so the connecting user needs no write
-grants. A dedicated, read-only account is recommended over reusing an
-application's own credentials:
-
-- **Postgres**: `GRANT CONNECT ON DATABASE <db> TO <user>;` plus
-  `GRANT USAGE ON SCHEMA <schema> TO <user>;` and
-  `GRANT SELECT ON ALL TABLES IN SCHEMA <schema> TO <user>;` (and
-  `ALTER DEFAULT PRIVILEGES ... GRANT SELECT ON TABLES` so future tables inherit
-  it). Introspection also reads `pg_catalog`/`information_schema`, which is
-  world-readable by default.
-- **MySQL**: `GRANT SELECT, SHOW VIEW ON <db>.* TO '<user>'@'%';`: `SHOW VIEW` is
-  needed for view definitions during introspection, not for querying.
-- **Oracle**: `GRANT CREATE SESSION TO <user>;` plus `SELECT` on the target
-  objects (or `SELECT ANY TABLE` for a schema-wide read-only account).
-  Introspection reads only the `ALL_*` data dictionary views (`ALL_TAB_COMMENTS`,
-  `ALL_COL_COMMENTS`, `ALL_TABLES`, `ALL_OBJECTS`), never `DBA_*`, so no extra
-  catalog role is needed beyond the object grants above; `ALL_*` views already
-  show whatever the connecting user has been granted.
-- **MongoDB**: the built-in `read` role on the target database (`db.grantRolesToUser`)
-  is sufficient; introspection samples documents and reads `listCollections`/
-  `listIndexes`, all covered by `read`.
-- **SQLite / DuckDB**: file-based; whatever OS file permission lets the IDE
-  process open the file is the only "grant" that applies; the plugin additionally
-  opens the file itself in read-only mode (see `ReadOnlySession`).
 
 ## Debugging the plugin
 

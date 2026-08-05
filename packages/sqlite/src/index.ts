@@ -1,13 +1,8 @@
 /**
- * @asksql/sqlite - SQLite connector.
- *
- * Driver-agnostic: pass a `better-sqlite3` instance, a built-in
- * `node:sqlite` DatabaseSync, or a file path (lazy-loads better-sqlite3).
- * SQLite has no schemas; introspection is PRAGMA-based.
- *
- * Timeouts / cancellation are cooperative - SQLite queries are synchronous
- * in these drivers, so a pre-flight abort check is honored and long results
- * are capped, but mid-statement interruption is not available.
+ * @asksql/sqlite - SQLite connector. Driver-agnostic: pass a `better-sqlite3` instance, a
+ * built-in `node:sqlite` DatabaseSync, or a file path. SQLite has no schemas, so
+ * introspection is PRAGMA-based. Queries are synchronous in both drivers, so timeouts and
+ * cancellation are cooperative: a pre-flight abort check and a row cap, no mid-statement stop.
  */
 
 import {
@@ -28,8 +23,7 @@ import {
   type TriggerInfo,
 } from '@asksql/core';
 
-/** A prepared statement. `raw`/`columns` (better-sqlite3, newer node:sqlite) let
- * us read rows positionally so duplicate result-column names stay distinct. */
+/** A prepared statement; `raw`/`columns` read rows positionally, keeping duplicate output names distinct. */
 export interface SqliteStatement {
   all(...params: unknown[]): unknown[];
   get?(...params: unknown[]): unknown;
@@ -57,11 +51,7 @@ export interface SqliteConnectorConfig {
   readonly database?: SqliteDriver;
   /** ...or a file path (lazy-loads better-sqlite3, opened read-only). */
   readonly file?: string;
-  /**
-   * Opt-in: sample distinct values from short text columns, so the model sees the
-   * real codes a `status TEXT` holds. This reads actual cell values (not just
-   * schema), so it is off unless the caller sets it.
-   */
+  /** Opt-in: sample distinct values from short text columns, so the model sees the real codes a `status TEXT` holds. */
   readonly sampleColumnValues?: boolean;
 }
 
@@ -108,8 +98,7 @@ export class SqliteConnector implements Connector {
 
   async connect(): Promise<void> {
     if (this.db) {
-      // A caller-supplied handle is opened by the host, not here, so its read-only flag is
-      // the host's word. Verify it once - the promise this connector makes is its own.
+      // A caller-supplied handle was opened by the host, so verify its read-only state here once.
       if (!this.readOnlyAsserted) this.assertReadOnly(this.db);
       return;
     }
@@ -119,25 +108,20 @@ export class SqliteConnector implements Connector {
         userMessage: 'No SQLite database was configured.',
       });
     }
-    // Load the driver and open the file in SEPARATE steps: "driver not installed"
-    // and "file cannot be opened" are different problems with different fixes, and
-    // one shared catch reported both as a missing driver even when the file was at
-    // fault.
+    // Load the driver and open the file in separate steps, so each failure gets its own message.
     let Ctor: new (f: string, o?: object) => SqliteDriver;
     let openOptions: object = { readonly: true, fileMustExist: true };
     let betterSqliteError: unknown;
     try {
-      // Indirect specifier: better-sqlite3 is an optional peer with no
-      // bundled types; the indirection keeps the type-checker from trying
-      // to resolve its declarations at build time.
+      // Indirect specifier: better-sqlite3 ships no types, so this keeps the type-checker
+      // from resolving its declarations at build time.
       const specifier = 'better-sqlite3';
       const mod = (await import(specifier)) as unknown as { default: new (f: string, o?: object) => SqliteDriver };
       Ctor = mod.default;
     } catch (err) {
       betterSqliteError = err;
       try {
-        // Node ships a SQLite driver from 22.5; falling back to it means a plain
-        // `npm i @asksql/sqlite` works with no native module to build.
+        // Node ships a SQLite driver from 22.5, so this fallback needs no native module.
         const builtin = (await import('node:sqlite')) as unknown as {
           DatabaseSync: new (f: string, o?: object) => SqliteDriver;
         };
@@ -164,31 +148,26 @@ export class SqliteConnector implements Connector {
         cause: err,
       });
     }
-    // Publish the handle only once it has proven read-only. Assigning first left a rejected
-    // handle on `this.db`, and connect()'s early return then served queries from it.
+    // Publish the handle only once it has proven read-only.
     try {
       this.assertReadOnly(opened);
     } catch (err) {
       opened.close?.();
-      throw err; // already the precise read-only diagnostic; do not rewrite it as a path problem
+      throw err; // already the precise read-only diagnostic
     }
     this.db = opened;
   }
 
   /**
-   * Belt and braces on the read-only promise. The two drivers spell the open flag
-   * differently and node:sqlite IGNORES option keys it does not recognise, so a wrong or
-   * unsupported key opens the file read-write with no error at all. `query_only` closes
-   * that gap at the connection level, and is read back so an unenforceable connection
-   * fails closed rather than quietly accepting writes.
+   * node:sqlite ignores option keys it does not recognise, so a wrong open flag yields a
+   * read-write handle with no error. `PRAGMA query_only` is set and read back instead.
    */
   private assertReadOnly(db: SqliteDriver): void {
     const queryOnly = (): boolean => {
       const rows = db.prepare('PRAGMA query_only').all() as Record<string, unknown>[];
       return rows.length > 0 && Object.values(rows[0]!).some((v) => v === 1 || v === 1n || v === true);
     };
-    // `query_only` belongs to the connection, and a caller-supplied handle is the host's:
-    // remember the flag so close() can restore it rather than leaving them unable to write.
+    // `query_only` belongs to the connection, so remember a caller-supplied handle's flag for close().
     if (this.config.database && this.restoreQueryOnly === null) this.restoreQueryOnly = queryOnly();
     try {
       db.exec?.('PRAGMA query_only = ON');
@@ -230,8 +209,7 @@ export class SqliteConnector implements Connector {
 
   private handle(): SqliteDriver {
     if (!this.db) throw new AskSqlError('DB_UNREACHABLE', { detail: 'sqlite not connected' });
-    // A caller-supplied handle reaches `this.db` from the constructor, so without this an
-    // execute() that skipped connect() would query a connection nobody proved read-only.
+    // A caller-supplied handle reaches `this.db` from the constructor, ahead of any read-only check.
     if (!this.readOnlyAsserted) {
       throw new AskSqlError('DB_UNREACHABLE', {
         detail: 'sqlite handle has not been verified read-only; connect() must run first',
@@ -247,8 +225,7 @@ export class SqliteConnector implements Connector {
         .prepare(sql)
         .all(...params) as Record<string, unknown>[];
     } catch (err) {
-      // "not connected" and "not verified read-only" are already precise; re-labelling them as
-      // a query error would blame the SQL for a connection-state problem.
+      // A connection-state error is already precise; only a driver error becomes a query error.
       if (err instanceof AskSqlError) throw err;
       throw AskSqlError.from(err, 'DB_QUERY_ERROR');
     }
@@ -319,8 +296,7 @@ export class SqliteConnector implements Connector {
         nullable: Number(c['notnull']) === 0,
         default: c['dflt_value'] == null ? null : String(c['dflt_value']),
       }));
-      // Opt-in: observe the distinct codes a short text column holds. Base tables
-      // only - sampling a view runs its query.
+      // Opt-in: observe the distinct codes a short text column holds; base tables only, as sampling a view runs its query.
       if (this.config.sampleColumnValues && type !== 'view') {
         columns = columns.map((col) => {
           if (sampleBudget <= 0 || !isSampleableSqliteType(col.dbType)) return col;
@@ -406,8 +382,7 @@ export class SqliteConnector implements Connector {
         }
       }
     } catch (err) {
-      // A connection-state error ("not connected", "not verified read-only") is already precise;
-      // re-labelling it as a query error would blame the SQL for something else entirely.
+      // A connection-state error is already precise; only a driver error becomes a query error.
       if (err instanceof AskSqlError) throw err;
       const msg = err instanceof Error ? err.message : String(err);
       if (/readonly|attempt to write a readonly database/i.test(msg)) {
@@ -426,8 +401,7 @@ export class SqliteConnector implements Connector {
 
     const truncated = valueRows.length > maxRows;
     const clipped = truncated ? valueRows.slice(0, maxRows) : valueRows;
-    // SQLite exposes no result-column types, so infer each kind from the first
-    // non-null value in the column.
+    // SQLite exposes no result-column types; infer each kind from the column's first non-null value.
     const columns: ResultColumn[] = colNames.map((name, i) => ({
       name,
       kind: inferKind(clipped.find((r) => r[i] != null)?.[i]),

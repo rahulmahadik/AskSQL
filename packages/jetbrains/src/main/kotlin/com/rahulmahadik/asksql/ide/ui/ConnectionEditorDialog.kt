@@ -12,6 +12,7 @@ import com.intellij.ui.dsl.builder.bindItem
 import com.intellij.ui.dsl.builder.bindText
 import com.intellij.ui.dsl.builder.panel
 import com.rahulmahadik.asksql.ide.db.ConnectionDescriptor
+import com.rahulmahadik.asksql.ide.db.ConnectionRegistry
 import com.rahulmahadik.asksql.ide.db.ConnectionScope
 import com.rahulmahadik.asksql.ide.db.JdbcConnectionFactory
 import com.rahulmahadik.asksql.ide.db.MongoClientFactory
@@ -35,21 +36,14 @@ private fun DataSourceImporter.ImportedDataSource.label(): String =
 
 internal val MONGO_SCHEME_RE = Regex("""^mongodb(\+srv)?://""", RegexOption.IGNORE_CASE)
 
-/**
- * True if a Mongo connection string embeds `user:pass@` before its first `/`; credentials belong in
- * the User/Password fields. `internal` so [ConnectionEditorDialogValidationTest] can cover it without a Swing fixture.
- */
+/** True if a Mongo connection string embeds `user:pass@` before its first `/`; credentials belong in the User/Password fields. */
 internal fun mongoConnectionStringHasEmbeddedCredentials(value: String): Boolean {
     val afterScheme = MONGO_SCHEME_RE.replace(value, "")
     if (afterScheme == value) return false // doesn't match the scheme at all; the scheme check reports that separately
     return afterScheme.substringBefore('/').contains('@')
 }
 
-/**
- * Port validation, engine-gated and pure so [ConnectionEditorDialogValidationTest] can cover it.
- * Engines without a port must return null: a hidden field that fails validation disables OK with
- * the reason attached to a row the user cannot see.
- */
+/** Port validation, engine-gated; engines without a port return null, since a hidden failing field disables OK with no visible reason. */
 internal fun portValidationMessage(engine: EngineKind, portText: String): String? {
     if (engine !in ENGINES_WITH_HOST_PORT) return null
     val port = portText.trim().toIntOrNull()
@@ -77,8 +71,7 @@ class ConnectionEditorDialog(private val project: Project, private val existing:
     private var sslMode = existing?.sslMode ?: SslMode.TRUST
     private val passwordField = JPasswordField()
 
-    // Offered only when adding a NEW connection, and only when DataGrip/Ultimate's
-    // Database plugin is present with something importable.
+    // Offered only when adding a NEW connection, and only when DataGrip/Ultimate's Database plugin has something importable.
     private val importCandidates: List<DataSourceImporter.ImportedDataSource> =
         if (existing == null) DataSourceImporter.listImportableDataSources(project) else emptyList()
 
@@ -110,7 +103,7 @@ class ConnectionEditorDialog(private val project: Project, private val existing:
     /** Same idea as [autoFilledPort], for the default username; see [onEngineChanged]. */
     private var autoFilledUser: String? = if (existing == null) defaultUser(engine) else null
 
-    /** Same idea again for the connection name, so the field is never blank and OK is never mysteriously unavailable. */
+    /** Same idea again for the connection name. */
     private var autoFilledName: String? = if (existing == null) defaultName(engine) else null
 
     var enteredPassword: String? = null
@@ -163,8 +156,7 @@ class ConnectionEditorDialog(private val project: Project, private val existing:
         port = candidate.port ?: defaultPort(candidate.engine)
         candidate.database?.let { database = it }
         candidate.user?.let { user = it }
-        // The other fields are already-rendered Swing components bound at build time, not live bindings;
-        // reset() re-reads these (now updated) backing properties back into every field on screen.
+        // The DSL bindings are build-time, not live; reset() re-reads these backing properties into every field on screen.
         dialogPanel?.reset()
         autoFilledPort = port
         updateFieldVisibility(engine)
@@ -172,8 +164,7 @@ class ConnectionEditorDialog(private val project: Project, private val existing:
 
     private fun onEngineChanged(selected: EngineKind) {
         updateFieldVisibility(selected)
-        // Re-default the port only if it still shows the PREVIOUS engine's auto-fill (blank, or
-        // untouched); a port the user typed themselves is left alone even across an engine switch.
+        // Re-defaults the port only while it still shows the previous engine's auto-fill; a user-typed port is left alone.
         val currentPortText = portField.text.trim()
         if (currentPortText.isEmpty() || currentPortText.toIntOrNull() == autoFilledPort) {
             val newDefault = defaultPort(selected)
@@ -188,8 +179,7 @@ class ConnectionEditorDialog(private val project: Project, private val existing:
                 nameField.text = newName
             }
         }
-        // Same idea for the default user, only when adding (an existing saved connection's real
-        // user must never be silently overwritten just because it happens to switch engine).
+        // Same idea for the default user, and only when adding: a saved connection's user is never overwritten.
         if (existing == null) {
             val currentUserText = userField.text.trim()
             if (currentUserText.isEmpty() || currentUserText == autoFilledUser) {
@@ -238,15 +228,12 @@ class ConnectionEditorDialog(private val project: Project, private val existing:
                     .component
             }
             hostRow = row("Host:") { hostField = textField().bindText(::host).component }
-            // Plain textField, not intTextField(1..65535): the DSL range validator also runs for engines
-            // that have no port (DuckDB/SQLite/MongoDB), where the field is empty and hidden, and an
-            // invisible failing field silently disables OK. doValidate checks the range where it applies.
+            // Plain textField, not intTextField(1..65535): the DSL range validator also runs for the hidden, empty port field of engines that have none.
             portRow = row("Port:") { portField = textField().bindText({ port?.toString().orEmpty() }, { port = it.toIntOrNull() }).component }
             databaseRow = row("Database:") { databaseField = textField().bindText(::database).component }
             databaseRow.comment("Also used as MongoDB's auth source database when a user/password is set below.")
             userRow = row("User:") { userField = textField().bindText(::user).component }
-            // Password sits right after User (the credential pair, kept together) rather than after
-            // the per-engine target fields below.
+            // Password sits right after User, keeping the credential pair together.
             row("Password:") { cell(passwordField) }
                 .comment("Leave blank to keep the current password (Edit) or connect without one (Add).")
             filePathRow = row("File path:") {
@@ -288,10 +275,9 @@ class ConnectionEditorDialog(private val project: Project, private val existing:
             null
         }
 
-    /** Runs the same per-field checks [doValidate] enforces before OK, so this dialog never accepts an obviously-incomplete connection (blank host/database, an out-of-range port, a Mongo string with no scheme or an embedded password, ...). */
+    /** Per-field checks run before OK: blank host/database, an out-of-range port, a Mongo string with no scheme or an embedded password. */
     override fun doValidate(): ValidationInfo? {
-        // No name check: a blank name defaults in showAndGetDescriptor, and failing validation here
-        // would grey out OK with the reason easy to miss.
+        // No name check: a blank name defaults in showAndGetDescriptor.
         return when (engineCombo.selectedItem as? EngineKind ?: engine) {
             EngineKind.POSTGRES, EngineKind.MYSQL, EngineKind.ORACLE -> {
                 if (hostField.text.isBlank()) return ValidationInfo("Host is required.", hostField)
@@ -364,20 +350,35 @@ class ConnectionEditorDialog(private val project: Project, private val existing:
             Messages.showErrorDialog(project, UploadFileToDuckDbAction.unsupportedMessage(rejected), "AskSQL")
             return
         }
-        val dbPath = UploadFileToDuckDbAction.newManagedDbPath(sourcePaths.first())
+        // Adding files to a connection that already has a managed database loads into that one:
+        // a fresh database here would leave its existing tables behind and silently replace them.
+        val currentPath = filePathField.text.trim()
+        val existingDb = currentPath
+            .takeIf { it.endsWith(".duckdb", ignoreCase = true) && java.nio.file.Files.exists(java.nio.file.Path.of(it)) }
+            ?.let { java.nio.file.Path.of(it) }
+        val dbPath = existingDb ?: UploadFileToDuckDbAction.newManagedDbPath(sourcePaths.first())
+        // DuckDB refuses a read-write handle while our read-only one is open, so drop ours first.
+        if (existingDb != null) existing?.id?.let { project.getService(ConnectionRegistry::class.java).invalidate(it) }
         try {
             // Generous timeout: the first DuckDB load also lazy-downloads the driver jar.
             val tables = runBlockingWithProgress(project, "Loading ${sourcePaths.size} file(s) into DuckDB", timeoutMs = 180_000) {
                 UploadFileToDuckDbAction.loadFilesInto(dbPath, sourcePaths)
             }
-            importedDbPaths.add(dbPath)
+            // Only a database this dialog created may be deleted as an orphan.
+            if (existingDb == null) importedDbPaths.add(dbPath)
+            // The connection's file path has not changed, so its cached schema would otherwise
+            // hide the new tables until the TTL expired.
+            if (existingDb != null) {
+                existing?.id?.let { project.getService(ConnectionRegistry::class.java).invalidate(it) }
+                com.rahulmahadik.asksql.ide.AskSqlEngineService.getInstance(project).pipeline.invalidateCatalogCache()
+            }
             filePathField.text = dbPath.toString()
             if (nameField.text.isBlank()) {
                 nameField.text = if (sourcePaths.size == 1) java.io.File(sourcePaths.first()).nameWithoutExtension else "${sourcePaths.size} data files"
             }
             Messages.showInfoMessage("Loaded ${tables.size} table(s): ${tables.joinToString(", ")}", "AskSQL")
         } catch (e: Exception) {
-            runCatching { java.nio.file.Files.deleteIfExists(dbPath) }
+            if (existingDb == null) runCatching { java.nio.file.Files.deleteIfExists(dbPath) }
             LOG.info("AskSQL: DuckDB import from wizard failed: ${e.message}")
             Messages.showErrorDialog("Couldn't load the files: ${ErrorPresenter.present(e).userMessage}", "AskSQL")
         }
@@ -393,8 +394,7 @@ class ConnectionEditorDialog(private val project: Project, private val existing:
         val typedPassword = String(passwordField.password).ifEmpty { null }
         LOG.info("AskSQL: Test Connection clicked for ${transient.engine} (id=${transient.id})")
         try {
-            // The 30s timeout lives in runBlockingWithProgress (a Future.get(timeout) poll loop, not
-            // a coroutine withTimeout; see its doc for why that distinction matters).
+            // The 30s timeout lives in runBlockingWithProgress (a Future.get(timeout) poll loop, not a coroutine withTimeout).
             runBlockingWithProgress(project, "Testing connection") {
                 val password = typedPassword ?: existing?.let { AskSqlSecrets.getDbPassword(it) }
                 if (transient.engine == EngineKind.MONGODB) {

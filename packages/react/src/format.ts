@@ -44,16 +44,18 @@ export function formatBytes(n: number): string {
   return `${(n / 1024 / 1024).toFixed(1)} MB`;
 }
 
+/** A whole cell that is just a number - including the strings BIGINT/DECIMAL travel as. */
+const NUMERIC = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/;
+
 /** CSV export with correct quoting (raw values, no locale). */
 export function toCsv(columns: readonly ResultColumn[], rows: readonly (readonly CellValue[])[]): string {
   const esc = (v: CellValue): string => {
     if (v === null) return '';
     if (typeof v === 'object' && '__binary' in v) return `0x${v.__binary.hexPreview}`;
     let s = typeof v === 'string' ? v : String(v);
-    // Neutralize spreadsheet formula injection: a cell starting with = + - @
-    // (or tab/CR) is executed as a formula by Excel/Sheets on open. Prefix
-    // with a single quote so it opens as literal text.
-    if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`;
+    // Neutralize formula injection: Excel/Sheets execute a cell starting with = + - @ or tab/CR.
+    // A number is data, and quoting one turns it into text a SUM() skips.
+    if (/^[=+\-@\t\r]/.test(s) && !NUMERIC.test(s)) s = `'${s}`;
     return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   };
   const head = columns.map((c) => esc(c.name)).join(',');

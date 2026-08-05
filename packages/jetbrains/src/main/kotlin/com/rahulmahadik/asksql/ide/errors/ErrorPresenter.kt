@@ -20,13 +20,11 @@ object ErrorPresenter {
             log.warn("AskSQL: ${throwable.code} - ${throwable.detail ?: throwable.userMessage}", throwable.cause)
             return throwable
         }
-        // A user-initiated cancel isn't a bug and isn't worth a warn-level log entry; both
-        // pipelines already rethrow it unwrapped, so it must not fall through to the branch below.
+        // A user-initiated cancel isn't a bug and isn't worth a warn-level log entry.
         if (throwable is kotlinx.coroutines.CancellationException) {
             return AskSqlException(AskSqlErrorCode.CANCELLED, detail = throwable.message, cause = throwable, retryable = false)
         }
-        // Reaching here unclassified is, by definition, a bug in this plugin's own code (every
-        // call site wraps failures as AskSqlException); log it loudly so it's reported.
+        // An unclassified throwable means a call site failed to wrap its failure as AskSqlException.
         log.error("AskSQL: unexpected exception", throwable)
         return AskSqlException(AskSqlErrorCode.UNKNOWN, cause = throwable)
     }

@@ -29,16 +29,8 @@
     "default_path": "sidepanel/index.html"
   },
   "options_page": "options/index.html",
-  "permissions": [
-    "sidePanel",
-    "storage",
-    "contextMenus",
-    "declarativeNetRequestWithHostAccess"
-  ],
-  "optional_host_permissions": [
-    "http://*/*",
-    "https://*/*"
-  ],
+  "permissions": ["sidePanel", "storage", "contextMenus", "declarativeNetRequestWithHostAccess"],
+  "optional_host_permissions": ["http://*/*", "https://*/*"],
   "content_security_policy": {
     "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
   }

@@ -19,8 +19,7 @@ object MySqlIntrospector : Introspector {
         val tableComments = mutableMapOf<String, String>()
         val columnComments = mutableMapOf<String, String>()
         val rowEstimates = mutableMapOf<String, Long>()
-        // COLUMN_TYPE carries the full declared type, e.g. "enum('a','b','c')"; the JDBC
-        // TYPE_NAME-equivalent exposes only the bare "enum", so literal values must come from here.
+        // COLUMN_TYPE carries the full declared type, e.g. "enum('a','b','c')"; TYPE_NAME exposes only "enum".
         val columnTypes = mutableMapOf<String, String>()
 
         connection.createStatement().use { st ->
@@ -80,7 +79,7 @@ object MySqlIntrospector : Introspector {
         )
     }
 
-    /** Parses `enum('a','b','c')` into `[a, b, c]`; a direct port of the reference `@asksql/mysql` connector's regex (does not handle a comma embedded inside a quoted label, matching that connector's own known limitation). */
+    /** Parses `enum('a','b','c')` into `[a, b, c]`; a comma inside a quoted label is not handled. */
     private fun enumValuesOf(columnType: String?): List<String> {
         if (columnType == null) return emptyList()
         val match = ENUM_COLUMN_TYPE.find(columnType) ?: return emptyList()
@@ -89,7 +88,7 @@ object MySqlIntrospector : Introspector {
         }
     }
 
-    /** Functions/procedures; powers the prompt's "CALLABLE READ-ONLY FUNCTIONS" section. MySQL exposes no PG-style volatility, so a deterministic routine is treated as STABLE (callable) and everything else as UNKNOWN (listed, never called), matching the reference connector's rule exactly. */
+    /** Functions/procedures for the prompt's "CALLABLE READ-ONLY FUNCTIONS" section; MySQL has no PG-style volatility, so IS_DETERMINISTIC maps to STABLE and everything else to UNKNOWN. */
     private fun routines(connection: Connection, schema: String?): List<RoutineInfo> {
         val list = mutableListOf<RoutineInfo>()
         connection.createStatement().use { st ->

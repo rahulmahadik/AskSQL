@@ -26,7 +26,7 @@ function fakeRes() {
       closeCbs.forEach((cb) => cb());
     },
     status: 0,
-    headers: {} as Record<string, string>,
+    headers: { 'content-type': 'application/json' } as Record<string, string>,
     chunks: [] as string[],
     writeHead(status: number, headers: Record<string, string>) {
       this.status = status;
@@ -54,7 +54,12 @@ describe('createRequestListener', () => {
     listenerFor(handle)(fakeReq('POST', '/execute?connectionId=c1', '{"sql":"SELECT 1"}') as never, res as never);
     await settled();
 
-    const passed = handle.mock.calls[0]![0] as { method: string; path: string; query: Record<string, string>; json: () => Promise<unknown> };
+    const passed = handle.mock.calls[0]![0] as {
+      method: string;
+      path: string;
+      query: Record<string, string>;
+      json: () => Promise<unknown>;
+    };
     expect(passed.method).toBe('POST');
     expect(passed.path).toBe('/execute');
     expect(passed.query).toEqual({ connectionId: 'c1' });
@@ -71,7 +76,10 @@ describe('createRequestListener', () => {
 
   it('writes a JSON response with the handler status', async () => {
     const res = fakeRes();
-    listenerFor(async () => ({ status: 201, body: { connection: { id: 'dyn_1' } } }))(fakeReq('POST', '/connections') as never, res as never);
+    listenerFor(async () => ({ status: 201, body: { connection: { id: 'dyn_1' } } }))(
+      fakeReq('POST', '/connections') as never,
+      res as never,
+    );
     await settled();
 
     expect(res.status).toBe(201);
@@ -85,7 +93,10 @@ describe('createRequestListener', () => {
       yield { type: 'stage', stage: 'LLM' };
       yield { type: 'sql', sql: 'SELECT 1' };
     })();
-    listenerFor(async () => ({ status: 200, stream }) as unknown as HandlerResponse)(fakeReq('POST', '/chat') as never, res as never);
+    listenerFor(async () => ({ status: 200, stream }) as unknown as HandlerResponse)(
+      fakeReq('POST', '/chat') as never,
+      res as never,
+    );
     await settled();
 
     expect(res.headers['Content-Type']).toBe('text/event-stream');
@@ -114,7 +125,7 @@ describe('createRequestListener', () => {
     const big = {
       method: 'POST',
       url: '/execute',
-      headers: {},
+      headers: { 'content-type': 'application/json' },
       destroyed: false,
       destroy() {
         this.destroyed = true;
@@ -146,7 +157,10 @@ describe('createRequestListener', () => {
         yield { type: 'done' };
       },
     };
-    listenerFor(async () => ({ status: 200, stream }) as unknown as HandlerResponse)(fakeReq('POST', '/chat') as never, res as never);
+    listenerFor(async () => ({ status: 200, stream }) as unknown as HandlerResponse)(
+      fakeReq('POST', '/chat') as never,
+      res as never,
+    );
     await settled();
 
     expect(res.chunks.join('')).toContain('"stage":"LLM"');

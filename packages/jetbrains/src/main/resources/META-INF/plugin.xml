@@ -4,24 +4,44 @@
     <vendor email="rahultkiet@gmail.com" url="https://github.com/rahulmahadik/AskSQL">Rahul Mahadik</vendor>
 
     <description><![CDATA[
-        <p><img src="https://github.com/rahulmahadik/AskSQL/raw/HEAD/packages/jetbrains/images/schema-and-chat.png" alt="AskSQL in a JetBrains IDE: the schema tree above the chat panel, a plain-language question turned into SQL with results" width="600"/></p>
-        <p>AI database chat inside your IDE. Ask a question in plain language, review the generated
-        SQL, approve it, and get results.</p>
+        <p>AI database chat inside your IDE. Ask a question in plain language, review the SQL it
+        writes, approve it, and get results.</p>
         <ul>
-            <li><b>Read-only by design.</b> An AST-based SQL guard plus an enforced read-only database
-                session block anything that is not a SELECT.</li>
-            <li><b>Bring your own model.</b> OpenAI, Anthropic, Google Gemini, Groq, NVIDIA, Azure
-                AI Foundry (via an OpenAI-compatible endpoint), or a local model through Ollama or
-                LM Studio (no API key needed).</li>
-            <li><b>Six databases.</b> Postgres, MySQL, SQLite, DuckDB, Oracle, and MongoDB.</li>
-            <li><b>Or no database at all.</b> Point it at CSV, TSV, JSON, Parquet or Excel files and ask
-                questions about them directly, joining across files. No server to install.</li>
-            <li><b>Private by default.</b> Zero telemetry. Only schema and small samples of low-cardinality
-                values reach the model; secrets live in your OS keychain.</li>
+            <li><b>Read-only by design.</b> An AST guard checks every statement before it runs, on every
+                engine. On Postgres, MySQL, Oracle and SQLite the session itself is opened read-only as a
+                second floor. MongoDB has no read-only session to open, so there the guard is the only
+                one, working from an allowlist rather than a blocklist; the same is true of DuckDB when
+                it is holding data files, because loading them needs to create views.</li>
+            <li><b>Asking for a change is never a change.</b> Ask for an INSERT, UPDATE, DELETE or a
+                schema change and you get the statement written out to run yourself, never executed.</li>
+            <li><b>Six databases.</b> Postgres, MySQL, SQLite, DuckDB, Oracle and MongoDB.</li>
+            <li><b>Or no database at all.</b> Point it at CSV, TSV, TXT, JSON, NDJSON, Parquet, Excel or
+                .sql files and query them as tables, joining across files. No server to install.</li>
+            <li><b>Questions about the schema, not just the rows.</b> "How are these tables related?" is
+                answered in plain language from your schema, and a query it suggests can be copied
+                straight out.</li>
+            <li><b>Teach it your vocabulary.</b> A business glossary maps terms your schema does not
+                define, which is also how you tell it that <code>total_cents</code> is cents.</li>
+            <li><b>Bring your own model.</b> OpenAI, Anthropic, Google Gemini, Groq, NVIDIA, or any
+                OpenAI-compatible endpoint including Azure AI Foundry. Ollama and LM Studio run on your
+                machine with no API key.</li>
+            <li><b>Private by default.</b> Zero telemetry. Only your schema reaches the model, never the
+                rows in your tables; secrets live in your OS keychain.</li>
             <li><b>Every JetBrains IDE.</b> IntelliJ IDEA, DataGrip, PyCharm, WebStorm, GoLand, PhpStorm,
-                Rider, CLion, RubyMine, RustRover, and Android Studio (2025.2 and newer).</li>
+                Rider, CLion, RubyMine, RustRover and Android Studio (2025.1 and newer).</li>
         </ul>
-        <p>Source and issues: <a href="https://github.com/rahulmahadik/AskSQL">github.com/rahulmahadik/AskSQL</a></p>
+        <p><b>Getting started</b></p>
+        <ol>
+            <li>Open the <b>AskSQL</b> tool window on the right.</li>
+            <li>Add a database connection, or point AskSQL at a data file.</li>
+            <li>In <b>Settings &gt; Tools &gt; AskSQL</b>, choose a model. Ollama runs on your machine and
+                needs no API key.</li>
+            <li>Ask a question, review the SQL it writes, and approve it to run.</li>
+        </ol>
+        <p>Full documentation:
+        <a href="https://github.com/rahulmahadik/AskSQL/blob/HEAD/packages/jetbrains/README.md">plugin README</a>.
+        Source and issues: <a href="https://github.com/rahulmahadik/AskSQL">github.com/rahulmahadik/AskSQL</a>.
+        Author: <a href="https://www.linkedin.com/in/rahulmahadik/">Rahul Mahadik</a></p>
     ]]></description>
 
     <!-- Platform-only dependency: installs in every JetBrains IDE, not only IntelliJ IDEA. -->
@@ -75,7 +95,7 @@
             <action id="AskSQL.TrySampleData" class="com.rahulmahadik.asksql.ide.actions.TrySampleDataAction"
                     text="Try with Sample Data" description="Create a small demo SQLite database, no setup required"/>
             <action id="AskSQL.UploadFileToDuckDb" class="com.rahulmahadik.asksql.ide.actions.UploadFileToDuckDbAction"
-                    text="Query CSV, Excel or Parquet Files" description="Ask questions about data files without a database server. Loads CSV, TSV, JSON, Parquet, Excel or .sql files as tables, using DuckDB under the hood." icon="AllIcons.ToolbarDecorator.Import"/>
+                    text="Query CSV, Excel or Parquet Files" description="Ask questions about data files without a database server. Loads CSV, TSV, TXT, JSON, NDJSON, Parquet, Excel or .sql files as tables, using DuckDB under the hood." icon="AllIcons.ToolbarDecorator.Import"/>
             <action id="AskSQL.ClearChat" class="com.rahulmahadik.asksql.ide.actions.ClearChatAction"
                     text="Clear Conversation" description="Clear the chat history and follow-up context" icon="AllIcons.Actions.GC"/>
             <action id="AskSQL.RefreshSchema" class="com.rahulmahadik.asksql.ide.actions.RefreshSchemaAction"

@@ -98,6 +98,23 @@ describe('inferChart', () => {
     ).toBeNull();
   });
 
+  it('a non-finite value never leaks into the points', () => {
+    const spec = inferChart(
+      rs(
+        [
+          { name: 'region', kind: 'text' },
+          { name: 'ratio', kind: 'number' },
+        ],
+        [
+          ['EU', 100],
+          ['NA', NaN],
+          ['APAC', Infinity],
+        ],
+      ),
+    );
+    expect(spec?.series[0]!.points.map((p) => p.value)).toEqual([100, 0, 0]);
+  });
+
   it('zero rows is not chartable', () => {
     expect(
       inferChart(

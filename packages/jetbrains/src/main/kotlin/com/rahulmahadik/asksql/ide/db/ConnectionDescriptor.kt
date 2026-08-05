@@ -23,10 +23,7 @@ data class ConnectionDescriptor(
     val user: String? = null,
     /** SQLite/DuckDB file-mode path. */
     val filePath: String? = null,
-    /**
-     * MongoDB `mongodb://`/`mongodb+srv://` connection string, never with embedded credentials: the
-     * password travels via PasswordSafe and is applied at connect time via `MongoCredential`.
-     */
+    /** MongoDB `mongodb://`/`mongodb+srv://` connection string, never with embedded credentials. */
     val connectionString: String? = null,
     /** Marks the bundled onboarding demo connection; see `TrySampleDataAction`. */
     val isSample: Boolean = false,
@@ -40,7 +37,7 @@ data class ConnectionDescriptor(
         else -> "$engine:${host.orEmpty()}:${port ?: 0}:${database.orEmpty()}:${user.orEmpty()}"
     }
 
-    /** "where does this actually point at", for display. File engines show the file (or in-memory), not a host:port they don't have. */
+    /** Where this connection points, for display. */
     fun target(): String = when (engine) {
         EngineKind.SQLITE, EngineKind.DUCKDB -> filePath?.takeIf { it.isNotBlank() } ?: "in-memory"
         EngineKind.MONGODB -> connectionString.orEmpty()

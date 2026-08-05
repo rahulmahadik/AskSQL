@@ -1,5 +1,7 @@
 dist/
 *.zip
+# The packaged extension is a build artifact; the zip fixtures the e2e suite loads are not.
+!test/fixtures/*.zip
 node_modules/
 *.tsbuildinfo
 .devkey/

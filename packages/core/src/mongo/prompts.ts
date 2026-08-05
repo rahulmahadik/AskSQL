@@ -145,8 +145,20 @@ export function buildMongoSchemaAnswerSystem(
   return lines.join('\n');
 }
 
-export function buildMongoSchemaAnswerUser(question: string, schemaText: string): string {
-  return ['<schema>', schemaText, '</schema>', '', 'Question:', question].join('\n');
+export function buildMongoSchemaAnswerUser(
+  question: string,
+  schemaText: string,
+  context?: readonly MongoContextTurn[],
+): string {
+  const parts: string[] = ['<schema>', schemaText, '</schema>', ''];
+  // Without the prior turns, "explain this pipeline" has no pipeline to explain.
+  if (context && context.length > 0) {
+    parts.push('Conversation so far (for follow-up questions):');
+    for (const turn of context.slice(-4)) parts.push(`Q: ${turn.question}`, '```json', turn.pipelineJson, '```');
+    parts.push('"this pipeline" and "that" refer to the most recent one.', '');
+  }
+  parts.push('Question:', question);
+  return parts.join('\n');
 }
 
 /** Challenges a wrong out-of-scope classification; see the SQL path's counterpart for why the refusal is not trusted outright. */

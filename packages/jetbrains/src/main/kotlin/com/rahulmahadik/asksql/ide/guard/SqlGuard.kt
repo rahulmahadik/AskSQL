@@ -59,9 +59,7 @@ object SqlGuard {
             return blocked(original, "too_long", "The statement is too long to verify safely.")
         }
 
-        // MySQL executes the body of its bang-style executable comments, but a naive
-        // stripper/parser treats them as ordinary comments, hiding INTO OUTFILE, load_file,
-        // sleep, FOR UPDATE, or a second statement. Fail closed.
+        // MySQL executes the body of its bang-style executable comments, which a comment stripper hides.
         if (dialect.engine == EngineKind.MYSQL && hasMysqlExecutableComment(trimmed)) {
             return blocked(original, "mysql_executable_comment", "MySQL executable comments are not allowed.")
         }
@@ -108,6 +106,15 @@ object SqlGuard {
         if (INTO_OUTFILE.containsMatchIn(strippedInner)) {
             return blocked(original, "into_outfile", "Writing query output to files is not allowed.")
         }
+        // Models write `col` out of MySQL habit whatever the dialect, and JSqlParser accepts it.
+        if (dialect.quoteChar != '`' && strippedInner.contains('`')) {
+            return blocked(
+                original,
+                "backtick_identifier",
+                "Backtick-quoted identifiers are MySQL-only. ${dialect.promptLabel} quotes identifiers with " +
+                    "${dialect.quoteChar}: write ${dialect.quoteChar}Order Status${dialect.quoteChar}, not `Order Status`.",
+            )
+        }
 
         // ---- Parse once, fail-closed ----
         val statement: Statement = try {
@@ -118,8 +125,7 @@ object SqlGuard {
             // Pathologically deep nesting overflows the parser's own stack before walkSelect's depth check ever runs.
             return blocked(original, "too_deep", "The statement is nested too deeply to verify safely.")
         } catch (e: Exception) {
-            // JSqlParser can throw non-JSQLParserException runtime errors on
-            // pathological input; treat every parse failure identically.
+            // JSqlParser can throw non-JSQLParserException runtime errors on pathological input.
             return blocked(original, "parse_failed", "The statement could not be verified as safe SQL for this database, so it was blocked.")
         }
 
@@ -158,11 +164,19 @@ object SqlGuard {
 
         if (explainPrefix.isEmpty()) {
             val target = effectiveLimitTarget(statement)
+            // This dialect has no LIMIT. Refusing it sends the query back to be rewritten, instead of
+            // appending FETCH FIRST to a statement the database will reject anyway.
+            if (dialect.limitStyle == LimitStyle.FETCH && target?.limit != null) {
+                return blocked(
+                    sql,
+                    "limit_unsupported",
+                    "${dialect.promptLabel} has no LIMIT clause. Remove it and order the results instead; " +
+                        "the row cap is applied when the query runs.",
+                )
+            }
             when (val status = inspectLimit(target, policy.maxRows, dialect.limitStyle)) {
                 is LimitStatus.None -> {
-                    // Textual append preserves the model's exact formatting. On
-                    // its own line so a trailing `--`/`#` comment in `body`
-                    // can't comment it out while `autoLimited` still reports true.
+                    // Textual append on its own line, so a trailing `--`/`#` comment in `body` can't hide it.
                     finalSql = if (dialect.limitStyle == LimitStyle.FETCH) {
                         "$body\nFETCH FIRST ${policy.maxRows} ROWS ONLY"
                     } else {
@@ -201,9 +215,7 @@ object SqlGuard {
     private fun blocked(sql: String, ruleId: String, reason: String) =
         GuardVerdict(allowed = false, sql = sql, ruleId = ruleId, reason = reason)
 
-    // True if the SQL contains a MySQL executable-comment opener (slash, star, bang) outside a
-    // string literal. Scans the raw sql, not the stripped version, to tell a real string literal
-    // apart from an ordinary comment and from bare code.
+    // True if the raw SQL contains a MySQL executable-comment opener (slash, star, bang) outside a string literal.
     private fun hasMysqlExecutableComment(sql: String): Boolean {
         var i = 0
         val n = sql.length
@@ -244,7 +256,7 @@ object SqlGuard {
         val engine: EngineKind,
     )
 
-    /** Strips one layer of `"..."`/`` `...` `` quoting; JSqlParser's `Function.getName()` keeps quote characters verbatim, so raw-string matching would let `"pg_read_file"(...)` past every denylist entry. */
+    /** Strips one layer of `"..."`/`` `...` `` quoting; JSqlParser's `Function.getName()` keeps quote characters verbatim. */
     private fun unquoteSegment(segment: String): String {
         val s = segment.trim()
         return if (s.length >= 2 && ((s[0] == '"' && s.last() == '"') || (s[0] == '`' && s.last() == '`'))) {
@@ -254,10 +266,7 @@ object SqlGuard {
         }
     }
 
-    /**
-     * Checks one function-call node's name against the deny set/suffixes/prefixes. Shared by the
-     * expression visitor and the FROM-item check, since `FROM dblink(...)` must be caught too.
-     */
+    /** Checks one function-call node's name against the deny set/suffixes/prefixes. Shared by the expression visitor and the FROM-item check. */
     private fun checkDeniedFunctionName(function: Function, ctx: WalkContext): Violation? {
         val raw = function.name ?: return null
         // Each dot segment is quote-stripped and lowercased independently, so a schema qualifier or quoting can't change what it normalizes to.
@@ -282,9 +291,7 @@ object SqlGuard {
     private fun walkSelect(select: Select, ctx: WalkContext, depth: Int): Violation? {
         if (depth > ctx.maxDepth) return Violation("too_deep", "The statement is nested too deeply to verify safely.")
 
-        // CTEs: WITH x AS (...), y AS (...) SELECT ...; each body must be a Select. JSqlParser's
-        // WithItem can carry a writable body (a "writable CTE"), unlike node-sql-parser's
-        // grammar, so this is an explicit type check and reject, never an assumption.
+        // JSqlParser's WithItem can carry a writable body (a "writable CTE"), so each CTE body is type-checked.
         val withItems = try {
             select.withItemsList
         } catch (e: Exception) {
@@ -312,16 +319,13 @@ object SqlGuard {
                 null
             }
             is ParenthesedSelect -> walkSelect(select.select, ctx, depth + 1)
-            // VALUES(...) is itself a Select (and a FromItem) in JSqlParser's grammar and can
-            // carry arbitrary expressions, including function calls (e.g. top-level
-            // `VALUES (pg_sleep(1))`). Reachable here for both shapes; the FROM-item shape is
-            // covered separately in checkFromItem below.
+            // VALUES(...) is itself a Select in JSqlParser's grammar and can carry arbitrary expressions.
             is Values -> checkValuesExpressions(select.expressions, ctx, depth)
             else -> null
         }
     }
 
-    /** Walks every expression in a VALUES row-constructor list through the same [SecurityExpressionVisitor] every other expression tree uses; a denied function called from inside VALUES must be caught, not silently skipped. */
+    /** Walks every expression in a VALUES row-constructor list through the same [SecurityExpressionVisitor] every other expression tree uses. */
     private fun checkValuesExpressions(expressions: net.sf.jsqlparser.expression.operators.relational.ExpressionList<*>, ctx: WalkContext, depth: Int): Violation? {
         var violation: Violation? = null
         val visitor = SecurityExpressionVisitor(ctx, depth + 1) { violation = it }
@@ -352,19 +356,14 @@ object SqlGuard {
                     }
                 }
                 is ParenthesedFromItem -> checkFromItem(item.fromItem)
-                // LateralSubSelect extends ParenthesedSelect, so this branch
-                // also covers plain lateral subqueries used as a from-item.
+                // LateralSubSelect extends ParenthesedSelect, so this branch covers lateral subqueries too.
                 is ParenthesedSelect -> walkSelect(item.select, ctx, depth + 1)?.let { violation = it }
-                // A table-valued function call in the FROM clause (e.g. `FROM dblink(...)`) is
-                // modeled as its own node (`TableFunction`, extends `Function`), separate from
-                // the scalar/aggregate `Function` nodes the expression visitor covers. Without
-                // this branch, a denied function called as a from-item would bypass the denylist.
+                // A FROM-clause table function (e.g. `FROM dblink(...)`) is a `TableFunction` node, not one the expression visitor sees.
                 is net.sf.jsqlparser.statement.select.TableFunction -> {
                     checkDeniedFunctionName(item.function, ctx)?.let { violation = it }
                     item.function.parameters?.forEach { it.accept(exprVisitor) }
                 }
-                // FROM (VALUES (...)) AS v(x) / JOIN (VALUES (...)): same arbitrary-expression
-                // risk as the top-level case in walkSelect.
+                // FROM (VALUES (...)) / JOIN (VALUES (...)) carries the same arbitrary expressions as the top-level case.
                 is Values -> checkValuesExpressions(item.expressions, ctx, depth)?.let { violation = it }
                 else -> Unit // FromQuery carries no nested SQL to walk
             }
@@ -390,8 +389,7 @@ object SqlGuard {
         plain.having?.accept(exprVisitor)
         plain.orderByElements?.forEach { it.expression?.accept(exprVisitor) }
 
-        // LIMIT/OFFSET/DISTINCT ON/WINDOW can all hold arbitrary expressions
-        // in JSqlParser's grammar, not just an integer literal.
+        // LIMIT/OFFSET/DISTINCT ON/WINDOW can all hold arbitrary expressions in JSqlParser's grammar.
         plain.limit?.rowCount?.accept(exprVisitor)
         plain.limit?.offset?.accept(exprVisitor)
         plain.limit?.byExpressions?.forEach { it.accept(exprVisitor) }
@@ -428,8 +426,7 @@ object SqlGuard {
             return super.visit(function, context)
         }
 
-        // visit(Select, S), not visit(ParenthesedSelect, S): every Select subtype's accept() resolves
-        // to visit(Select, S) at JSqlParser's compile time, so a subtype override would be unreachable.
+        // Every Select subtype's accept() resolves to visit(Select, S) at JSqlParser's compile time.
         override fun <S> visit(select: net.sf.jsqlparser.statement.select.Select, context: S): Void? {
             if (stopped) return null
             walkSelect(select, ctx, depth + 1)?.let {
@@ -439,10 +436,8 @@ object SqlGuard {
             return null
         }
 
-        // Oracle's `seq.NEXTVAL`/`seq.CURRVAL` is a pseudo-column reference, not a function call
-        // (JSqlParser parses it as a Column), so it's caught here since checkDeniedFunctionName
-        // never sees it. Requiring a table qualifier avoids flagging a bare column merely named
-        // "nextval"/"currval".
+        // Oracle's `seq.NEXTVAL`/`seq.CURRVAL` is a pseudo-column, which JSqlParser parses as a Column.
+        // The table qualifier is required, so a bare column merely named "nextval" is not flagged.
         override fun <S> visit(column: Column, context: S): Void? {
             if (stopped) return null
             if (ctx.engine == EngineKind.ORACLE && column.table != null && column.columnName?.lowercase() in SEQUENCE_PSEUDO_COLUMNS) {
@@ -456,10 +451,7 @@ object SqlGuard {
 
     private val SEQUENCE_PSEUDO_COLUMNS = setOf("nextval", "currval")
 
-    /**
-     * True when a relation name is really a path/URL/data-file name, which DuckDB's replacement scan
-     * would read as a file with no function node for the denylist to catch.
-     */
+    /** True when a relation name is really a path/URL/data-file name, which DuckDB's replacement scan reads as a file. */
     private fun looksLikeFileOrUrl(name: String): Boolean {
         return Regex("""[/\\]""").containsMatchIn(name) ||
             Regex("""^[a-zA-Z][a-zA-Z0-9+.-]*://""").containsMatchIn(name) ||
@@ -488,9 +480,7 @@ object SqlGuard {
     }
 
     private fun inspectLimit(target: PlainSelect?, maxRows: Int, style: LimitStyle): LimitStatus {
-        // FETCH FIRST (Oracle) is a distinct AST node from LIMIT (everyone else): JSqlParser's
-        // Select.getFetch() vs. getLimit(), mirrored via getExpression()/setExpression() rather
-        // than the deprecated long-based getRowCount()/setRowCount().
+        // FETCH FIRST (Oracle) is a distinct JSqlParser node from LIMIT: getFetch() vs. getLimit(), read via getExpression().
         if (style == LimitStyle.FETCH) {
             val fetch = target?.fetch ?: return LimitStatus.None
             val rowCount: Expression = fetch.expression ?: return LimitStatus.None

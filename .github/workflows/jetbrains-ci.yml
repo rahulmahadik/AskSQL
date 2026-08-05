@@ -1,16 +1,19 @@
 name: JetBrains Plugin CI
 
+# packages/core is listed: the parity job builds its golden vectors from the local core.
 on:
   push:
     branches: [main, develop]
     paths:
       - 'packages/jetbrains/**'
+      - 'packages/core/**'
       - '.github/workflows/jetbrains-ci.yml'
       - 'pnpm-workspace.yaml'
       - '.changeset/config.json'
   pull_request:
     paths:
       - 'packages/jetbrains/**'
+      - 'packages/core/**'
       - '.github/workflows/jetbrains-ci.yml'
       - 'pnpm-workspace.yaml'
       - '.changeset/config.json'
@@ -62,7 +65,7 @@ jobs:
           distribution: temurin
           java-version: 21
       - uses: gradle/actions/setup-gradle@v6
-      - run: ./gradlew test buildPlugin verifyPlugin --stacktrace
+      - run: ./gradlew test koverVerify buildPlugin verifyPlugin --stacktrace
       - name: Upload plugin zip
         uses: actions/upload-artifact@v7
         with:

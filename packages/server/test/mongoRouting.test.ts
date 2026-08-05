@@ -65,7 +65,7 @@ const req = (method: string, path: string, body: unknown = {}): ServerRequest =>
   method,
   path,
   query: {},
-  headers: {},
+  headers: { 'content-type': 'application/json' },
   json: async () => body,
 });
 
@@ -146,20 +146,27 @@ describe('MongoDB routing', () => {
   });
 
   it('lists a Mongo connection alongside SQL ones', async () => {
-    const res = (await server(fakeMongo()).handle(req('GET', '/connections'))) as { body: { connections: { id: string; engine: string }[] } };
+    const res = (await server(fakeMongo()).handle(req('GET', '/connections'))) as {
+      body: { connections: { id: string; engine: string }[] };
+    };
     expect(res.body.connections).toEqual([
       expect.objectContaining({ id: 'm1', name: 'Shop Mongo', engine: 'mongodb', database: 'shop' }),
     ]);
   });
 
   it('serves the Mongo catalog on /schema, which the SQL engine could not do', async () => {
-    const res = (await server(fakeMongo()).handle(req('GET', '/schema'))) as { status: number; body: { catalog: unknown } };
+    const res = (await server(fakeMongo()).handle(req('GET', '/schema'))) as {
+      status: number;
+      body: { catalog: unknown };
+    };
     expect(res.status).toBe(200);
     expect(res.body.catalog).toEqual(CATALOG);
   });
 
   it('answers /chat with a pipeline and the collection it runs against', async () => {
-    const events = await collect(await server(fakeMongo()).handle(req('POST', '/chat', { question: 'how many orders?' })));
+    const events = await collect(
+      await server(fakeMongo()).handle(req('POST', '/chat', { question: 'how many orders?' })),
+    );
     const sqlEvent = events.find((e) => e.type === 'sql') as { sql: string; collection?: string };
 
     expect(sqlEvent.collection).toBe('orders');

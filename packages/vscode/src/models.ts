@@ -46,8 +46,7 @@ async function listOpenAICompatible(
   apiKey: string | undefined,
   signal: AbortSignal,
 ): Promise<string[]> {
-  // The same checks buildModel applies: never send the key to an unvalidated
-  // host (plaintext, or a metadata address).
+  // The same checks buildModel applies: never send the key to an unvalidated host.
   assertBaseUrl(baseURL, { carriesSecret: Boolean(apiKey) });
   const res = await fetch(`${baseURL.replace(/\/$/, '')}/models`, {
     headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {},
@@ -69,16 +68,14 @@ async function listOpenAICompatible(
 function listableBaseUrl(provider: ProviderName, configured: string): string | undefined {
   if (provider === 'ollama') return configured || OLLAMA_DEFAULT_BASE_URL;
   if (provider === 'openai-compatible') return configured || undefined;
-  // openai / groq / nvidia expose an OpenAI-style /models list at their official host,
-  // so we can offer a real model picker instead of making the user type an id.
+  // openai / groq / nvidia expose an OpenAI-style /models list at their official host.
   if (LISTABLE_HOSTED.has(provider)) return configured || PROVIDER_API_HOST[provider];
   return undefined; // anthropic / google have no OpenAI-style listing
 }
 
 /**
  * The configured provider's own models, when its endpoint can be listed (Ollama /
- * OpenAI-compatible). Empty for hosted SDKs, which own their endpoint. Bounded so a
- * dead endpoint cannot hang the model picker.
+ * OpenAI-compatible). Empty for hosted SDKs. Bounded.
  */
 export async function providerModels(secrets: vscode.SecretStorage, timeoutMs: number): Promise<string[]> {
   const cfg = vscode.workspace.getConfiguration('asksql');
@@ -115,8 +112,7 @@ export async function selectModel(secrets: vscode.SecretStorage): Promise<string
         {
           location: vscode.ProgressLocation.Notification,
           title: 'AskSQL: looking up available models...',
-          // Node's fetch has no default timeout; without cancel + timeout a dead
-          // endpoint would spin this notification forever.
+          // Node's fetch has no default timeout, so a dead endpoint needs an explicit cancel + timeout.
           cancellable: true,
         },
         async (_progress, token) => {
@@ -136,8 +132,7 @@ export async function selectModel(secrets: vscode.SecretStorage): Promise<string
         found = await lookup();
         break;
       } catch (err) {
-        // The user cancelled the lookup progress (not a timeout, which is a
-        // TimeoutError): a deliberate dismiss is not worth a warning banner.
+        // The user cancelled the lookup, not a timeout (which is a TimeoutError); no warning banner.
         if ((err as { name?: string } | null)?.name === 'AbortError') return undefined;
         const authFailed =
           err instanceof ModelListError && (err.status === 401 || err.status === 403) && provider !== 'ollama';
@@ -181,15 +176,22 @@ export async function selectModel(secrets: vscode.SecretStorage): Promise<string
 }
 
 /** Providers that need an API key (everything except local Ollama). */
-const KEY_PROVIDERS: readonly ProviderName[] = ['openai', 'anthropic', 'google', 'groq', 'nvidia', 'openai-compatible'];
+const KEY_PROVIDERS: readonly ProviderName[] = [
+  'openai',
+  'anthropic',
+  'google',
+  'groq',
+  'nvidia',
+  'azure',
+  'openai-compatible',
+];
 
 /** Every provider except Ollama needs an API key. Derived from KEY_PROVIDERS so the two can't drift. */
 const NEEDS_API_KEY = (p: ProviderName): boolean => KEY_PROVIDERS.includes(p);
 
 /**
  * "Set AI Provider API Key" - pick which provider the key belongs to, then set,
- * update or clear it. Picking explicitly keeps the key out of the wrong keychain
- * slot. An empty value clears an existing key; cancelling leaves it untouched.
+ * update or clear it. An empty value clears; cancelling leaves it untouched.
  */
 export async function selectApiKey(secrets: vscode.SecretStorage): Promise<void> {
   const current = vscode.workspace.getConfiguration('asksql').get<string>('provider') ?? 'ollama';
@@ -219,9 +221,8 @@ export async function selectApiKey(secrets: vscode.SecretStorage): Promise<void>
 }
 
 /**
- * Prompt for and store a provider's API key. Blank input keeps an existing key
- * (so re-running the flow doesn't force re-entry); a value replaces it. No host
- * strings in the prompt - the webview autolinker would turn them into a live link.
+ * Prompt for and store a provider's API key. Blank input keeps an existing key; a
+ * value replaces it. No host strings in the prompt - the webview autolinks them.
  */
 export async function promptForApiKey(secrets: vscode.SecretStorage, provider: ProviderName): Promise<void> {
   const existing = await secrets.get(apiKeyKey(provider));
@@ -238,9 +239,8 @@ export async function promptForApiKey(secrets: vscode.SecretStorage, provider: P
 
 /**
  * Switch provider, collect what it needs, then offer its models. Answers are
- * gathered before anything is committed, so cancelling never strands a half
- * configuration. Switching to a hosted provider clears a stale baseURL so its
- * key is never sent to the previous provider's endpoint.
+ * gathered before anything is committed, and switching to a hosted provider clears
+ * a stale baseURL.
  */
 export async function selectProvider(secrets: vscode.SecretStorage): Promise<boolean> {
   const cfg = vscode.workspace.getConfiguration('asksql');
@@ -252,6 +252,7 @@ export async function selectProvider(secrets: vscode.SecretStorage): Promise<boo
       { label: 'google', description: 'Needs an API key' },
       { label: 'groq', description: 'Fast, generous free tier - needs an API key' },
       { label: 'nvidia', description: 'Free tier with many open models - needs an API key' },
+      { label: 'azure', description: 'Azure OpenAI - needs an API key and your resource name' },
       { label: 'openai-compatible', description: 'Any other LLM: LM Studio, vLLM, OpenRouter, Together, a gateway...' },
     ],
     { placeHolder: `AI provider (current: ${cfg.get<string>('provider') ?? 'ollama'})`, ignoreFocusOut: true },
@@ -259,8 +260,7 @@ export async function selectProvider(secrets: vscode.SecretStorage): Promise<boo
   if (!picked) return false;
   const provider = picked.label as ProviderName;
 
-  // openai-compatible has no pre-seeded endpoint; collect it before committing so a
-  // cancel here doesn't leave the provider set with nowhere to send requests.
+  // openai-compatible has no pre-seeded endpoint; collect it before committing.
   let baseURL: string | undefined;
   if (provider === 'openai-compatible') {
     baseURL = cfg.get<string>('baseURL') || undefined;
@@ -275,14 +275,36 @@ export async function selectProvider(secrets: vscode.SecretStorage): Promise<boo
     }
   }
 
+  // Classic Azure builds its endpoint from the resource name, so collect it before committing too.
+  let resourceName: string | undefined;
+  if (provider === 'azure' && !cfg.get<string>('baseURL')) {
+    resourceName = cfg.get<string>('resourceName') || undefined;
+    if (!resourceName) {
+      const name = await vscode.window.showInputBox({
+        prompt: 'Azure OpenAI resource name, from https://<resource>.openai.azure.com',
+        placeHolder: 'my-openai-resource',
+        ignoreFocusOut: true,
+        validateInput: (value) =>
+          /^[A-Za-z0-9][A-Za-z0-9-]{1,62}[A-Za-z0-9]$/.test(value.trim())
+            ? undefined
+            : 'Letters, digits and hyphens only, and it cannot start or end with a hyphen.',
+      });
+      if (!name) return false; // cancelled - don't commit a provider it can't reach
+      resourceName = name.trim();
+    }
+  }
+
   await cfg.update('provider', provider, vscode.ConfigurationTarget.Global);
+  if (resourceName && resourceName !== cfg.get<string>('resourceName')) {
+    await cfg.update('resourceName', resourceName, vscode.ConfigurationTarget.Global);
+  }
   if (provider === 'openai-compatible') {
     if (baseURL && baseURL !== cfg.get<string>('baseURL')) {
       await cfg.update('baseURL', baseURL, vscode.ConfigurationTarget.Global);
     }
-  } else if (provider !== 'ollama' && cfg.get<string>('baseURL')) {
-    // Hosted providers use their official host; drop a leftover override so the key
-    // isn't sent to whatever endpoint the previous provider pointed at.
+  } else if (provider !== 'ollama' && provider !== 'azure' && cfg.get<string>('baseURL')) {
+    // Hosted providers use their official host; drop a leftover override from the previous provider.
+    // Azure is exempt: there a baseURL is the AI Foundry endpoint, not a leftover.
     await cfg.update('baseURL', undefined, vscode.ConfigurationTarget.Global);
   }
 

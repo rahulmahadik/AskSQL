@@ -6,16 +6,10 @@ enum class ColumnKind {
 
 data class ResultColumn(val name: String, val dbType: String? = null, val kind: ColumnKind)
 
-/**
- * Size + hex preview only. Binary payloads are never materialized as full
- * byte arrays in the UI/history layer.
- */
+/** Size + hex preview only; binary payloads are never materialized as full byte arrays in the UI/history layer. */
 data class BinaryPreview(val bytes: Long, val hexPreview: String)
 
-/**
- * JSON-safe cell values. BIGINT/DECIMAL/NUMERIC travel as strings, not a JVM
- * `Long`/`Double`, to avoid silently rounding a DECIMAL through a `Double`. See [com.rahulmahadik.asksql.ide.db.JdbcExecutor].
- */
+/** JSON-safe cell values; BIGINT/DECIMAL/NUMERIC travel as exact strings, never a JVM `Long`/`Double`. See [com.rahulmahadik.asksql.ide.db.JdbcExecutor]. */
 sealed interface CellValue {
     data object Null : CellValue
     data class Text(val value: String) : CellValue

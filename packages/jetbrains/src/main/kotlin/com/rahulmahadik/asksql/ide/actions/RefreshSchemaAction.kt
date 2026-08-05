@@ -6,15 +6,14 @@ import com.intellij.openapi.project.DumbAwareAction
 import com.intellij.openapi.wm.ToolWindowManager
 import com.rahulmahadik.asksql.ide.ui.AskSqlToolWindowFactory
 
-/** Re-introspects every configured connection's schema, bypassing the 300s catalog cache. Wired to the Schema tab's Refresh button; also exposed as an action for the palette/shortcuts. */
+/** Re-introspects every configured connection's schema, bypassing the catalog cache. */
 class RefreshSchemaAction : DumbAwareAction() {
     override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.BGT
 
     override fun actionPerformed(e: AnActionEvent) {
         val project = e.project ?: return
         val toolWindow = ToolWindowManager.getInstance(project).getToolWindow("AskSQL") ?: return
-        // show() first: on a tool window whose contents have not been created yet, the
-        // lookup finds nothing and the refresh is silently dropped.
+        // show() first: a tool window whose contents don't exist yet has nothing to look up.
         toolWindow.show()
         val schemaContent = toolWindow.contentManager.contents.firstOrNull { it.getUserData(AskSqlToolWindowFactory.SCHEMA_PANEL_KEY) != null }
         schemaContent?.let { content ->

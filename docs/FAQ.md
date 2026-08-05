@@ -71,18 +71,23 @@ account (no usable free API tier in most regions).
 
 No. A deterministic, AST-based guard - not the prompt - decides what runs. It allows a single
 read-only `SELECT` (CTEs included) and blocks every write, DDL, stacked statement, locking
-clause, file-reading function, and a per-dialect dangerous-function denylist. Anything it
-cannot parse fails closed. Where the engine supports it (Postgres, MySQL, SQLite, Oracle) the
-connector also opens a read-only session as a backstop; DuckDB has no read-only session, so the
-AST guard is the sole barrier there.
+clause, file-reading function, and a dangerous-function denylist. Anything it cannot parse fails
+closed. Where the engine supports it (Postgres, MySQL, SQLite, Oracle) the connector also opens a
+read-only session as a backstop. DuckDB has no read-only session: in Node a plain database file is
+opened `READ_ONLY`, but registering `files` needs `CREATE VIEW`, so in that mode and in the browser
+the AST guard is the sole barrier.
 
 ### Can I ask general questions about the schema - or how to change it?
 
-Yes. **Answer schema questions** is on by default in the extension and the plugin (and is the
-`answerSchemaQuestions` option in code). A question that isn't a data query - "summarize this
-database", "how are customers and orders related?", or even "how would I add an index on email?" /
-"what column tracks loyalty points?" - is answered in plain language from the schema instead of
-erroring. This works on MongoDB connections too, in MongoDB terms (collections, `$lookup`).
+Yes. **Answer schema questions** is on by default in the VS Code extension, the JetBrains plugin
+and the browser extension. In code it is the `answerSchemaQuestions` option on `useAskSql` /
+`<AskSqlChat>`, where it is **off** by default; `engine.explainSchema(question)` is always
+available directly. A question that isn't a data query - "summarize this database", "how are
+customers and orders related?", or even "how would I add an index on email?" / "what column tracks
+loyalty points?" - is answered in plain language from the schema instead of erroring. A bare
+imperative write ("delete all cancelled orders") is routed here too, before any model call, so it
+returns a proposal instead of a SELECT. This works on MongoDB connections too, in MongoDB terms
+(collections, `$lookup`).
 
 Ask something with nothing to do with data and AskSQL says so in one line rather than guessing;
 general database questions - modelling, indexing, or how another engine would express something -
@@ -112,7 +117,9 @@ blocks (`ResultTable`, `SqlBlock`, `SchemaBrowser`, `ResultChart`), or the fully
 
 Yes. `@asksql/mcp` exposes the engine as Model Context Protocol tools, so an MCP host (Claude
 Desktop, IDE agents) can list connections, read the schema, generate SQL, and run approved
-read-only queries. The guard applies to agent calls too - a write is blocked.
+read-only queries. Five tools: `asksql_list_connections`, `asksql_schema`, `asksql_query`,
+`asksql_explain_schema`, `asksql_run`. The guard applies to agent calls too - a write is blocked.
+It wraps a `createAskSql` engine, so it covers the five SQL engines, not MongoDB.
 
 ### Does it work on Windows / in every browser?
 
@@ -135,9 +142,40 @@ reliable; heavy multi-table analytics can trip a smaller model into a join fan-o
 `SUM`) or a hallucinated column. AskSQL has a **hallucination floor** that helps here: before a
 query runs it checks every table and column against your schema, and if the model invented or
 mis-guessed a column it is handed the real column list and re-asked - so many column mistakes
-are fixed automatically before the database sees the query. It does not catch a semantically
-wrong-but-valid query (like a fan-out), so always review the SQL, and give hard analytics a more
+are fixed automatically before the database sees the query.
+
+A join fan-out is caught too: if a query sums a column from a table while joined to another table
+that has many rows per row of the first, each value would be counted once per child row and the
+total would come back too high. AskSQL spots that from your foreign keys and re-asks. Other
+semantic mistakes still get through, so always review the SQL, and give hard analytics a more
 capable model. See "Accuracy depends on the model and the question" in the README.
+
+### The numbers look wrong by a factor of 100. Why?
+
+Almost always a unit the schema names but never explains. A column called `total_cents` holds
+cents, so "total revenue in dollars" can come back as `1000000249999` rather than
+`10000002549.99`, and it reads as an ordinary figure.
+
+Nothing about the column's type says which unit it is, so tell it once and every question after
+that gets it right. Either comment the column in your database:
+
+```sql
+COMMENT ON COLUMN orders.total_cents IS 'Order total in cents; divide by 100 for dollars';
+```
+
+or define the term in the glossary, which needs no schema change:
+
+```ts
+createAskSql({
+  connectors,
+  model,
+  glossary: [{ term: 'revenue in dollars', definition: 'sum of orders.total_cents divided by 100' }],
+});
+```
+
+Comments already travel into the prompt with the rest of the schema, so either one works, in any
+language and for any unit (milliseconds, bytes, basis points). On our own fixture a 7B went from
+getting this wrong every time to right every time on the strength of that one comment.
 
 ### Which local model should I use?
 
@@ -164,8 +202,14 @@ are where even a 14B occasionally guesses a wrong column.
 
 Yes. Run a local model through Ollama (or any OpenAI-compatible local server like LM Studio or
 vLLM) and keep the database local. Only the schema and question ever reach the model, and with
-a local model that never leaves your machine at all. `allowDataInPrompt` (opt-in, off by
-default) is the only setting that would include sampled cell values, and only in repair prompts.
+a local model that never leaves your machine at all.
+
+`allowDataInPrompt` is the one setting that changes that, and it is off by default. Off, sampled
+cell values are stripped from the catalog before any prompt is built, so a connector that samples
+cannot leak them. On, they are rendered into the schema block as `sample values: a|b|c`, and that
+schema block goes into every prompt: the first SQL prompt, not just a repair, plus `explain` and
+`explainSchema`. Declared enum labels are part of the schema and are kept either way. The setting
+exists on the MongoDB path too, where it gates sampled field values from document sampling.
 
 ### Does it handle large schemas with many tables?
 
@@ -204,7 +248,7 @@ entirely. The guard still enforces read-only regardless of what any prompt says.
 
 ### Is it production-ready?
 
-It is an early (pre-1.0; `@asksql/core` is at `0.3.x`) but functional release: the pipeline
+It is an early (pre-1.0; `@asksql/core` is at `0.4.x`) but functional release: the pipeline
 (schema to SQL to guard to execute), the safety guard, the six database adapters, the server
 sidecar, the React UI, and the MCP server are all working and tested against live databases
 and multiple providers. Treat

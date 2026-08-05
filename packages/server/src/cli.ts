@@ -63,15 +63,32 @@ export function parseArgs(argv: readonly string[]): CliOptions {
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]!;
     switch (arg) {
-      case '--port': port = needNumber(arg, argv[++i]); break;
-      case '--host': host = needValue(arg, argv[++i]); break;
-      case '--provider': provider = needValue(arg, argv[++i]) as ProviderName; break;
-      case '--model': model = needValue(arg, argv[++i]); break;
-      case '--base-url': baseURL = needValue(arg, argv[++i]); break;
-      case '--api-key': apiKey = needValue(arg, argv[++i]); break;
-      case '--allow-host': allowedHosts.push(needValue(arg, argv[++i])); break;
-      case '--max-rows': maxRows = needNumber(arg, argv[++i]); break;
-      case 'serve': break; // allow `asksql serve` as well as bare flags
+      case '--port':
+        port = needNumber(arg, argv[++i]);
+        break;
+      case '--host':
+        host = needValue(arg, argv[++i]);
+        break;
+      case '--provider':
+        provider = needValue(arg, argv[++i]) as ProviderName;
+        break;
+      case '--model':
+        model = needValue(arg, argv[++i]);
+        break;
+      case '--base-url':
+        baseURL = needValue(arg, argv[++i]);
+        break;
+      case '--api-key':
+        apiKey = needValue(arg, argv[++i]);
+        break;
+      case '--allow-host':
+        allowedHosts.push(needValue(arg, argv[++i]));
+        break;
+      case '--max-rows':
+        maxRows = needNumber(arg, argv[++i]);
+        break;
+      case 'serve':
+        break; // allow `asksql serve` as well as bare flags
       default:
         throw new CliError(`Unknown option: ${arg}\n\n${USAGE}`);
     }
@@ -98,6 +115,8 @@ export function parseArgs(argv: readonly string[]): CliOptions {
 }
 
 /** Adapts node:http onto the framework-agnostic handler, including the SSE shape /chat streams. */
+const LOOPBACK_BINDS: ReadonlySet<string> = new Set(['127.0.0.1', 'localhost', '::1', '[::1]']);
+
 export function createRequestListener(server: AskSqlServer): http.RequestListener {
   return (req, res) => {
     void (async () => {
@@ -119,8 +138,7 @@ export function createRequestListener(server: AskSqlServer): http.RequestListene
         const bodyText = Buffer.concat(chunks).toString('utf8');
         const url = new URL(req.url ?? '/', 'http://localhost');
 
-        // Keyed on the RESPONSE closing before it finished: the request stream also emits 'close'
-        // on a normal read, which would abort every call the moment its body was parsed.
+        // Cancel when the RESPONSE closes early; the request stream also emits 'close' on a normal body read.
         const aborted = new AbortController();
         res.on('close', () => {
           if (!res.writableEnded) aborted.abort();
@@ -141,9 +159,7 @@ export function createRequestListener(server: AskSqlServer): http.RequestListene
             'Cache-Control': 'no-cache',
             Connection: 'keep-alive',
           });
-          // A Stop in the client aborts the fetch; writes to a closed response
-          // are silently dropped, so without this check the loop would keep
-          // pulling the stream (and paying for model tokens) for nobody.
+          // Stop pulling the stream once the client aborts; writes to a closed response are dropped silently.
           for await (const event of response.stream) {
             if (aborted.signal.aborted) break;
             res.write(`data: ${JSON.stringify(event)}\n\n`);
@@ -154,11 +170,12 @@ export function createRequestListener(server: AskSqlServer): http.RequestListene
         res.writeHead(response.status, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(response.body));
       } catch (err) {
-        // The handler maps its own errors; reaching here means the adapter itself
-        // failed, so answer rather than leaving the socket hanging.
+        // The handler maps its own errors, so reaching here means the adapter failed; still answer.
         console.error('AskSQL: request failed', err);
         if (!res.headersSent) res.writeHead(500, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: { code: 'INTERNAL', userMessage: 'The server failed to handle that request.' } }));
+        res.end(
+          JSON.stringify({ error: { code: 'INTERNAL', userMessage: 'The server failed to handle that request.' } }),
+        );
       }
     })();
   };
@@ -177,11 +194,14 @@ export async function buildServer(options: CliOptions): Promise<AskSqlServer> {
     dynamicConnections: {
       enabled: true,
       ...(options.allowedHosts ? { allowedHosts: options.allowedHosts } : {}),
+      // A client names a server-side file path. That is the machine's own user on a loopback
+      // bind, and an unknown caller on any other, so the file engines are refused there.
+      allowFileEngines: LOOPBACK_BINDS.has(options.host),
     },
     engine: { model, policy: { maxRows: options.maxRows } },
-    // Single-user local sidecar: the process boundary is the trust boundary, and
-    // connections created at runtime have ids no static list could name.
+    // Single-user local sidecar: the process boundary is the trust boundary.
     auth: () => ({ userId: 'local', allowedConnectionIds: [ANY_CONNECTION] }),
+    requireLoopbackHost: LOOPBACK_BINDS.has(options.host),
   });
 }
 
@@ -197,6 +217,8 @@ export async function main(argv: readonly string[]): Promise<void> {
 
   console.log(`AskSQL server listening on http://${options.host}:${options.port}`);
   console.log(`  model: ${options.provider} / ${options.model}`);
-  console.log(`  databases: added by the client at runtime${options.allowedHosts ? ` (limited to ${options.allowedHosts.join(', ')})` : ''}`);
+  console.log(
+    `  databases: added by the client at runtime${options.allowedHosts ? ` (limited to ${options.allowedHosts.join(', ')})` : ''}`,
+  );
   console.log(`\nPoint the AskSQL browser extension at http://${options.host}:${options.port}`);
 }

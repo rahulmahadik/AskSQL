@@ -1,19 +1,9 @@
 /**
- * @asksql/mongodb - MongoDB connector.
- *
- * Implements the non-SQL {@link MongoConnector} contract: results come from a
- * (collection, aggregation-pipeline) pair rather than a SQL string, and the
- * schema is inferred by sampling documents (`introspect`) rather than read from
- * a system catalog.
- *
- * MongoDB has no read-only session, so the connector runs pipelines exactly as
- * given - the core `guardPipeline` re-run on every execute is the safety floor.
- * Numeric fidelity is preserved by disabling Long promotion so 64-bit integers
- * and Decimal128 travel as strings, never as a lossy JS `number`.
- *
- * `mongodb` is a peer dependency, imported lazily so installing this package
- * never pulls a driver a user doesn't want. The pure-JS driver is used - no
- * native addon is required.
+ * @asksql/mongodb - MongoDB connector implementing the non-SQL {@link MongoConnector}
+ * contract: results come from a (collection, aggregation-pipeline) pair, and the schema is
+ * inferred by sampling documents. MongoDB has no read-only session, so the core `guardPipeline`
+ * re-run on every execute is the safety floor. Long promotion is off, so 64-bit integers and
+ * Decimal128 stay strings. `mongodb` is a lazily imported peer.
  */
 
 import { AskSqlError, type ExecuteOptions, type ResultSet, type SchemaCatalog } from '@asksql/core';
@@ -33,11 +23,7 @@ export interface MongodbConnectorConfig {
   readonly password?: string;
   /** Auth database for separate user/password. Defaults to `admin` (root/Atlas users live there), not the query database. */
   readonly authSource?: string;
-  /**
-   * Opt-in: attach a small set of distinct example values to low-cardinality
-   * fields during introspection, so the model sees the real codes a field holds.
-   * This reads actual document values, so it is off unless the caller sets it.
-   */
+  /** Opt-in: attach distinct example values to low-cardinality fields during introspection, so the model sees real codes. */
   readonly sampleColumnValues?: boolean;
 }
 
@@ -110,8 +96,7 @@ export class MongodbConnector implements MongoConnector {
     const client = new MongoClient(this.config.connectionString, opts);
     try {
       await client.connect();
-      // Force a real round-trip so an unreachable / unauthorized server fails
-      // here rather than lazily at the first query.
+      // Force a real round-trip, so an unreachable or unauthorized server fails here.
       await client.db(this.config.database).command({ ping: 1 });
     } catch (err) {
       await client.close().catch(() => {});
@@ -153,13 +138,11 @@ export class MongodbConnector implements MongoConnector {
 
     if (opts?.signal?.aborted) throw new AskSqlError('CANCELLED');
 
-    // Deserialize Extended JSON literals to real BSON types. Strict (relaxed:false) keeps
-    // {"$numberLong":..} a BSON Long instead of collapsing a 64-bit filter value to a lossy double.
+    // Deserialize Extended JSON literals to real BSON; strict mode keeps {"$numberLong":..} a Long.
     const { EJSON } = await this.driver();
     const deserialized = EJSON.deserialize(pipeline, { relaxed: false }) as unknown[];
 
-    // Defense-in-depth DB bound. The guard already appends a trailing $limit <= maxRows,
-    // which dominates this probe, so truncation is derived below from filling the cap.
+    // Database-side bound; the guard's own trailing $limit <= maxRows dominates it.
     const limited = [...deserialized, { $limit: maxRows + 1 }];
 
     const cursor: AggregationCursorLike = db.collection(collection).aggregate(limited, {
@@ -197,8 +180,7 @@ export class MongodbConnector implements MongoConnector {
       await cursor.close().catch(() => {});
     }
 
-    // Mirror the SQL connectors: the guard's injected $limit equals the cap, so
-    // filling maxRows is the truncation signal (the overshoot probe never fires).
+    // The guard's injected $limit equals the cap, so filling maxRows is the truncation signal.
     if (docs.length >= maxRows) truncated = true;
 
     const { columns, rows } = tabulate(docs);
@@ -228,8 +210,7 @@ function mapConnectError(err: unknown, isAtlas: boolean): AskSqlError {
       cause: err,
     });
   }
-  // Any connect failure to an Atlas cluster (srv / *.mongodb.net) - server-selection timeout, DNS, or a
-  // TLS handshake alert - is almost always the IP allow-list, so point there.
+  // A connect failure to an Atlas cluster (srv / *.mongodb.net) is usually the IP allow-list.
   return new AskSqlError('DB_UNREACHABLE', {
     userMessage: isAtlas
       ? 'Could not reach the MongoDB Atlas cluster. Add your current IP under Atlas -> Network Access (or 0.0.0.0/0 to test), and confirm the cluster is running.'

@@ -49,7 +49,8 @@ jobs:
       # PRIVACY.md on the same Pages site at /privacy.html.
       - name: Render privacy policy page
         run: |
-          npx --yes marked --gfm -i packages/browser-extension/PRIVACY.md > /tmp/privacy-body.html
+          # Pinned: this job holds pages:write, so an unpinned npx runs arbitrary registry code.
+          npx --yes marked@18.0.9 --gfm -i packages/browser-extension/PRIVACY.md > /tmp/privacy-body.html
           {
             echo '<!doctype html><html lang="en"><head><meta charset="utf-8">'
             echo '<meta name="viewport" content="width=device-width,initial-scale=1">'

@@ -22,10 +22,7 @@ object HallucinationChecks {
     private val CTE_NAME = Regex("""([A-Za-z_][A-Za-z0-9_]*)\s+as\s*\(""", RegexOption.IGNORE_CASE)
     private val HAS_WITH = Regex("""\bwith\b""", RegexOption.IGNORE_CASE)
 
-    /**
-     * Scans the whole statement: bounding it at the first SELECT ended inside the first CTE body,
-     * so later CTE names looked invented. Over-collecting only makes the floor more lenient.
-     */
+    /** Scans the whole statement; over-collecting CTE names only makes the floor more lenient. */
     private fun collectCteNames(sql: String): Set<String> {
         if (!HAS_WITH.containsMatchIn(sql)) return emptySet()
         return CTE_NAME.findAll(sql).map { it.groupValues[1].lowercase() }.toSet()
@@ -43,10 +40,7 @@ object HallucinationChecks {
 
     private fun unquoteDotted(raw: String): String = raw.split('.').joinToString(".") { unquoteSegment(it) }
 
-    /**
-     * @param tables the base relations the guard already found via
-     *   `TablesNamesFinder` (avoids asking the caller to re-parse just for this).
-     */
+    /** @param tables the base relations the guard already found via `TablesNamesFinder`. */
     fun firstUnknownTable(sql: String, catalog: SchemaCatalog, tables: List<String>): String? {
         val known = mutableSetOf<String>()
         for (t in catalog.tables) {
@@ -56,8 +50,7 @@ object HallucinationChecks {
         val cteNames = collectCteNames(sql)
 
         for (entry in tables) {
-            // TablesNamesFinder yields "schema.table" or "table" with quote characters preserved;
-            // unquote each dot-segment before normalizing case.
+            // TablesNamesFinder yields "schema.table" or "table" with quote characters preserved.
             val parts = entry.split(".").map { unquoteSegment(it).lowercase() }
             val schema = if (parts.size > 1) parts[parts.size - 2] else null
             val name = parts.last()
@@ -133,8 +126,7 @@ object HallucinationChecks {
                 return UnknownColumn(queryTables.first(), column, available.toList())
             }
 
-            // `column.table.name` is whatever the query wrote, often an alias ("c" for
-            // "customers c"), so it must be resolved before the catalog lookup or fails open.
+            // `column.table.name` is whatever the query wrote, often an alias ("c" for "customers c").
             val bareTable = table.substringAfterLast('.')
             val resolvedTable = tableAliases[bareTable] ?: bareTable
             if (cteNames.contains(resolvedTable) || SYSTEM_SCHEMAS.contains(resolvedTable)) continue

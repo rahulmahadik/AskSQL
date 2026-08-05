@@ -42,10 +42,11 @@ export default defineConfig({
       // components + hooks) validated by their own suites and live rendering, not this
       // branch floor. duckdb/browser.ts and widget/* are the duckdb-wasm/browser builds
       // (need a browser + WASM). The browser extension's React entry points (sidepanel/
-      // options, DOM-rendering) get the same treatment, validated by its real-browser
-      // smoke suite instead; everything else in that package - including the service
-      // worker - is plain TS a chrome.* mock can unit-test directly, so it stays in the
-      // floor.
+      // options, DOM-rendering) get the same treatment, validated instead by the two
+      // real-browser suites browser-extension-ci.yml runs on every change to that
+      // package (test/e2e-smoke.mjs and test/e2e-settings.mjs, in Chrome for Testing);
+      // everything else in that package - including the service worker - is plain TS a
+      // chrome.* mock can unit-test directly, so it stays in the floor.
       exclude: [
         '**/*.d.ts',
         '**/index.ts',
@@ -58,7 +59,8 @@ export default defineConfig({
         'packages/browser-extension/src/sidepanel/**',
         'packages/browser-extension/src/options/**',
       ],
-      // Floors below the current numbers, so a coverage regression fails `pnpm coverage`.
+      // Floors below the current numbers, so a coverage regression fails `pnpm coverage`,
+      // which ci.yml runs on every npm-affecting change and release.yml before publishing.
       thresholds: { statements: 92, branches: 85, functions: 94, lines: 94 },
     },
   },

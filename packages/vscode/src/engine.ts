@@ -1,14 +1,8 @@
 /**
- * Owns connectors, credentials, and engines.
- *
- * Two model sources: the chat model the user picked in VS Code (no API key),
- * or a configured provider (Ollama/OpenAI/...) for use outside chat.
- *
- * Engines are cached per model so the introspected schema stays warm; connectors
- * are built once and shared, so a chat turn never re-opens the database.
- *
- * Drivers are pure JS (`pg`, `mysql2`, built-in `node:sqlite`), so the extension
- * ships no native modules that would have to match VS Code's Electron ABI.
+ * Owns connectors, credentials, and engines. Two model sources: the chat model
+ * picked in VS Code (no API key), or a configured provider. Engines are cached per
+ * model and connectors are built once and shared. Drivers are pure JS (`pg`,
+ * `mysql2`, `node:sqlite`), so the extension ships no native modules.
  */
 
 import * as vscode from 'vscode';
@@ -45,23 +39,20 @@ export interface ConnectionConfig {
   readonly database?: string;
   readonly file?: string;
   /**
-   * SSL/TLS mode: 'verify' encrypts and checks the server certificate;
-   * 'no-verify' encrypts without the check. Omit for a plain connection.
-   * Discrete-field connections only; a connection string carries its own SSL settings.
+   * SSL/TLS mode: 'verify' checks the server certificate, 'no-verify' does not; omit
+   * for a plain connection. Discrete-field connections only.
    */
   readonly ssl?: 'verify' | 'no-verify';
   /**
-   * This connection is defined by a full connection string (DSN) rather than
-   * discrete fields. The string carries credentials, so it lives in the OS
-   * keychain (see connectionStringKey), never in settings - only this marker does.
+   * This connection is defined by a full connection string (DSN) rather than discrete
+   * fields; the DSN lives in the OS keychain and settings holds only this marker.
    */
   readonly usesConnectionString?: boolean;
 }
 
 /**
- * One stable secret key per connection id. The endpoint is bound into the
- * stored value (see storePassword/readPassword), not the key, so editing a
- * connection never orphans its password and removal always finds the key.
+ * One stable secret key per connection id. The endpoint is bound into the stored
+ * value, not the key, so editing a connection never orphans its password.
  */
 export const passwordKey = (id: string): string => `asksql.conn.${id}.password`;
 
@@ -69,9 +60,8 @@ export const passwordKey = (id: string): string => `asksql.conn.${id}.password`;
 export const apiKeyKey = (provider: string): string => `asksql.apiKey.${provider}`;
 
 /**
- * The endpoint a password was saved against. Binds every field that decides
- * where the password goes and how it crosses the wire - `ssl` included, so a
- * cloned config with a downgraded `ssl` does not match.
+ * The endpoint a password was saved against. Binds every field that decides where
+ * the password goes and how it crosses the wire, `ssl` included.
  */
 const endpointOf = (
   c: Pick<ConnectionConfig, 'engine' | 'host' | 'port' | 'user' | 'database' | 'file' | 'ssl'>,
@@ -94,12 +84,9 @@ export async function storePassword(
 }
 
 /**
- * Read a password, only for the endpoint it was saved against.
- *
- * Security control: `asksql.connections` is window-scoped and ids are guessable,
- * so a shared repo could declare a connection with the victim's id but an
- * attacker's host and receive the real password. Anything that does not match
- * the stored endpoint yields no password - fail closed.
+ * Read a password, only for the endpoint it was saved against. `asksql.connections`
+ * is window-scoped with guessable ids, so a shared repo could declare a connection
+ * with the victim's id and an attacker's host. A mismatch yields no password.
  */
 export async function readPassword(secrets: vscode.SecretStorage, c: ConnectionConfig): Promise<string | undefined> {
   const raw = await secrets.get(passwordKey(c.id));
@@ -120,10 +107,9 @@ export async function readPassword(secrets: vscode.SecretStorage, c: ConnectionC
 }
 
 /**
- * A connection string is a full DSN with credentials, so the entire string is a
- * secret and lives in the keychain; settings holds only the `usesConnectionString`
- * marker. The DSN is bound to the scope it was saved under, so a workspace entry
- * cannot borrow a user-saved DSN by reusing its id.
+ * A connection string is a full DSN with credentials, so the whole string lives in
+ * the keychain and settings holds only the `usesConnectionString` marker. The DSN is
+ * bound to the scope it was saved under.
  */
 export const connectionStringKey = (id: string): string => `asksql.conn.${id}.connectionString`;
 
@@ -170,20 +156,16 @@ const cfg = (): vscode.WorkspaceConfiguration => vscode.workspace.getConfigurati
 export type ConnectionScope = 'user' | 'workspace';
 
 /**
- * Every configured connection, from both user and workspace settings.
- *
- * VS Code does not merge array settings - a workspace value replaces the user
- * value - so `.get('connections')` would hide user-level connections whenever a
- * workspace defines any. Workspace entries come first so a project can shadow a
- * user entry by id.
+ * Every configured connection, from both user and workspace settings. VS Code does
+ * not merge array settings, so `.get('connections')` would hide user-level entries
+ * whenever a workspace defines any. Workspace entries come first.
  */
 export const connectionConfigs = (): (ConnectionConfig & { readonly scope: ConnectionScope })[] => {
   const info = cfg().inspect<ConnectionConfig[]>('connections');
   const out: (ConnectionConfig & { scope: ConnectionScope })[] = [];
   const seen = new Set<string>();
   const take = (list: ConnectionConfig[] | undefined, scope: ConnectionScope): void => {
-    // inspect() returns the raw settings value; ignore a hand-edited non-array
-    // (e.g. {}) rather than throwing on iteration.
+    // inspect() returns the raw settings value; ignore a hand-edited non-array.
     if (!Array.isArray(list)) return;
     for (const c of list) {
       if (!c?.id || seen.has(c.id)) continue;
@@ -200,8 +182,7 @@ function resolveFile(file: string): string {
   if (path.isAbsolute(file)) return file;
   const root = vscode.workspace.workspaceFolders?.[0]?.uri;
   if (!root) return file;
-  // A virtual workspace (vscode-vfs://, github://) has no real path; .fsPath is
-  // meaningless and node:sqlite fails with an opaque ENOENT.
+  // A virtual workspace (vscode-vfs://, github://) has no real path, so .fsPath is meaningless.
   if (root.scheme !== 'file') {
     throw new UserFacingError(
       'SQLite needs a real file system, which this workspace does not have. Use a Postgres or MySQL connection here.',
@@ -217,8 +198,7 @@ interface SqliteHandle {
 
 /** Open SQLite through Node's built-in driver - no native module, no ABI risk. */
 async function openSqlite(file: string): Promise<SqliteHandle> {
-  // resolveFile may throw its own UserFacingError (virtual workspace) - let it
-  // propagate; only the driver import is the "no node:sqlite" case.
+  // resolveFile throws its own UserFacingError; only the driver import is the "no node:sqlite" case.
   const resolved = resolveFile(file);
   let mod: { DatabaseSync: new (p: string, o?: object) => SqliteHandle };
   try {
@@ -256,8 +236,8 @@ async function withTimeout<T>(work: Promise<T>, ms: number, message: string): Pr
 
 export class EngineManager {
   /**
-   * The in-flight build. Caching the promise (not the resolved array) keeps two
-   * concurrent callers from each building a connector set and orphaning one.
+   * The in-flight build, cached as a promise so two concurrent callers share one
+   * connector set.
    */
   private connectorsPromise: Promise<Connector[]> | undefined;
   private readonly engines = new Map<string, AskSqlEngine>();
@@ -271,19 +251,18 @@ export class EngineManager {
   /** Per-connection build failures, so one bad config does not kill every database. */
   private failures = new Map<string, Error>();
   /**
-   * SQLite handles opened here must be closed here: SqliteConnector's close()
-   * is a no-op for handles it did not open (we always pass `database`).
+   * SQLite handles opened here must be closed here: SqliteConnector's close() is a
+   * no-op for handles it did not open.
    */
   private sqliteHandles: SqliteHandle[] = [];
   /**
-   * Bumped by reset(). A build suspended at an `await` when reset() lands must
-   * not cache its now-stale result over the fresh state.
+   * Bumped by reset(). A build suspended at an `await` when reset() lands must not
+   * cache its now-stale result.
    */
   private generation = 0;
   /**
-   * Bumped whenever cached CATALOGS are dropped, which - unlike [generation] - does not tear
-   * down connectors. Kept separate so a Refresh cannot look like a reset to the connector
-   * build, which reacts by closing SQLite handles and recording a permanent failure.
+   * Bumped whenever cached CATALOGS are dropped, which - unlike [generation] - leaves
+   * connectors up. Separate so a Refresh cannot read as a reset to the connector build.
    */
   private catalogGeneration = 0;
 
@@ -291,12 +270,10 @@ export class EngineManager {
 
   private async buildOne(c: ConnectionConfig & { scope: ConnectionScope }): Promise<Connector> {
     const gen = this.generation;
-    // Opt-in (off by default): connectors may sample distinct values from short
-    // text columns. The one lever that sends column data, not just schema, to the model.
+    // Opt-in: connectors may sample distinct values from short text columns, the one lever that sends data.
     const sampleColumnValues = cfg().get<boolean>('sampleColumnValues') ?? false;
 
-    // Connection-string mode: the whole DSN (host, user, password, SSL) lives in
-    // the keychain. Postgres takes it as connectionString, MySQL as uri.
+    // Connection-string mode: the whole DSN lives in the keychain, taken as connectionString (pg) or uri (mysql).
     if (c.usesConnectionString) {
       const dsn = await readConnectionString(this.secrets, c.id, c.scope);
       if (!dsn) {
@@ -336,8 +313,7 @@ export class EngineManager {
     }
 
     const password = await readPassword(this.secrets, c);
-    // 'verify' = strict TLS against the system CA store (managed cloud databases).
-    // 'no-verify' = encrypt without checking the cert (self-signed / self-hosted).
+    // 'verify' = strict TLS against the system CA store; 'no-verify' = encrypt without the cert check.
     // pg takes ssl:true for verify; mysql2 needs an object either way.
     const pgSsl = c.ssl === 'verify' ? true : c.ssl === 'no-verify' ? { rejectUnauthorized: false } : undefined;
     const mySsl =
@@ -346,8 +322,7 @@ export class EngineManager {
         : c.ssl === 'no-verify'
           ? { rejectUnauthorized: false }
           : undefined;
-    // An empty database name connects and then introspects to zero tables; fail
-    // with the actual reason instead.
+    // An empty database name connects and then introspects to zero tables; fail with the real reason.
     if ((c.engine === 'postgres' || c.engine === 'mysql' || c.engine === 'oracle') && !c.database?.trim()) {
       throw new UserFacingError(
         `"${c.name}" has no database name, so there are no tables to read. Run "AskSQL: Add Database Connection" again, or set the database in Settings.`,
@@ -512,8 +487,8 @@ export class EngineManager {
   }
 
   /**
-   * Build every connector, isolating failures: a single bad entry is recorded
-   * per connection and reported on that connection's node, not on the others.
+   * Build every connector, recording a bad entry against its own connection rather
+   * than failing the whole set.
    */
   private async buildConnectors(): Promise<Connector[]> {
     const all = connectionConfigs();
@@ -535,8 +510,7 @@ export class EngineManager {
       }),
     );
     const ok = built.filter((c): c is Connector => c !== undefined);
-    // Only fail when there are SQL connections and none opened. A workspace of
-    // MongoDB-only connections legitimately yields zero SQL connectors.
+    // Only fail when there are SQL connections and none opened; a MongoDB-only workspace yields zero.
     if (conns.length > 0 && ok.length === 0) {
       throw new UserFacingError(
         conns.length === 1
@@ -549,8 +523,7 @@ export class EngineManager {
 
   private sharedConnectors(): Promise<Connector[]> {
     if (!this.connectorsPromise) {
-      // Cache the promise, but drop it on failure so the next attempt retries
-      // rather than replaying a rejection forever.
+      // Cache the promise, but drop it on failure so the next attempt retries.
       const p: Promise<Connector[]> = this.buildConnectors().catch((err: unknown) => {
         // Only clear our own promise - a reset() may have started a newer build.
         if (this.connectorsPromise === p) this.connectorsPromise = undefined;
@@ -565,8 +538,7 @@ export class EngineManager {
   /** The provider configured in settings - the path when chat models are not in play. */
   private async configuredModel(): Promise<ModelLike> {
     const provider = (cfg().get<string>('provider') ?? 'ollama') as ProviderName;
-    // No default model id: guessing one the user has not pulled fails as a
-    // confusing provider error.
+    // No default model id: guessing one the user has not pulled fails as a confusing provider error.
     const model = cfg().get<string>('model')?.trim();
     if (!model) {
       throw new UserFacingError('No AI model is selected yet.', {
@@ -582,14 +554,14 @@ export class EngineManager {
         actionLabel: 'Set API key',
       });
     }
-    // Built from statically-imported factories (see providers.ts) so the bundled
-    // extension works without node_modules.
-    return buildModel({ provider, model, apiKey, baseURL });
+    const resourceName = cfg().get<string>('resourceName')?.trim() || undefined;
+    // Built from statically-imported factories (providers.ts) so the bundled extension needs no node_modules.
+    return buildModel({ provider, model, apiKey, baseURL, resourceName });
   }
 
   /**
-   * Introspect a connection without a model. Reading the schema is a pure
-   * database operation and must not depend on an AI provider being configured.
+   * Introspect a connection without a model: reading the schema must not depend on
+   * an AI provider being configured.
    */
   async catalogFor(connectionId: string): Promise<SchemaCatalog> {
     const cached = this.catalogs.get(connectionId);
@@ -608,8 +580,7 @@ export class EngineManager {
   private async introspectFresh(connectionId: string): Promise<SchemaCatalog> {
     const gen = this.generation;
     const catalogGen = this.catalogGeneration;
-    // Both Connector and MongoConnector expose connect() + introspect(); pick the
-    // right source, then read the schema through the shared shape.
+    // Both Connector and MongoConnector expose connect() + introspect(); read through the shared shape.
     let conn: { connect(): Promise<void>; introspect(): Promise<SchemaCatalog> } | undefined;
     if (this.isMongo(connectionId)) {
       conn = await this.mongoConnectorFor(connectionId);
@@ -617,8 +588,7 @@ export class EngineManager {
       conn = (await this.sharedConnectors()).find((c) => c.id === connectionId);
     }
     if (!conn) {
-      // Distinguish "misconfigured" from "not a connection at all" - the first
-      // is actionable, the second is a bug in our own id handling.
+      // Distinguish "misconfigured" from "not a connection at all"; only the first is actionable.
       const failed = this.failures.get(connectionId);
       if (failed) throw failed;
       throw new Error(`Unknown connection "${connectionId}".`);
@@ -634,16 +604,13 @@ export class EngineManager {
       CONNECT_TIMEOUT_MS,
       `Reading the schema of "${name}" took too long.`,
     );
-    // A reset() while we were awaiting means this catalog belongs to connectors
-    // that are now closed - return it to this caller but never cache it.
     // Cache only if neither a reset nor a catalog invalidation happened while this read ran.
     if (gen === this.generation && catalogGen === this.catalogGeneration) this.catalogs.set(connectionId, cat);
     return cat;
   }
 
   private async engineFor(key: string, model: () => Promise<ModelLike> | ModelLike): Promise<AskSqlEngine> {
-    // Bounded retry: a reset() landing mid-build invalidates this engine, so
-    // rebuild against the fresh state rather than caching one bound to closed connectors.
+    // Bounded retry: a reset() landing mid-build invalidates this engine, so rebuild against fresh state.
     for (let attempt = 0; attempt < 3; attempt++) {
       const existing = this.engines.get(key);
       if (existing) return existing;
@@ -651,14 +618,20 @@ export class EngineManager {
       const connectors = await this.sharedConnectors();
       const resolved = await model();
       if (gen !== this.generation) continue;
+      const instructions = (cfg().get<string>('customInstructions') ?? '').trim();
+      // A term the schema does not define: what "big order" means here, or which unit a column holds.
+      const glossary = Object.entries(cfg().get<Record<string, string>>('glossary') ?? {})
+        .filter(([term, definition]) => term.trim() && String(definition ?? '').trim())
+        .map(([term, definition]) => ({ term: term.trim(), definition: String(definition).trim() }));
       const engine = createAskSql({
         connectors,
         model: resolved,
         policy: { maxRows: cfg().get<number>('maxRows') ?? 1000 },
-        // The same setting that tells the connector to sample values also tells the engine it may
-        // put them in a prompt. Without this the sampling setting would collect values that core
-        // then strips, which is the confusing half-on state.
+        pruner: { maxSchemaTokens: cfg().get<number>('maxSchemaTokens') ?? 6000 },
+        // The setting that lets the connector sample values also tells the engine it may prompt with them.
         allowDataInPrompt: cfg().get<boolean>('sampleColumnValues') ?? false,
+        ...(instructions ? { prompts: { instructions } } : {}),
+        ...(glossary.length > 0 ? { glossary } : {}),
       });
       this.engines.set(key, engine);
       return engine;
@@ -667,9 +640,8 @@ export class EngineManager {
   }
 
   /**
-   * The recorded build failure for a connection, if any. A connection that failed
-   * to build (bad file path, missing database name) is absent from the engine, so
-   * a query against it otherwise surfaces as a generic "unknown connection".
+   * The recorded build failure for a connection, if any. A connection that failed to
+   * build is absent from the engine and otherwise reads as "unknown connection".
    */
   failureFor(connectionId: string): Error | undefined {
     return this.failures.get(connectionId);
@@ -686,8 +658,7 @@ export class EngineManager {
   }
 
   /**
-   * The query plan for a statement, from the database itself - a plan is a
-   * database answer, not something a model can know.
+   * The query plan for a statement, from the database itself.
    */
   async explain(connectionId: string, sql: string): Promise<ResultSet> {
     if (this.isMongo(connectionId)) {
@@ -699,8 +670,7 @@ export class EngineManager {
     if (!conn.explain) {
       throw new UserFacingError('This database cannot show a query plan.');
     }
-    // The SQL arrives over the webview channel, so it is untrusted. Invariant:
-    // every string reaching a database passes the guard first.
+    // The SQL arrives over the webview channel: every string reaching a database passes the guard first.
     const maxRows = cfg().get<number>('maxRows') ?? 1000;
     const verdict = guardSql({ sql, dialect: conn.dialect, policy: { mode: 'read-only', maxRows } });
     if (!verdict.allowed) {
@@ -711,17 +681,14 @@ export class EngineManager {
   }
 
   /**
-   * Drop the cached schema without tearing down connections. Engines cache
-   * their own catalog internally, so they are dropped too and rebuild lazily.
+   * Drop the cached schema without tearing down connections. Engines cache their own
+   * catalog, so they are dropped too and rebuild lazily.
    */
   invalidateCatalogs(connectionId?: string): void {
-    // An introspect already running describes the pre-refresh database: bump the catalog
-    // generation so it cannot cache itself, and drop it so callers start a fresh read.
+    // Bump the catalog generation so an in-flight introspect cannot cache itself, then drop the cache.
     this.catalogGeneration++;
     if (connectionId !== undefined) {
-      // One connection's schema only, so refreshing from its own menu does not make every other
-      // connection re-introspect. The engines are dropped either way: they cache per connection
-      // internally and rebuild lazily, so that costs nothing until the next question.
+      // One connection's schema only, so its own Refresh does not re-introspect every other connection.
       this.catalogInflight.delete(connectionId);
       this.catalogs.delete(connectionId);
       this.engines.clear();
@@ -742,13 +709,12 @@ export class EngineManager {
   }
 
   /**
-   * Connect to one connection and read its schema, on the real path (same
-   * connector, same timeout), so a passing test means chat will work.
+   * Connect to one connection and read its schema on the real path - same connector,
+   * same timeout - so a passing test means chat will work.
    */
   async testConnection(connectionId: string): Promise<{ ok: true; tables: number } | { ok: false; message: string }> {
     try {
-      // Force a fresh read so the test reflects reality: drop the cached catalog AND
-      // any read already in flight, which would otherwise report the pre-test schema.
+      // Force a fresh read: drop the cached catalog and any read already in flight.
       this.catalogs.delete(connectionId);
       this.catalogInflight.delete(connectionId);
       // Same reason as invalidateCatalogs: a read already running must not cache itself over this one.
@@ -762,8 +728,8 @@ export class EngineManager {
   }
 
   /**
-   * Send the configured provider a trivial prompt. Covers the bring-your-own-LLM
-   * path; VS Code owns the chat-model path and reports its own errors.
+   * Send the configured provider a trivial prompt. VS Code owns the chat-model path
+   * and reports its own errors.
    */
   async testProvider(): Promise<{ ok: true; reply: string } | { ok: false; message: string }> {
     try {
@@ -782,8 +748,8 @@ export class EngineManager {
   }
 
   /**
-   * Settings or secrets changed: drop everything and close the connectors
-   * directly, even when no engine was ever created.
+   * Settings or secrets changed: drop everything and close the connectors directly,
+   * even when no engine was ever created.
    */
   async reset(): Promise<void> {
     this.generation++;

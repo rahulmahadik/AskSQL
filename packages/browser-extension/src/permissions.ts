@@ -16,9 +16,8 @@ export async function requestOriginPermission(url: string): Promise<boolean> {
 }
 
 /**
- * Reset AskSQL revokes every optional origin grant, not just cleared storage -
- * chrome.permissions.remove only ever touches optional (never required)
- * permissions, so this can't accidentally strip sidePanel/storage/contextMenus.
+ * Revokes every optional origin grant; chrome.permissions.remove never touches
+ * required permissions such as sidePanel/storage/contextMenus.
  */
 export async function removeAllGrantedOriginPermissions(): Promise<void> {
   const current = await chrome.permissions.getAll();

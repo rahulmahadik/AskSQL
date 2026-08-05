@@ -212,6 +212,26 @@ describe('validateSqlDump', () => {
     ];
     for (const sql of bypasses) expect(() => validateSqlDump(sql), sql).toThrow(AskSqlError);
   });
+
+  it('accepts danger keywords that are only row data, not statements', () => {
+    const rows = [
+      "CREATE TABLE t(a INT, b TEXT);\nINSERT INTO t VALUES (1,'EXPORT');",
+      "INSERT INTO t VALUES ('a`b');",
+      "INSERT INTO t VALUES ('ENGINE = V8');",
+      "INSERT INTO t VALUES ('LOAD');",
+      "INSERT INTO t VALUES ('/*!40101 not a directive');",
+      "INSERT INTO t VALUES ('COPY the file FROM stdin');",
+      "INSERT INTO t VALUES ('read_csv(/etc/passwd)');",
+      "INSERT INTO t VALUES ('FROM ''somewhere''');",
+      'CREATE TABLE t("EXPORT" INT);',
+    ];
+    for (const sql of rows) expect(() => validateSqlDump(sql), sql).not.toThrow();
+  });
+
+  it('still rejects a real reader split from its name by a comment', () => {
+    expect(() => validateSqlDump("CREATE TABLE t AS SELECT * FROM read_csv/**/('/etc/passwd');")).toThrow(AskSqlError);
+    expect(() => validateSqlDump("-- innocent\nCREATE TABLE t AS SELECT * FROM '/etc/passwd';")).toThrow(AskSqlError);
+  });
 });
 
 describe('withQueryTimeout', () => {

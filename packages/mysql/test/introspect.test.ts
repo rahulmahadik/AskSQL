@@ -81,6 +81,23 @@ describe('buildMysqlCatalog', () => {
     ]);
   });
 
+  it('keeps an enum label that contains a comma as one value', () => {
+    const catalog = buildMysqlCatalog('app', {
+      ...EMPTY,
+      tablesMeta: [{ TABLE_NAME: 'q', TABLE_TYPE: 'BASE TABLE' }],
+      cols: [
+        { TABLE_NAME: 'q', COLUMN_NAME: 'answer', COLUMN_TYPE: "enum('Yes','No','Maybe, sometimes')" },
+        { TABLE_NAME: 'q', COLUMN_NAME: 'mixed', COLUMN_TYPE: "enum('it''s, complicated','plain')" },
+        // MySQL renders an embedded backslash doubled.
+        { TABLE_NAME: 'q', COLUMN_NAME: 'path', COLUMN_TYPE: "enum('a\\\\b','c')" },
+      ],
+    });
+    const cols = catalog.tables[0]!.columns;
+    expect(cols[0]!.enumValues).toEqual(['Yes', 'No', 'Maybe, sometimes']);
+    expect(cols[1]!.enumValues).toEqual(["it's, complicated", 'plain']);
+    expect(cols[2]!.enumValues).toEqual(['a\\b', 'c']);
+  });
+
   it('groups PKs and composite FKs from KEY_COLUMN_USAGE', () => {
     const catalog = buildMysqlCatalog('app', {
       ...EMPTY,

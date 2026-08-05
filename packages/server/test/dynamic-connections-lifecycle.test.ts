@@ -34,12 +34,14 @@ const server = (enabled = true): AskSqlServer =>
     connectors: [],
     engine: { model: async () => 'unused' },
     auth: () => ({ userId: 'u', allowedConnectionIds: [ANY_CONNECTION] }),
-    ...(enabled ? { dynamicConnections: { enabled: true } } : {}),
+    ...(enabled ? { dynamicConnections: { enabled: true, allowFileEngines: true } } : {}),
   });
 
 describe('opening a connection at runtime', () => {
   it('is off unless the operator enabled it', async () => {
-    const res = await server(false).handle(req('POST', '/connections', { name: 'x', engine: 'sqlite', database: file }));
+    const res = await server(false).handle(
+      req('POST', '/connections', { name: 'x', engine: 'sqlite', database: file }),
+    );
     // 404, not 403: an endpoint that is not turned on should not advertise itself.
     expect(res.status).toBe(404);
   });
@@ -72,9 +74,13 @@ describe('opening a connection at runtime', () => {
 
   it('refuses a duplicate id', async () => {
     const srv = server();
-    const first = await srv.handle(req('POST', '/connections', { id: 'fixed', name: 'a', engine: 'sqlite', database: file }));
+    const first = await srv.handle(
+      req('POST', '/connections', { id: 'fixed', name: 'a', engine: 'sqlite', database: file }),
+    );
     expect(first.status).toBe(201);
-    const second = await srv.handle(req('POST', '/connections', { id: 'fixed', name: 'b', engine: 'sqlite', database: file }));
+    const second = await srv.handle(
+      req('POST', '/connections', { id: 'fixed', name: 'b', engine: 'sqlite', database: file }),
+    );
     expect(second.status).toBe(400);
   });
 

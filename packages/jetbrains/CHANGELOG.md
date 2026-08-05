@@ -5,6 +5,38 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- **A business glossary** in Settings. Give your own terms a meaning once ("active
+  customer", "GMV", which table counts as revenue) and every answer uses them.
+- **Send sample column values to the model** in Settings. The setting existed and was
+  wired up, but there was no way to switch it on. It stays off by default.
+- When an answer proposes a query rather than running one, the query now appears as a
+  SQL block with a copy button, formatted as JSON for MongoDB pipelines. There is no
+  run button: a proposal is often a write, and the plugin executes none.
+- **A chart above the result** when the shape suits one. A label column and a numeric
+  column draw a bar chart; a date label draws a line. Anything else stays a table, and
+  the table always holds every column.
+
+### Changed
+- Installs on **2025.1 and newer**, down from 2025.2.
+- A destructive request is recognised however it is phrased. "wipe the orders table",
+  "purge old records", and the same with clear, erase, empty, flush or nuke come back
+  as a statement to run yourself instead of being answered as a query. Recognition no
+  longer depends on your tables being named like a shop.
+
+### Fixed
+- Oracle no longer fails outright on a `LIMIT` it cannot parse; the query is rewritten instead.
+- A follow-up can refer to a query the answer suggested in prose. "Run that query" used to be
+  answered as a new question, because only turns that produced SQL were remembered.
+- Adding data files to a DuckDB connection that already has some keeps what is already
+  there. The connection editor used to build a new database holding only the newly chosen
+  files and point the connection at that, leaving the earlier ones behind. Adding to a
+  connection you had already queried also failed outright, because AskSQL still held it open,
+  and the new tables now appear in the schema tree without a manual refresh.
+- A total is no longer inflated by a one-to-many join. Summing an order total while
+  joined to its line items counted each order once per line, which reads as an
+  ordinary figure and is silently wrong.
+
 ## [0.3.0] - 2026-08-01
 
 ### Added

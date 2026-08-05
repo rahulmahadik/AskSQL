@@ -1,11 +1,8 @@
 /**
- * BSON value handling shared by introspection and result shaping.
- *
- * Documents returned by the driver carry BSON wrapper instances (ObjectId,
- * Long, Decimal128, Binary, ...) identified by a `_bsontype` tag. These helpers
- * classify a value and render it JSON-safely, applying the numeric fidelity
- * rule: Long and Decimal128 travel as strings so a JS `number` never touches
- * them; binary is a size + hex preview.
+ * BSON value handling shared by introspection and result shaping. Driver documents carry BSON
+ * wrapper instances (ObjectId, Long, Decimal128, Binary, ...) tagged by `_bsontype`; these helpers
+ * classify one and render it JSON-safely, with Long and Decimal128 as strings and binary as a
+ * size + hex preview.
  */
 
 import type { CellValue } from '@asksql/core';
@@ -25,10 +22,9 @@ export function bsonTag(value: unknown): string | undefined {
 }
 
 /**
- * The inferred BSON type name of a sampled value:
- * string / int / long / double / decimal / bool / objectId / date / binary /
- * object / array. Plain JS numbers are split by integrality (best effort under
- * value promotion); wrapper types are read from `_bsontype`.
+ * The inferred BSON type name of a sampled value (string / int / long / double / decimal /
+ * bool / objectId / date / binary / object / array). Wrapper types come from `_bsontype`;
+ * a plain JS number splits on integrality.
  */
 export function bsonTypeOf(value: unknown): string {
   if (value === null || value === undefined) return 'null';
@@ -89,10 +85,7 @@ export function binaryToCell(value: unknown): CellValue {
   return { __binary: { bytes: buf.length, hexPreview: binaryHex(value, HEX_PREVIEW_BYTES) } };
 }
 
-/**
- * A short display string for a scalar value, used as a schema example. Returns
- * null for object / array / binary values, which are not collected as examples.
- */
+/** A short display string for a scalar schema example; null for object / array / binary values. */
 export function displayScalar(value: unknown): string | null {
   if (value === null || value === undefined) return null;
   if (value instanceof Date) return value.toISOString();
@@ -120,10 +113,8 @@ export function displayScalar(value: unknown): string | null {
 }
 
 /**
- * Convert a value into a plain JSON-safe structure, recursively: ObjectId ->
- * hex, Long / Decimal128 -> string, Date -> ISO, Binary -> `0x...`, nested
- * documents / arrays descended into. Used to render an object / array cell as a
- * JSON string that a UI can parse without knowing about BSON.
+ * Recursively convert a value to a plain JSON-safe structure: ObjectId to hex, Long and
+ * Decimal128 to string, Date to ISO, Binary to `0x...`, descending into documents and arrays.
  */
 export function toPlain(value: unknown): unknown {
   if (value === null || value === undefined) return null;

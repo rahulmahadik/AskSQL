@@ -91,7 +91,9 @@ describe('mongo engine happy path', () => {
 
   it('execute rejects an unknown collection', async () => {
     const engine = createMongoAskSql({ connector: new FakeMongo(), model: model(['']) });
-    await expect(engine.execute('[{"$match": {}}]', 'does_not_exist')).rejects.toMatchObject({ code: 'DB_QUERY_ERROR' });
+    await expect(engine.execute('[{"$match": {}}]', 'does_not_exist')).rejects.toMatchObject({
+      code: 'DB_QUERY_ERROR',
+    });
   });
 });
 
@@ -237,7 +239,9 @@ describe('mongo explainSchema', () => {
 
   it('never runs an aggregation to answer a schema question', async () => {
     const conn = new FakeMongo();
-    await createMongoAskSql({ connector: conn, model: model(['Structure only.']) }).explainSchema('describe the schema');
+    await createMongoAskSql({ connector: conn, model: model(['Structure only.']) }).explainSchema(
+      'describe the schema',
+    );
     expect(conn.aggregateCalls).toEqual([]);
   });
 });
@@ -255,7 +259,8 @@ describe('mongo prompt framing', () => {
 });
 
 describe('mongo grounding speaks MongoDB, not SQL', () => {
-  const answer = (text: string) => createMongoAskSql({ connector: new FakeMongo(), model: model([text]) }).explainSchema('describe this');
+  const answer = (text: string) =>
+    createMongoAskSql({ connector: new FakeMongo(), model: model([text]) }).explainSchema('describe this');
 
   it('does not report $-operators or quoted values as invented names', async () => {
     const res = await answer(

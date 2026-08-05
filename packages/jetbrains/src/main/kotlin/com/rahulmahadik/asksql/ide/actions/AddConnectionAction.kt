@@ -25,7 +25,7 @@ class AddConnectionAction : DumbAwareAction() {
             val dialog = ConnectionEditorDialog(project, null)
             val descriptor = dialog.showAndGetDescriptor() ?: return
             val settings = AskSqlProjectSettings.getInstance(project)
-            // Secret before config, so a failed write never leaves a connection persisted with no credential.
+            // The password is stored before the connection itself is persisted.
             dialog.enteredPassword?.let { pwd ->
                 runBlockingWithProgress(project, "Saving connection password", cancellable = false) {
                     AskSqlSecrets.setDbPassword(descriptor, pwd)

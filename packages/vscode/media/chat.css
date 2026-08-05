@@ -223,6 +223,57 @@ pre.sql {
   border-radius: 4px;
 }
 
+.chartwrap {
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 4px;
+  padding: 4px;
+}
+
+.chart {
+  width: 100%;
+  height: auto;
+}
+
+.chart-grid {
+  stroke: var(--vscode-panel-border);
+  stroke-width: 1;
+}
+
+.chart-tick {
+  fill: var(--vscode-descriptionForeground);
+  font-size: 10px;
+}
+
+.chart-line {
+  stroke-width: 2;
+}
+
+/* Chart colours come from the editor's own chart tokens, so a light and a dark theme both read. */
+.chart-s0 {
+  fill: var(--vscode-charts-blue);
+}
+.chart-s1 {
+  fill: var(--vscode-charts-orange);
+}
+.chart-s2 {
+  fill: var(--vscode-charts-green);
+}
+.chart-s3 {
+  fill: var(--vscode-charts-purple);
+}
+.chart-stroke0 {
+  stroke: var(--vscode-charts-blue);
+}
+.chart-stroke1 {
+  stroke: var(--vscode-charts-orange);
+}
+.chart-stroke2 {
+  stroke: var(--vscode-charts-green);
+}
+.chart-stroke3 {
+  stroke: var(--vscode-charts-purple);
+}
+
 table {
   border-collapse: collapse;
   width: 100%;

@@ -13,15 +13,22 @@ object ConnectionMerger {
 
     private val LOG = Logger.getInstance(ConnectionMerger::class.java)
 
+    /** Already-reported malformed connections; [merged] runs on every refresh. */
+    private val warned = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
     data class MergedConnection(val descriptor: ConnectionDescriptor, val shadowsAppLevel: Boolean)
 
-    /** Skips a stored connection whose engine string can't parse instead of throwing and taking down every other connection with it. Also used by [ConnectionsConfigurable]. */
+    /** Skips a stored connection whose engine string can't parse, keeping every other connection. */
     internal fun List<ConnectionState>.toDescriptorsSkippingInvalid(scope: ConnectionScope): List<ConnectionDescriptor> =
         mapNotNull { state ->
+            // An entry with no id, name or engine is an empty slot, not a connection anyone configured.
+            if (state.id.isBlank() && state.name.isBlank() && state.engine.isBlank()) return@mapNotNull null
             try {
                 state.toDescriptor(scope)
             } catch (e: IllegalArgumentException) {
-                LOG.warn("AskSQL: skipping unparsable stored connection '${state.id}' (${state.name}): ${e.message}")
+                if (warned.add("$scope|${state.id}|${state.engine}")) {
+                    LOG.warn("AskSQL: skipping unparsable stored connection '${state.id}' (${state.name}): ${e.message}")
+                }
                 null
             }
         }

@@ -1,14 +1,8 @@
 /**
- * AskSQL MCP tool definitions + handlers, framework-agnostic so they can be
- * unit-tested directly and wired to any MCP transport. Four tools:
- *
- * asksql_list_connections - enumerate available databases
- * asksql_schema - the catalog for a connection (what you can ask)
- * asksql_query - NL question -> generated SQL + explanation (NOT run)
- * asksql_run - execute an approved SELECT (guarded, read-only)
- *
- * The guard + read-only enforcement of the engine apply to every call, so an
- * agent using these tools can never run a write - the same safety as the UI.
+ * AskSQL MCP tool definitions + handlers, framework-agnostic so they wire to any MCP
+ * transport: asksql_list_connections, asksql_schema, asksql_query (generates SQL without
+ * running it), asksql_explain_schema, and asksql_run. The engine's guard and read-only
+ * enforcement apply to every call, so an agent using these tools cannot run a write.
  */
 
 import { AskSqlError, type AskSqlEngine } from '@asksql/core';
@@ -37,6 +31,17 @@ function toUserError(err: unknown): McpToolResult {
   const e = AskSqlError.from(err, 'CONFIG_ERROR');
   return fail(`${e.code}: ${e.userMessage}`);
 }
+
+/**
+ * The engine's own `detail` when no query exists for the question. Keyed on detail, not on
+ * LLM_BAD_OUTPUT, which also covers a model that simply failed.
+ */
+const NO_QUERY_EXISTS: ReadonlySet<string> = new Set([
+  'schema-advice question routed to the prose path',
+  'write request routed to the proposal path',
+  'capability question routed to the prose path',
+  'model returned IMPOSSIBLE sentinel',
+]);
 
 export function createAskSqlMcpTools(engine: AskSqlEngine): McpToolDef[] {
   return [
@@ -103,15 +108,61 @@ export function createAskSqlMcpTools(engine: AskSqlEngine): McpToolDef[] {
         additionalProperties: false,
       },
       async handle(args) {
+        const question = String(args['question'] ?? '');
+        const connectionId = args['connectionId'] as string | undefined;
         try {
-          const ans = await engine.ask(String(args['question'] ?? ''), {
-            connectionId: args['connectionId'] as string | undefined,
-          });
+          const ans = await engine.ask(question, { connectionId });
           return ok({
             sql: ans.sql,
             explanation: ans.explanation,
             connectionId: ans.connectionId,
             autoLimited: ans.guard.autoLimited,
+          });
+        } catch (err) {
+          // Advice, write requests, and questions this schema cannot answer fall back to the
+          // catalog-grounded prose path, as every other surface does.
+          if (AskSqlError.is(err) && NO_QUERY_EXISTS.has(err.detail ?? '')) {
+            try {
+              const answer = await engine.explainSchema(question, { connectionId });
+              return ok({
+                answer: answer.answer,
+                grounded: answer.grounded,
+                unknownReferences: answer.unknownReferences,
+                isSchemaChange: answer.isSchemaChange,
+                connectionId,
+                note: 'No query answers this. AskSQL is read-only; any statement above is a proposal to run yourself.',
+              });
+            } catch {
+              return toUserError(err);
+            }
+          }
+          return toUserError(err);
+        }
+      },
+    },
+    {
+      name: 'asksql_explain_schema',
+      description:
+        'Answer a question about the database itself - how tables relate, what to index, how to improve the schema, or a write statement to run yourself. Grounded in the catalog; runs nothing.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          question: { type: 'string', description: 'A question about the schema rather than the data.' },
+          connectionId: { type: 'string' },
+        },
+        required: ['question'],
+        additionalProperties: false,
+      },
+      async handle(args) {
+        try {
+          const answer = await engine.explainSchema(String(args['question'] ?? ''), {
+            connectionId: args['connectionId'] as string | undefined,
+          });
+          return ok({
+            answer: answer.answer,
+            grounded: answer.grounded,
+            unknownReferences: answer.unknownReferences,
+            isSchemaChange: answer.isSchemaChange,
           });
         } catch (err) {
           return toUserError(err);

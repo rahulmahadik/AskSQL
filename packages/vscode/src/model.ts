@@ -8,9 +8,8 @@ import * as vscode from 'vscode';
 import { AskSqlError, type CustomModel } from '@asksql/core';
 
 /**
- * Wrap a VS Code chat model as an AskSQL CustomModel.
- * AskSQL cancels with an AbortSignal; VS Code cancels with a CancellationToken,
- * so we bridge the two and always dispose the source.
+ * Wrap a VS Code chat model as an AskSQL CustomModel, bridging AskSQL's AbortSignal
+ * to VS Code's CancellationToken and always disposing the source.
  */
 export function lmCustomModel(lm: vscode.LanguageModelChat): CustomModel {
   return async ({ system, prompt, signal }) => {
@@ -21,19 +20,16 @@ export function lmCustomModel(lm: vscode.LanguageModelChat): CustomModel {
       else signal.addEventListener('abort', onAbort, { once: true });
     }
     try {
-      // The engine builds one system + one user prompt; VS Code models take a
-      // message list, so the system prompt leads the turn.
+      // The engine builds one system + one user prompt; VS Code models take a message list.
       const messages = [vscode.LanguageModelChatMessage.User(`${system}\n\n${prompt}`)];
       const res = await lm.sendRequest(messages, {}, cts.token);
-      // Collect rather than return the stream: the stream is bound to the token
-      // source, which must outlive it, and the engine only needs the text.
+      // Collect rather than return the stream: it is bound to the token source, which must outlive it.
       let out = '';
       for await (const chunk of res.text) out += chunk;
       return out;
     } catch (err) {
       if (err instanceof vscode.LanguageModelError) {
-        // Map VS Code's model errors onto AskSQL's taxonomy so the UI and the
-        // engine's retry logic behave exactly as they do for other providers.
+        // Map VS Code's model errors onto AskSQL's taxonomy.
         const code =
           err.code === vscode.LanguageModelError.NoPermissions().code
             ? 'LLM_AUTH'

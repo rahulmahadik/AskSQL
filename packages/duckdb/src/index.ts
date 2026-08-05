@@ -1,13 +1,8 @@
 /**
  * @asksql/duckdb - DuckDB connector (Node, the zero-backend file path).
- *
- * Registers uploaded files (CSV / JSON / NDJSON / Parquet / Excel) as views,
- * then answers questions over them. Files become named views so the model
- * never sees a filesystem path. Large files are streamed (a view over
- * the reader, plus a bounded read) so they never materialize in memory.
- *
- * This is the Node build (native `@duckdb/node-api`). The browser build is
- * `@asksql/duckdb/browser` (`@duckdb/duckdb-wasm`) and shares `./shared.ts`.
+ * Registers uploaded files (CSV / JSON / NDJSON / Parquet / Excel) as named views and answers
+ * questions over them; large files stream rather than materialize. The browser build is
+ * `@asksql/duckdb/browser`; both share `./shared.ts`.
  */
 
 import {
@@ -50,11 +45,7 @@ export interface DuckDbConnectorConfig {
   readonly path?: string;
   /** Files to register as views on connect. */
   readonly files?: readonly FileSource[];
-  /**
-   * Opt-in: sample distinct values from short text columns, so the model sees the
-   * real codes a `status VARCHAR` holds. This reads actual cell values (not just
-   * schema), so it is off unless the caller sets it.
-   */
+  /** Opt-in: sample distinct values from short text columns, so the model sees the real codes a `status VARCHAR` holds. */
   readonly sampleColumnValues?: boolean;
 }
 
@@ -92,6 +83,11 @@ interface DuckInstance {
   closeSync?(): void;
 }
 
+/** DuckDB refuses an in-memory database in read-only mode, so only a real file can be opened that way. */
+function isFilePath(path: string | undefined): path is string {
+  return !!path && path !== ':memory:' && !path.startsWith(':memory:');
+}
+
 export class DuckDbConnector implements Connector {
   readonly engine = 'duckdb' as const;
   readonly dialect = DUCKDB_DIALECT;
@@ -103,6 +99,8 @@ export class DuckDbConnector implements Connector {
   private conn: DuckConnection | null = null;
   private excelLoaded = false;
   private readonly registered = new Set<string>();
+  /** Tail of the execute() chain: `interrupt()` aborts whatever the shared connection is running. */
+  private queue: Promise<unknown> = Promise.resolve();
 
   constructor(private readonly config: DuckDbConnectorConfig) {
     this.id = config.id;
@@ -111,10 +109,12 @@ export class DuckDbConnector implements Connector {
     this.database = config.path ? config.path.split(/[\\/]/).pop() || undefined : 'in-memory';
   }
 
-  private async api(): Promise<{ DuckDBInstance: { create(path?: string): Promise<DuckInstance> } }> {
+  private async api(): Promise<{
+    DuckDBInstance: { create(path?: string, options?: Record<string, string>): Promise<DuckInstance> };
+  }> {
     try {
       return (await import('@duckdb/node-api')) as unknown as {
-        DuckDBInstance: { create(path?: string): Promise<DuckInstance> };
+        DuckDBInstance: { create(path?: string, options?: Record<string, string>): Promise<DuckInstance> };
       };
     } catch (err) {
       throw new AskSqlError('CONFIG_ERROR', {
@@ -128,15 +128,21 @@ export class DuckDbConnector implements Connector {
   async connect(): Promise<void> {
     if (this.conn) return;
     const { DuckDBInstance } = await this.api();
-    this.instance = await DuckDBInstance.create(this.config.path ?? ':memory:');
-    this.conn = await this.instance.connect();
-    // Engine-level defense-in-depth. DuckDB has no read-only session, so the
-    // guard is the only barrier - and its denylist cannot cover DuckDB's open
-    // extension surface. Turning OFF implicit extension autoload/autoinstall
-    // means the dangerous families (httpfs http_*, postgres/mysql/sqlite
-    // scanners, spatial st_read*, gsheets) cannot load behind the guard's back:
-    // a query that reaches for one errors instead of executing. Extensions we
-    // need (excel for xlsx) are still loaded explicitly via INSTALL/LOAD.
+    const path = this.config.path ?? ':memory:';
+    // Registering files writes views into the database, so only a plain database file is read-only.
+    const readOnly = isFilePath(path) && (this.config.files ?? []).length === 0;
+    try {
+      this.instance = await DuckDBInstance.create(path, readOnly ? { access_mode: 'READ_ONLY' } : undefined);
+      this.conn = await this.instance.connect();
+    } catch (err) {
+      throw new AskSqlError('CONFIG_ERROR', {
+        detail: `cannot open duckdb database "${path}": ${err instanceof Error ? err.message : String(err)}`,
+        userMessage: `Could not open the DuckDB database "${path}". Check that the path is correct and the file exists.`,
+        cause: err,
+      });
+    }
+    // DuckDB implicitly autoloads known extensions (httpfs, the postgres/mysql/sqlite scanners,
+    // spatial, gsheets); turning that off leaves only explicit INSTALL/LOAD, as used for excel.
     for (const stmt of ['SET autoinstall_known_extensions=false', 'SET autoload_known_extensions=false']) {
       try {
         await this.conn.run(stmt);
@@ -144,7 +150,26 @@ export class DuckDbConnector implements Connector {
         // Older DuckDB may not expose these settings; the guard denylist still applies.
       }
     }
+    if (readOnly) await this.assertReadOnly(path);
     for (const f of this.config.files ?? []) await this.registerFile(f);
+  }
+
+  /** Read `access_mode` back, so an option the driver ignored cannot leave a writable handle in use. */
+  private async assertReadOnly(path: string): Promise<void> {
+    let mode = '';
+    try {
+      const reader = await this.connection().runAndReadUntil("SELECT current_setting('access_mode') AS m", 1);
+      mode = String(reader.getRowObjects()[0]?.['m'] ?? '');
+    } catch (err) {
+      mode = `unreadable: ${err instanceof Error ? err.message : String(err)}`;
+    }
+    if (mode.toLowerCase() !== 'read_only') {
+      await this.close();
+      throw new AskSqlError('CONFIG_ERROR', {
+        detail: `duckdb database "${path}" reports access_mode=${mode || '(none)'}, not read_only`,
+        userMessage: `The DuckDB database "${path}" could not be opened read-only, so AskSQL will not use it.`,
+      });
+    }
   }
 
   async close(): Promise<void> {
@@ -186,10 +211,9 @@ export class DuckDbConnector implements Connector {
   }
 
   /**
-   * Load a portable .sql dump (CREATE TABLE + INSERT) and expose the tables it
-   * creates. Vendor dumps (mysqldump / pg_dump) and file/network statements are
-   * rejected with a clear message BEFORE anything runs. Returns the first table
-   * the script created.
+   * Load a portable .sql dump (CREATE TABLE + INSERT) and expose the tables it creates.
+   * Vendor dumps (mysqldump / pg_dump) and file/network statements are rejected before
+   * anything runs. Returns the first table the script created.
    */
   private async registerSqlDump(file: FileSource): Promise<string> {
     assertSafeFilePath(file);
@@ -282,13 +306,9 @@ export class DuckDbConnector implements Connector {
     return this.config.sampleColumnValues ? this.attachSampledValues(catalog) : catalog;
   }
 
-  /**
-   * Opt-in: enrich short non-enum text columns with the distinct codes they hold.
-   * Rebuilds the catalog immutably rather than mutating readonly column arrays.
-   */
+  /** Opt-in: enrich short non-enum text columns with the distinct codes they hold, rebuilding the catalog immutably. */
   private async attachSampledValues(catalog: SchemaCatalog): Promise<SchemaCatalog> {
-    // NUL-join the key: identifiers may contain dots, so a plain "a.b.c" join
-    // would collide (table "a.b" col "c" vs table "a" col "b.c").
+    // NUL-joined key: identifiers may contain dots, which a plain "a.b.c" join would confuse.
     const key = (schema: string | undefined, table: string, col: string): string =>
       [schema ?? 'main', table, col].join('\u0000');
     const sampled = new Map<string, string[]>();
@@ -345,19 +365,31 @@ export class DuckDbConnector implements Connector {
 
   async execute(sql: string, opts?: ExecuteOptions): Promise<ResultSet> {
     if (opts?.signal?.aborted) throw new AskSqlError('CANCELLED');
+    // One query at a time: the connection is shared, so a queued query's interrupt would kill
+    // the running one. A query waiting here holds no connection, so its abort is free.
+    const run = this.queue.then(
+      () => this.runQuery(sql, opts),
+      () => this.runQuery(sql, opts),
+    );
+    this.queue = run.catch(() => undefined);
+    return run;
+  }
+
+  private async runQuery(sql: string, opts?: ExecuteOptions): Promise<ResultSet> {
+    if (opts?.signal?.aborted) throw new AskSqlError('CANCELLED');
     const conn = this.connection();
     const maxRows = opts?.maxRows ?? 1000;
     const started = Date.now();
     let reader: DuckReader;
     try {
-      // prepare() is a security backstop: DuckDB has no read-only session and
-      // runAndReadUntil would run multiple statements, so compiling exactly one
-      // statement is the only structural defence. Do not switch to conn.run().
+      // prepare() compiles exactly one statement; run()/runAndReadUntil() execute a whole multi-statement string.
       const prepared = await conn.prepare(sql);
-      // Bounded read: fetch at most maxRows+1 rows so `SELECT *` over a huge
-      // file never materializes millions of JS objects.
-      reader = await withQueryTimeout(prepared.runAndReadUntil(maxRows + 1), opts?.timeoutMs ?? 30_000, opts?.signal, () =>
-        conn.interrupt?.(),
+      // Bounded read: fetch at most maxRows+1 rows.
+      reader = await withQueryTimeout(
+        prepared.runAndReadUntil(maxRows + 1),
+        opts?.timeoutMs ?? 30_000,
+        opts?.signal,
+        () => conn.interrupt?.(),
       );
     } catch (err) {
       throw mapQueryError(err);

@@ -18,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: vscode-publish
     permissions:
-      contents: read
+      contents: write # create the GitHub Release for this tag
     steps:
       - uses: actions/checkout@v5
         with:
@@ -56,6 +56,35 @@ jobs:
         run: npx --yes @vscode/vsce@3.9.2 publish --no-dependencies
         env:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
+
+      # Built from the same commit that was just published, so the attached file is
+      # what the Marketplace serves - handy for anyone installing from a .vsix.
+      - name: Package the VSIX for the release
+        working-directory: packages/vscode
+        run: npx --yes @vscode/vsce@3.9.2 package --no-dependencies -o asksql-vscode.vsix
+
+      - name: Release notes
+        id: notes
+        run: |
+          # %(contents) falls through to the tagged commit for a lightweight tag.
+          git fetch --force --tags --quiet
+          body=''
+          if [ "$(git for-each-ref --format='%(objecttype)' "refs/tags/$GITHUB_REF_NAME")" = 'tag' ]; then
+            body="$(git for-each-ref --format='%(contents)' "refs/tags/$GITHUB_REF_NAME")"
+          fi
+          {
+            echo 'body<<ASKSQL_EOF'
+            echo "$body"
+            echo 'ASKSQL_EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Publish the GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          body: ${{ steps.notes.outputs.body }}
+          generate_release_notes: true
+          files: packages/vscode/asksql-vscode.vsix
+          fail_on_unmatched_files: true
       # Optional: also publish to Open VSX (for VSCodium / Cursor / etc.).
       # Uncomment and add an OVSX_PAT secret to enable.
       # - name: Publish to Open VSX

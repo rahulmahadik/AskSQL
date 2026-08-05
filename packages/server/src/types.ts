@@ -1,7 +1,6 @@
 /**
- * Server sidecar contract. The host app owns identity; AskSQL enforces
- * scope. Credentials live only here - never serialized to a
- * client-visible response.
+ * Server sidecar contract: the host app owns identity, AskSQL enforces scope.
+ * Credentials live only here, never in a client-visible response.
  */
 
 import type { MongoConnector } from '@asksql/core/mongo';
@@ -16,9 +15,8 @@ export interface AuthContext {
 }
 
 /**
- * The host resolves identity from its own session/JWT and returns the
- * caller's scope. Throwing (or returning null) denies the request - the
- * server never fails open to all connections.
+ * The host resolves identity from its own session/JWT and returns the caller's scope.
+ * Throwing or returning null denies the request; the server never fails open.
  */
 export type AuthHook = (req: ServerRequest) => Promise<AuthContext | null> | AuthContext | null;
 
@@ -29,10 +27,7 @@ export interface ServerRequest {
   readonly query: Readonly<Record<string, string | undefined>>;
   readonly headers: Readonly<Record<string, string | undefined>>;
   json(): Promise<unknown>;
-  /**
-   * Aborted when the client goes away. Adapters supply it; the handler passes it to the engine so
-   * a cancelled request stops the model call and the database query instead of only the response.
-   */
+  /** Aborted when the client goes away; the handler passes it on so the model call and query stop too. */
   readonly signal?: AbortSignal;
 }
 
@@ -56,24 +51,25 @@ export interface AskSqlServerConfig {
   readonly auth: AuthHook;
   readonly audit?: AuditSink;
   /**
-   * Let clients create connections at runtime via POST /connections, so a
-   * browser extension can offer a host/port/user/password form. Off unless
-   * explicitly enabled - see dynamicConnections.ts for why.
+   * Let clients create connections at runtime via POST /connections, so a browser extension can
+   * offer a host/port/user/password form. Off unless explicitly enabled.
    */
+  /**
+   * Reject any request whose Host is not loopback. The CLI sets this for a loopback bind, where a
+   * non-loopback Host is a DNS-rebinding attempt; a hosted deployment leaves it off and uses CORS.
+   */
+  readonly requireLoopbackHost?: boolean;
   readonly dynamicConnections?: DynamicConnectionOptions;
   /** Max request body bytes. Default 64 KB. */
   readonly maxBodyBytes?: number;
   /**
-   * When a run fails with a database error, ask the model for a corrected query
-   * and return it as `suggestedSql` for the user to review and re-run (never
-   * auto-run). Costs one extra model call per failed query. Default: true.
-   * Set false to disable.
+   * On a database error, ask the model for a corrected query and return it as `suggestedSql`
+   * for the user to review and re-run. Costs one extra model call per failure. Default: true.
    */
   readonly suggestFixOnError?: boolean;
   /**
-   * Called for every error the server turns into a response, so a host can log
-   * or report it (the wire response never includes internal detail). Best-effort:
-   * a throw from the hook is swallowed so it can never break the response.
+   * Called for every error the server turns into a response, so a host can log it; the wire
+   * response never carries internal detail. Best-effort: a throw from the hook is swallowed.
    */
   readonly onError?: (err: unknown, context: ErrorContext) => void;
 }

@@ -11,10 +11,7 @@ import java.awt.datatransfer.StringSelection
 import javax.swing.JButton
 import javax.swing.JPanel
 
-/**
- * Read-only query display: an [EditorTextField] over a platform file type ("sql" or "json"), giving
- * real syntax highlighting when the host IDE bundles that language and plain text otherwise (SQL on IDEA Community).
- */
+/** Read-only query display: an [EditorTextField] over a platform file type ("sql" or "json"), highlighted only when the host IDE bundles that language. */
 class SqlBlockPanel(private val project: Project, sql: String, fileExtension: String = "sql", languageId: String = "SQL") {
 
     val component: JPanel = JPanel(BorderLayout())

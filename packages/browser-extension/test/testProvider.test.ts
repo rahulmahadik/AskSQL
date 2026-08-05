@@ -30,7 +30,9 @@ describe('testProviderConnectivity', () => {
 
   it('propagates a resolveModel failure (bad config) as-is', async () => {
     vi.mocked(resolveModel).mockRejectedValue(new Error('No AI model is configured.'));
-    await expect(testProviderConnectivity({ provider: 'ollama', model: '' })).rejects.toThrow('No AI model is configured.');
+    await expect(testProviderConnectivity({ provider: 'ollama', model: '' })).rejects.toThrow(
+      'No AI model is configured.',
+    );
   });
 
   it('propagates a generateText failure (auth/connectivity error), proving this is a real network check', async () => {
@@ -49,7 +51,12 @@ describe('testProviderConnectivity', () => {
   it('gives a clear, actionable message for an Ollama 403 instead of the raw API error', async () => {
     vi.mocked(resolveModel).mockResolvedValue({ modelId: 'fake' } as never);
     vi.mocked(generateText).mockRejectedValue(
-      new APICallError({ message: 'Forbidden', url: 'http://localhost:11434/v1', requestBodyValues: {}, statusCode: 403 }),
+      new APICallError({
+        message: 'Forbidden',
+        url: 'http://localhost:11434/v1',
+        requestBodyValues: {},
+        statusCode: 403,
+      }),
     );
     await expect(testProviderConnectivity({ provider: 'ollama', model: 'llama3.2' })).rejects.toThrow(/OLLAMA_ORIGINS/);
   });
@@ -57,7 +64,12 @@ describe('testProviderConnectivity', () => {
   it('gives the same clear API-key-rejected message as Fetch models for a 403 from a non-ollama provider, not the raw API error', async () => {
     vi.mocked(resolveModel).mockResolvedValue({ modelId: 'fake' } as never);
     vi.mocked(generateText).mockRejectedValue(
-      new APICallError({ message: 'Forbidden', url: 'https://api.openai.com/v1', requestBodyValues: {}, statusCode: 403 }),
+      new APICallError({
+        message: 'Forbidden',
+        url: 'https://api.openai.com/v1',
+        requestBodyValues: {},
+        statusCode: 403,
+      }),
     );
     await expect(testProviderConnectivity({ provider: 'openai', model: 'gpt-5', apiKey: 'bad' })).rejects.toThrow(
       'The API key was not accepted (403).',
@@ -67,7 +79,12 @@ describe('testProviderConnectivity', () => {
   it('gives the same clear message for a 401', async () => {
     vi.mocked(resolveModel).mockResolvedValue({ modelId: 'fake' } as never);
     vi.mocked(generateText).mockRejectedValue(
-      new APICallError({ message: 'Unauthorized', url: 'https://api.openai.com/v1', requestBodyValues: {}, statusCode: 401 }),
+      new APICallError({
+        message: 'Unauthorized',
+        url: 'https://api.openai.com/v1',
+        requestBodyValues: {},
+        statusCode: 401,
+      }),
     );
     await expect(testProviderConnectivity({ provider: 'openai', model: 'gpt-5', apiKey: 'bad' })).rejects.toThrow(
       'The API key was not accepted (401).',
@@ -77,7 +94,12 @@ describe('testProviderConnectivity', () => {
   it('does not rewrite an ollama APICallError with a different status code', async () => {
     vi.mocked(resolveModel).mockResolvedValue({ modelId: 'fake' } as never);
     vi.mocked(generateText).mockRejectedValue(
-      new APICallError({ message: 'Not Found', url: 'http://localhost:11434/v1', requestBodyValues: {}, statusCode: 404 }),
+      new APICallError({
+        message: 'Not Found',
+        url: 'http://localhost:11434/v1',
+        requestBodyValues: {},
+        statusCode: 404,
+      }),
     );
     await expect(testProviderConnectivity({ provider: 'ollama', model: 'unknown-model' })).rejects.toThrow('Not Found');
   });

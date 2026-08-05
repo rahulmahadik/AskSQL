@@ -35,4 +35,20 @@ describe('toCsv injection + binary', () => {
     expect(csv).toContain("'=SUM(A1)");
     expect(csv).toContain('0xcafe');
   });
+
+  it('exports negative numbers as numbers, including the strings BIGINT/DECIMAL arrive as', () => {
+    const cols: ResultColumn[] = [
+      { name: 'delta', kind: 'number' },
+      { name: 'balance', kind: 'decimal' },
+      { name: 'sci', kind: 'number' },
+    ];
+    const rows: CellValue[][] = [[-42, '-1234.50', -1.5e-7]];
+    expect(toCsv(cols, rows).split('\n')[1]).toBe('-42,-1234.50,-1.5e-7');
+  });
+
+  it('still neutralizes a formula that opens with a number-like prefix', () => {
+    const cols: ResultColumn[] = [{ name: 'a', kind: 'text' }];
+    const csv = toCsv(cols, [["-5+cmd|' /C calc'!A0"]]);
+    expect(csv).toContain("'-5+cmd");
+  });
 });

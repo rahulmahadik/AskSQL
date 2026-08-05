@@ -67,9 +67,26 @@ jobs:
               if (m.key) { console.error('manifest key leaked into the zip'); process.exit(1); }
               console.log('zip manifest is key-free, version ' + m.version);
             })"
+      - name: Release notes
+        id: notes
+        run: |
+          # %(contents) falls through to the tagged commit for a lightweight tag.
+          git fetch --force --tags --quiet
+          body=''
+          if [ "$(git for-each-ref --format='%(objecttype)' "refs/tags/$GITHUB_REF_NAME")" = 'tag' ]; then
+            body="$(git for-each-ref --format='%(contents)' "refs/tags/$GITHUB_REF_NAME")"
+          fi
+          {
+            echo 'body<<ASKSQL_EOF'
+            echo "$body"
+            echo 'ASKSQL_EOF'
+          } >> "$GITHUB_OUTPUT"
+
       - name: Attach zip to GitHub Release
         uses: softprops/action-gh-release@v3
         with:
+          body: ${{ steps.notes.outputs.body }}
+          generate_release_notes: true
           files: packages/browser-extension/asksql-browser-extension.zip
       # Opt-in once Partner Center credentials exist: set the repository
       # variable EDGE_PUBLISH_ENABLED=true and the environment secrets
@@ -83,7 +100,36 @@ jobs:
           api-key: ${{ secrets.EDGE_API_KEY }}
           client-id: ${{ secrets.EDGE_CLIENT_ID }}
           upload-only: true
-          notes-for-certification: >
-            declarativeNetRequestWithHostAccess is used only to strip the Origin
-            header on requests to the user's own configured AI endpoint (for
-            example a local Ollama server). See PRIVACY.md in the package.
+          notes-for-certification: |
+            No account, no login, no sign-up: the extension has no accounts and no server of
+            its own, so there are no test credentials to provide.
+
+            TESTING WITH NO CREDENTIALS
+            1. Click the toolbar icon to open the side panel.
+            2. Settings > Connections > Add data file connection > pick any CSV, JSON,
+               Parquet or Excel file.
+            3. It loads into a DuckDB database inside the browser and the side panel lists
+               its tables. This exercises the UI, storage, file handling and schema view
+               with no network access.
+
+            TESTING QUESTION ANSWERING (needs an AI endpoint)
+            The extension contains no AI. The tester supplies one in Settings > AI provider.
+            Easiest, free and local: install Ollama from ollama.com, run
+            "ollama pull qwen2.5-coder:7b", then pick provider "Ollama" with base URL
+            http://localhost:11434/v1 and no API key. Any OpenAI, Anthropic, Google, Groq
+            or NVIDIA key also works. The generated SQL is always shown.
+
+            PERMISSIONS
+            Host permissions are optional and requested per site, only when the tester
+            configures an AI endpoint or an AskSQL server at that address. They are never
+            requested up front. declarativeNetRequestWithHostAccess is used for one purpose:
+            removing the Origin header from requests to the AI endpoint the user configured.
+            Local AI servers such as Ollama and LM Studio reject a chrome-extension:// origin
+            by default, which would otherwise make the extension unusable with a local model.
+            The rule removes a header; it never adds, forges, blocks or redirects anything,
+            and never applies to any other address. PRIVACY.md in the package documents this.
+
+            DATA
+            No analytics, no telemetry, no server operated by us. Only the schema (table and
+            column names) and the typed question go to the AI endpoint the user chose. Row
+            data and query results are never sent.

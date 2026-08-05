@@ -52,22 +52,151 @@ class EnginePipeline(
             RegexOption.IGNORE_CASE,
         )
         private val METADATA_OBJECT_RE = Regex(
-            """\b(tables?|collections?|columns?|fields?|schemas?|views?|indexes|indices|relationships?|foreign keys?|primary keys?|(?:database|db|data) (?:structure|layout|schema))\b""",
+            """\b(tables?|collections?|columns?|fields?|schemas?|views?|indexes|indices|relationships?|foreign keys?|primary keys?|constraints?|triggers?|procedures?|functions?|routines?|sequences?|partitions?|(?:database|db|data) (?:structure|layout|schema))\b""",
             RegexOption.IGNORE_CASE,
         )
 
+        /** Asking about the database rather than for data from it: what to change, why it behaves so, how to express it. */
+        private val ADVICE_INTENT_RE = Regex(
+            """\b(improv\w*|optimi[sz]\w*|tun(?:e|ing)|speed(?:\s*up)?|normali[sz]\w*|denormali[sz]\w*|redesign\w*|refactor\w*|restructur\w*|(?<!\b(?:the|its|all|these|those|many|few|no|some) )partition\w*|(?<!\b(?:the|its|all|these|those|many|few|no|some) )shard\w*|archiv(?:e|es|ed|ing|al)\b(?!\s*(?:table|log|collection|folder))|rewrit\w*|review\b(?!\s*(?:table|collection|log|queue))|audit\b(?!\s*(?:log|table|trail|history))|help(?:s|ing)?\b(?!\s+me\b)|critique|suggest\w*|recommend\w*|advice|advise|feedback\b(?!\s*(?:table|collection|form|data|survey))|thoughts?|opinion|best(?:\s+\w+)?\s+(?:way|practice|practices|approach|option|design|choice|strategy|structure|format|type|index|indexes|schema)\b|better\b|faster|quicker|(?:this|it|that|everything|(?:the|my|our|these)\s+(?:\w+\s+)?(?:quer(?:y|ies)|report|dashboard|page|joins?|views?|indexe?s?|tables?|schema|database|thing))(?:\s+(?:on|in|for|between|against|over|with|from)\b[\w\s]{0,24}?)?\s+(?:is|are|was|were|runs?|running|feels?|seems?)\s+(?:so |very |really |too )?slow\w*|forever|bad\b|poor\b|terrible|killing|worth (?:it|doing|the)\b|reduc\w*|wrong with|should (?:i|there|this|it)|i should|do you (?:think|see)|do i need|what needs|(?:what )?would you (?:change|do|suggest|recommend|normali[sz]e|denormali[sz]e|add|drop|split|merge|index|partition)|relate[sd]\b|grow\w*|scal(?:e|es|ing|ability)\b|model(?:l?ed|l?ing)\b|needs? (?:to be )?(?:updated?|changed?|fixed?|added?)|problems?|issues? (?:with|in|around)\b|mistakes?|redundant(?=\s+(?:index(?:es)?|indices|columns?|tables?|joins?|constraints?|keys?|data)\b)|unused\s+(?:index(?:es)?|indices|column|columns|table|tables|constraints?|keys?|fields?)\b|unnecessary(?=\s+(?:index(?:es)?|indices|columns?|tables?|joins?|constraints?|keys?)\b)|(?:missing|duplicate)\w*[^.?!]{0,20}\b(?:index(?:es)?|indices|constraints?|keys?|relationships?)|too many|too few|make[s]? sense|properly|correctly|the right way|is (?:this|it|that|my|our)[^.?!]{0,24}\bok(?:ay)?\b|sensible|reasonable|why (?:is|are|am|does|do|did|would)|what does .{0,30}do\b|explain|break down|convert|translate|port\b|migrat\w*|difference between|when should|pros and cons|document(?:s|ing)?\s+(?:the|this|my|our)\b|trade-?offs?|(?:take a )?look at\s+(?:my|the|this|our)\s+(?:schema|database|db|design|data ?model)\b|say about)\b""",
+            RegexOption.IGNORE_CASE,
+        )
+
+        /** What advice is asked about. Wider than [METADATA_OBJECT_RE]: performance, query text and errors count too. */
+        private val ADVICE_OBJECT_RE = Regex(
+            """\b(tables?|collections?|columns?|fields?|schemas?|views?|index(?:es|ing|ed)?|indices|relationships?|relations?|foreign keys?|primary keys?|constraints?|triggers?|procedures?|functions?|routines?|sequences?|joins?|partition\w*|shard\w*|embed\w*|documents?|model(?:s|l?ed|l?ing)?\b|quer(?:y|ies)|sql|ddl|statements?|syntax|performance|slow\w*|latency|throughput|rows?|duplicates?|normali[sz]\w*|denormali[sz]\w*|databases?|dbs?|design|structures?|reports?|dashboards?|data ?model\w*|postgres\w*|mysql|mariadb|sqlite|oracle|mongo\w*|duckdb|(?:database|db|data) (?:structure|layout|schema|design|model))\b""",
+            RegexOption.IGNORE_CASE,
+        )
+
+        /** Asking what the database *is*, not what is in it: the answer is a description, not a table list. */
+        private val OVERVIEW_INTENT_RE = Regex(
+            """\b(describe|description|detail|details|overview|summar\w*|explain|walk me through|tell me about|understand|introduce|high[- ]level|brief|contain\w*|what(?:'s| is) in|what(?:'s| is) (?:this|the|your)[^.?!]{0,24}\bfor\b|hold\w*)\b""",
+            RegexOption.IGNORE_CASE,
+        )
+
+        /** The whole database, not one named table - "describe the orders table" is still a column listing. */
+        private val OVERVIEW_OBJECT_RE = Regex(
+            """\b(schemas?|databases?|db|data ?model\w*|structure|layout|(?:files?|spreadsheets?|csvs?|workbooks?)(?!\s+(?:table|collection)))\b""",
+            RegexOption.IGNORE_CASE,
+        )
+
+        /** Advice asking what to CHANGE, where an unknown name is a proposal rather than an invention. */
+        private val PRESCRIPTIVE_ADVICE_RE = Regex(
+            """\b(improv\w*|optimi[sz]\w*|tun(?:e|ing)|speed(?:\s*up)?|normali[sz]\w*|denormali[sz]\w*|redesign\w*|refactor\w*|restructur\w*|(?<!\b(?:the|its|all|these|those|many|few|no|some) )partition\w*|(?<!\b(?:the|its|all|these|those|many|few|no|some) )shard\w*|archiv(?:e|es|ed|ing|al)\b(?!\s*(?:table|log|collection|folder))|rewrit\w*|suggest\w*|recommend\w*|advice|advise|should i|(?:what )?would you (?:change|do|suggest|recommend|normali[sz]e|denormali[sz]e|add|drop|split|merge|index|partition)|missing|add\b|better\b|best\b|reduc\w*|fix\w*|what needs)\b""",
+            RegexOption.IGNORE_CASE,
+        )
+
+        /** True when an unknown name in the answer is a proposal AskSQL never runs, rather than a hallucination. */
+        internal fun isSchemaProposalQuestion(question: String) =
+            isSchemaAdviceQuestion(question) && PRESCRIPTIVE_ADVICE_RE.containsMatchIn(question)
+
+        /** "the reporting structure of employees" is a question about rows in a table, not about the database. */
+        private val STRUCTURE_OF_TABLE_RE = Regex(
+            """\b(?:structure|layout)\s+(?:of|in|for)\s+(?:the |this |that |our |my )?(?!databases?\b|db\b|schemas?\b|data ?model)\w""",
+            RegexOption.IGNORE_CASE,
+        )
+        private val NAMES_THE_DATABASE_RE =
+            Regex("""\b(?:schemas?|databases?|db|data ?model)\b""", RegexOption.IGNORE_CASE)
+
+        /** True when the question asks for a description of the database as a whole. */
+        internal fun isDatabaseOverviewQuestion(question: String): Boolean {
+            if (STRUCTURE_OF_TABLE_RE.containsMatchIn(question) && !NAMES_THE_DATABASE_RE.containsMatchIn(question)) return false
+            return OVERVIEW_INTENT_RE.containsMatchIn(question) && OVERVIEW_OBJECT_RE.containsMatchIn(question)
+        }
+
+        /**
+         * "write/give me a statement that deletes ..." - asking to be handed a write, not to run one.
+         * The write verb has to come AFTER the noun: "write a query that adds up revenue" is a read.
+         */
+        private val WRITE_REQUEST_RE = Regex(
+            """^\s*(?:(?:please|now|ok|okay|so)\s+|(?:can|could|would|will)\s+(?:you|we)\s+(?:please\s+)?|i\s+(?:want|need)\s+(?:you\s+)?to\s+|go ahead and\s+|let'?s\s+)*(?:(?:delete|truncate|erase|purge|wipe|nuke|remove(?!\s+duplicates?\b))\b|(?:drop(?!\s+(?:rows?|records?|duplicates?|nulls?)\b)|insert|update|alter|rename|clear|empty|flush)\b[^.?!]{0,60}\b(?:table|column|row|rows|record|records|from|into|set|every|all|the|this|my|our)\b)|\b(?:write|create|give|show|generate|produce|draft|compose|need|want|how (?:do|can|would) i)\b[^.?!]{0,60}\b(?:statement|query|sql|ddl|command|script|migration)\b[^.?!]{0,60}\b(?:insert|inserts|inserting|update|updates|updating|delete|deletes|deleting|drop|drops(?!\s+(?:rows?|records?|duplicates?|nulls?)\b)|dropping|truncate|truncates|truncating|alter|alters|altering|remove|removes(?!\s+duplicates?\b)|removing|rename|renames|renaming|wipes?|wiping|purges?|purging|erases?|erasing|clears?|clearing|empties|emptying|flushes?|flushing|add\b[^.?!]{0,24}\b(?:column|index|constraint|table|field|foreign key))\b|\b(?:write|create|give|show|generate|produce|draft|compose|need|want)\b[^.?!]{0,30}\b(?:insert|update|delete|drop|truncate|alter|rename|merge|upsert)\s+(?:statement|query|sql|ddl|command|script|migration)\b|\b(?:write|create|give|show|generate|produce|draft|compose|need|want)\b[^.?!]{0,20}\b(?:insert|update|delete|drop|truncate|alter|merge|upsert)\b\s+(?:that|to|which|for|removing|adding|setting)\b|\b(?:statement|query|sql|ddl|command|script|migration)\b[^.?!]{0,40}\b(?:that|to|which)\b[^.?!]{0,40}\b(?:insert|inserts|update|updates|delete|deletes|drop|drops(?!\s+(?:rows?|records?|duplicates?|nulls?)\b)|truncate|truncates|alter|alters|remove|removes(?!\s+duplicates?\b)|rename|renames|wipes?|purges?|erases?|clears?|empties|flushes?|add\b[^.?!]{0,24}\b(?:column|index|constraint|table|field|foreign key))\b""",
+            RegexOption.IGNORE_CASE,
+        )
+
+        /** A structure question answerable by a catalog listing; advice is excluded. */
         internal fun isMetadataQuestion(question: String) =
-            METADATA_INTENT_RE.containsMatchIn(question) && METADATA_OBJECT_RE.containsMatchIn(question)
+            METADATA_INTENT_RE.containsMatchIn(question) &&
+                METADATA_OBJECT_RE.containsMatchIn(question) &&
+                !isSchemaAdviceQuestion(question) &&
+                !isDatabaseOverviewQuestion(question)
+
+        /** Advice whose intent already names its object, so the non-overlapping rule cannot apply. */
+        private val SELF_CONTAINED_ADVICE_RE = Regex(
+            """\b(?:unused|redundant|unnecessary)\s+(?:index(?:es)?|indices|constraints?|keys?|relationships?|columns?|tables?|fields?)\b|\b(?:missing|duplicate)\s+(?:index(?:es)?|indices|constraints?|foreign keys?|primary keys?|relationships?)\b|\bbest\s+(?:practices?|approach|design|strategy)\b|\bbest\s+way\s+to\s+(?:store|model|structure|organi[sz]e|handle|represent|index|partition|split|name|design|track)\b""",
+            RegexOption.IGNORE_CASE,
+        )
+
+        /** Advice that names no object because the object is the query in front of the user. */
+        private val BARE_ADVICE_RE = Regex(
+            """\b(?:what (?:do|should) i do|what now|how do i fix (?:this|it)|any (?:ideas|suggestions)|is it worth\b|(?:this|it|that) (?:is|was|runs?|feels?|seems?) (?:so |very |really |too )?slow|why (?:is|are|does|do|did)\b[\w\s]{0,30}?\b(?:grow\w*|so (?:big|large|slow|fast)))\b""",
+            RegexOption.IGNORE_CASE,
+        )
+
+        /**
+         * True when the question asks for an opinion about the schema or a query rather than for data.
+         * The intent and the object must be NON-OVERLAPPING words: partition, shard and normalize are in both lists.
+         */
+        internal fun isSchemaAdviceQuestion(question: String): Boolean {
+            if (BARE_ADVICE_RE.containsMatchIn(question) || SELF_CONTAINED_ADVICE_RE.containsMatchIn(question)) return true
+            val intents = ADVICE_INTENT_RE.findAll(question).map { it.range }.toList()
+            if (intents.isEmpty()) return false
+            // A question frame ("what does this query do") carries its own meaning; the object it contains still counts.
+            if (intents.any { question.substring(it.first, it.last + 1).trim().split(Regex("""\s+""")).size >= 3 }) return true
+            val objects = ADVICE_OBJECT_RE.findAll(question).map { it.range }.toList()
+            return objects.any { o -> intents.any { i -> o.last < i.first || o.first > i.last } }
+        }
+
+        /** "run that query", "show me those results": the user means the query they just read, not a new one. */
+        private val RERUN_PREVIOUS_RE = Regex(
+            """^\s*(?:(?:please|now|ok|okay|yes)\s+|(?:can|could|would|will)\s+(?:you|we)\s+(?:please\s+)?)*(?:re-?)?(?:run|execute|show(?:\s+me)?|give(?:\s+me)?|display)\b[^.?!]{0,40}\b(?:this|that|the\s+(?:previous|last|above|same|first|second|aggregation|aggregate))\b[^.?!]{0,40}$""",
+            RegexOption.IGNORE_CASE,
+        )
+
+        /** One `term = definition` per line; blank lines and lines without a separator are ignored. */
+        fun parseGlossary(text: String): List<Prompts.GlossaryTerm> =
+            text.lineSequence()
+                .mapNotNull { line ->
+                    val at = line.indexOf('=')
+                    if (at <= 0) return@mapNotNull null
+                    val term = line.substring(0, at).trim()
+                    val definition = line.substring(at + 1).trim()
+                    if (term.isEmpty() || definition.isEmpty()) null else Prompts.GlossaryTerm(term, definition)
+                }
+                .take(40)
+                .toList()
+
+        /** True when the question asks to run a query already shown, rather than for a new one. */
+        internal fun isRerunPreviousRequest(question: String) = RERUN_PREVIOUS_RE.containsMatchIn(question)
+
+        /**
+         * True when the user is asking to be handed a write statement, which is proposed rather than
+         * generated. "can you delete my data" reads as an imperative but asks what AskSQL is allowed
+         * to do, and that has its own answer.
+         */
+        internal fun isWriteRequest(question: String) =
+            WRITE_REQUEST_RE.containsMatchIn(question) && !Scope.isCapabilityQuestion(question)
 
         /**
          * A write statement offered in an answer, fenced or bare. Matched by statement shape rather
-         * than by a ```sql fence, because smaller models reply with the raw statement and no fence
-         * and the note saying AskSQL will not run it must still attach.
+         * than by a ```sql fence, which smaller models omit.
          */
         private val PROPOSED_WRITE_RE = Regex(
-            """^\s*(?:```\w*\s*)?(insert\s+into\s|update\s+[\w."`]+(?:\s+(?:as\s+)?[\w"`]+)?\s+set\s|delete\s+(?:from\s|[\w."`]+\s+from\s)|merge\s+into\s|replace\s+into\s|upsert\s+into\s|alter\s+(?:table|schema|view|index|sequence|database)\s|create\s+(?:or\s+replace\s+)?(?:table|index|unique\s+index|view|materialized\s+view|schema|trigger|function|procedure|sequence|database|role|user|type|extension|domain|policy)\s|drop\s+(?:table|index|view|materialized\s+view|schema|trigger|function|procedure|sequence|database|role|user|type|extension|domain|policy)\s|comment\s+on\s+(?:table|column)\s|truncate\s+(?:table\s+)?[\w."`]+\s*;|grant\s+[\w,\s]+\s+on\s+[\w."`]+\s+to\s|revoke\s+[\w,\s]+\s+on\s+[\w."`]+\s+from\s)""",
+            """^\s*(?:```\w*\s*)?(insert\s+into\s|update\s+[\w."`]+(?:\s+(?:as\s+)?[\w"`]+)?\s+set\s|delete\s+(?:from\s|[\w."`]+\s+from\s)|merge\s+into\s|replace\s+into\s|upsert\s+into\s|alter\s+(?:table|schema|view|index|sequence|database)\s|create\s+(?:or\s+replace\s+)?(?:table|index|unique\s+index|view|materialized\s+view|schema|trigger|function|procedure|sequence|database|role|user|type|extension|domain|policy)\s|drop\s+(?:table|index|view|materialized\s+view|schema|trigger|function|procedure|sequence|database|role|user|type|extension|domain|policy)\s|comment\s+on\s+(?:table|column)\s|truncate\s+(?:table\s+)?[\w."`]+\s*;|grant\s+[\w,]+(?:[ \t]+[\w,]+)*\s+on\s+[\w."`]+\s+to\s|revoke\s+[\w,]+(?:[ \t]+[\w,]+)*\s+on\s+[\w."`]+\s+from\s)""",
             setOf(RegexOption.IGNORE_CASE, RegexOption.MULTILINE),
         )
+
+        /**
+         * The same shapes, unanchored: a pasted statement usually follows a colon rather than
+         * starting a line ("is this update safe: UPDATE ... SET ..."). Only used on the QUESTION.
+         */
+        private val WRITE_IN_QUESTION_RE = Regex(
+            """(insert\s+into\s|update\s+[\w."`]+(?:\s+(?:as\s+)?[\w"`]+)?\s+set\s|delete\s+(?:from\s|[\w."`]+\s+from\s)|merge\s+into\s|replace\s+into\s|upsert\s+into\s|alter\s+(?:table|schema|view|index|sequence|database)\s|create\s+(?:or\s+replace\s+)?(?:table|index|unique\s+index|view|materialized\s+view|schema|trigger|function|procedure|sequence|database|role|user|type|extension|domain|policy)\s|drop\s+(?:table|index|view|materialized\s+view|schema|trigger|function|procedure|sequence|database|role|user|type|extension|domain|policy)\s|comment\s+on\s+(?:table|column)\s|truncate\s+(?:table\s+)?[\w."`]+\s*;|grant\s+[\w,]+(?:[ \t]+[\w,]+)*\s+on\s+[\w."`]+\s+to\s|revoke\s+[\w,]+(?:[ \t]+[\w,]+)*\s+on\s+[\w."`]+\s+from\s)""",
+            setOf(RegexOption.IGNORE_CASE, RegexOption.MULTILINE),
+        )
+
+        /** Bounds for the whole-schema answer: past these the prompt stops being an overview and starts being the schema. */
+        private const val BROAD_MAX_TABLES = 120
+        private const val BROAD_MAX_EDGES = 200
 
         /** A whole-schema question (relationships, overview, table count) that needs the full picture, not a term-pruned handful of tables. */
         private val BROAD_SCHEMA_RE =
@@ -100,7 +229,7 @@ class EnginePipeline(
     private val catalogLocks = ConcurrentHashMap<String, Mutex>()
     private val catalogGeneration = java.util.concurrent.atomic.AtomicLong(0)
 
-    /** Drops every cached catalog entry. Call on any connection-settings change; the 300s TTL alone would keep serving the old schema. */
+    /** Drops every cached catalog entry. Call on any connection-settings change. */
     fun invalidateCatalogCache() {
         catalogGeneration.incrementAndGet()
         catalogCache.clear()
@@ -122,13 +251,13 @@ class EnginePipeline(
                 return@withLock recheck.catalog
             }
             val gen = catalogGeneration.get()
-            // Blocking JDBC: without a hard bound, a hung network mount would leave "Reading schema" stuck forever.
+            // Blocking JDBC: the fetch carries its own hard timeout.
             val fresh = withHardTimeout(60_000) {
                 connectionRegistry.withConnection(descriptor, password) { connection ->
                     Introspectors.forEngine(descriptor.engine).introspect(connection)
                 }
             }
-            // Skip the write if an edit invalidated mid-fetch, or this stores the old target's schema.
+            // Skip the write if an edit invalidated the cache mid-fetch.
             if (catalogGeneration.get() == gen) catalogCache[descriptor.id] = CachedCatalog(fresh, System.currentTimeMillis())
             fresh
         }
@@ -148,13 +277,53 @@ class EnginePipeline(
         onEvent: EngineEventListener? = null,
         /** From `AskSqlAppSettings.customInstructions`; see [Prompts.buildSqlSystem]. */
         customInstructions: String? = null,
+        /** From `AskSqlAppSettings.glossary`, one `term = definition` per line. */
+        glossaryText: String? = null,
     ): AskResult {
         val q = question.trim()
+        val glossary = parseGlossary(glossaryText.orEmpty())
         if (q.isEmpty()) throw AskSqlException(AskSqlErrorCode.INVALID_INPUT)
         if (q.length > 10_000) {
             throw AskSqlException(
                 AskSqlErrorCode.INVALID_INPUT,
                 userMessage = "The question is too long. Keep it under 10,000 characters.",
+            )
+        }
+
+        // Answered deterministically on the prose path rather than by the model.
+        if (Scope.isCapabilityQuestion(q)) {
+            throw AskSqlException(
+                AskSqlErrorCode.LLM_CANNOT_ANSWER,
+                userMessage = "That is a question about AskSQL itself rather than the data.",
+                detail = "capability question routed to the prose path",
+                retryable = false,
+            )
+        }
+        // Declined before any model call: a small model can be argued into answering these.
+        if (Scope.isPromptInjection(q)) {
+            throw AskSqlException(
+                AskSqlErrorCode.LLM_REFUSAL,
+                userMessage = "I only answer questions about the data in this database.",
+                detail = "prompt-injection attempt declined",
+                retryable = false,
+            )
+        }
+
+        // A request to be handed a write goes to the prose path, before any model call.
+        if (isWriteRequest(q)) {
+            throw AskSqlException(
+                AskSqlErrorCode.LLM_CANNOT_ANSWER,
+                userMessage = "That asks for a statement that changes data. AskSQL is read-only, so it is written out for you to run yourself.",
+                detail = "write request routed to the proposal path",
+                retryable = false,
+            )
+        }
+        if (isSchemaAdviceQuestion(q) || isDatabaseOverviewQuestion(q)) {
+            throw AskSqlException(
+                AskSqlErrorCode.LLM_CANNOT_ANSWER,
+                userMessage = "That asks about the schema itself rather than the data in it, so there is no query to run.",
+                detail = "schema-advice question routed to the prose path",
+                retryable = false,
             )
         }
 
@@ -172,9 +341,17 @@ class EnginePipeline(
         }
 
         val system = Prompts.buildSqlSystem(dialect, policy.maxRows, customInstructions)
-        var userPrompt = Prompts.buildSqlUser(question = q, schemaText = schemaText, context = context)
+        var userPrompt = Prompts.buildSqlUser(
+            question = q,
+            schemaText = schemaText,
+            glossary = glossary,
+            context = context,
+            rerunPrevious = isRerunPreviousRequest(q),
+        )
 
         var lastSql = ""
+        // True only while every reply has been empty, which is what marks the model unreachable.
+        var everyReplyEmpty = true
         var attempt = 0
         var contextShrunk = false
         var triedFuzzyTableRepair = false
@@ -187,10 +364,9 @@ class EnginePipeline(
                     llmClient.chat(system, userPrompt) { token -> onEvent?.onEvent(EngineEvent.Token(token)) }
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
-                throw e // must propagate unwrapped: this IS the coroutine's own cancellation signal, not an LLM failure
+                throw e // the coroutine's own cancellation signal; must propagate unwrapped
             } catch (e: AskSqlException) {
-                // On context overflow, shrink the schema once and retry without consuming a repair
-                // attempt; a too-long prompt for a small-context model is not a provider outage.
+                // On context overflow, shrink the schema once and retry without consuming a repair attempt.
                 if (e.code == AskSqlErrorCode.LLM_CONTEXT_OVERFLOW && !contextShrunk) {
                     contextShrunk = true
                     val tighter = CatalogPruner.pruneCatalog(
@@ -212,42 +388,46 @@ class EnginePipeline(
             val text = result.text
 
             onEvent?.onEvent(EngineEvent.StageEvent(Stage.EXTRACT))
-            // extractSql runs first: a model can hedge with "IMPOSSIBLE: ..." and still produce a
-            // usable SQL fence right after; prefer the SQL if there is any.
+            // extractSql runs first: a model can hedge with "IMPOSSIBLE: ..." and still emit usable SQL.
             val extraction = Extract.extractSql(text)
             if (extraction == null) {
                 val impossibleReason = Extract.extractImpossible(text)
                 if (impossibleReason != null) {
-                    // "show tables" is not a SELECT, so the model refuses; the same answer is a plain
-                    // SELECT over the catalog views, which the guard and hallucination floor both allow.
-                    if (!triedCatalogRepair && isMetadataQuestion(q) && attempt < MAX_REPAIRS) {
+                    // A refused "show tables" is re-asked as a plain SELECT over the catalog views; a rephrase spends no repair attempt.
+                    if (!triedCatalogRepair && isMetadataQuestion(q)) {
                         triedCatalogRepair = true
                         userPrompt = Prompts.buildRepairUser(
                             question = q, failedSql = "",
                             failure = "This asks about the database's own structure. Don't use SHOW/DESCRIBE, and don't invent a schema name to filter on. Answer with exactly this query, unchanged: ${catalogQueryHint(descriptor.engine)}",
                             schemaText = schemaText, dialect = dialect,
                         )
-                        attempt++
                         continue
                     }
-                    // A refusal is often a misspelled table name ("appointmnts" vs "appointments"); one
-                    // repair attempt, told to disclose the correction, beats a flat refusal.
+                    // A refusal is often a misspelled table name; retry once with the closest match, disclosed in the explanation.
                     val fuzzyTable = if (!triedFuzzyTableRepair) SchemaFuzzyMatch.closestTableName(q, fullCatalog) else null
-                    if (fuzzyTable != null && attempt < MAX_REPAIRS) {
+                    if (fuzzyTable != null) {
                         triedFuzzyTableRepair = true
                         userPrompt = Prompts.buildRepairUser(
                             question = q, failedSql = "",
                             failure = "No table matches the question exactly, but \"$fuzzyTable\" is a close match, likely the same word misspelled. If that's what's meant, answer using \"$fuzzyTable\" and say in the explanation that an exact match wasn't found so \"$fuzzyTable\" was used instead.",
                             schemaText = schemaText, dialect = dialect,
                         )
-                        attempt++
                         continue
                     }
                     throw AskSqlException(AskSqlErrorCode.LLM_CANNOT_ANSWER, userMessage = impossibleReason, retryable = false)
                 }
             }
+            if (text.isNotBlank()) everyReplyEmpty = false
             if (extraction == null) {
                 if (attempt >= MAX_REPAIRS) {
+                    // Nothing at all on every attempt: the model name is wrong or the account cannot reach it.
+                    if (everyReplyEmpty) {
+                        throw AskSqlException(
+                            AskSqlErrorCode.LLM_UNAVAILABLE,
+                            userMessage = "The AI model returned an empty response. Check the model name is right and that your account can use it.",
+                            detail = "model returned nothing on all ${attempt + 1} attempts",
+                        )
+                    }
                     val refusal = Extract.looksLikeRefusal(text)
                     throw AskSqlException(
                         if (refusal) AskSqlErrorCode.LLM_REFUSAL else AskSqlErrorCode.LLM_BAD_OUTPUT,
@@ -284,8 +464,7 @@ class EnginePipeline(
                 continue
             }
 
-            // A model dodging a question by SELECTing a hardcoded string is not a real query. Narrowed
-            // to literal string constants only: SELECT version()/NOW() are genuine zero-table answers.
+            // A hardcoded string SELECT is a dodge, not a query; version()/NOW() are genuine zero-table answers.
             if (verdict.tables.isEmpty() && (verdict.sql.contains("IMPOSSIBLE", ignoreCase = true) || LITERAL_STRING_ANSWER_RE.containsMatchIn(verdict.sql.trim()))) {
                 throw AskSqlException(
                     AskSqlErrorCode.LLM_CANNOT_ANSWER,
@@ -318,11 +497,25 @@ class EnginePipeline(
                 continue
             }
 
+            // Semantic floor: an aggregate beside a bare column with no GROUP BY, which PostgreSQL and strict MySQL reject.
+            val needsGrouping = Semantics.ungroupedAggregate(verdict.sql)
+            if (needsGrouping != null && attempt < MAX_REPAIRS) {
+                userPrompt = Prompts.buildRepairUser(
+                    question = q,
+                    failedSql = verdict.sql,
+                    failure = "The query selects \"$needsGrouping\" alongside an aggregate but has no GROUP BY, so it does not answer the question. " +
+                        "Either group by \"$needsGrouping\", or drop it and aggregate over the whole table - whichever the question asks for.",
+                    schemaText = schemaText,
+                    dialect = dialect,
+                )
+                attempt++
+                continue
+            }
+
             val unknownColumn = HallucinationChecks.firstUnknownColumn(verdict.sql, fullCatalog)
             if (unknownColumn != null) {
                 if (attempt >= MAX_REPAIRS) {
-                    // Name what exists: the repair prompt already had this list, and withholding it
-                    // from the user left them guessing at the one thing that lets them rephrase.
+                    // Name the columns that do exist, the same list the repair prompt had.
                     val columns = unknownColumn.available.take(12).joinToString(", ")
                     val more = if (unknownColumn.available.size > 12) ", ..." else ""
                     throw AskSqlException(
@@ -354,8 +547,7 @@ class EnginePipeline(
     }
 
     // -----------------------------------------------------------------
-    // execute(): guard EVERY sql, even one the caller already saw guarded once; an
-    // edited-then-replayed statement is re-verified from scratch.
+    // execute(): guard EVERY sql, even one the caller already saw guarded once.
     // -----------------------------------------------------------------
 
     suspend fun execute(
@@ -378,8 +570,7 @@ class EnginePipeline(
         }
 
         val started = System.currentTimeMillis()
-        // Clamp the caller's maxRows to the policy ceiling; for fetch-style dialects (Oracle) no LIMIT
-        // is injected, so this driver cap is the only bound against materializing a whole table.
+        // Clamp the caller's maxRows to the policy ceiling; Oracle gets no injected LIMIT, only this driver cap.
         val cappedMax = minOf(maxRows ?: policy.maxRows, policy.maxRows)
         return try {
             val result = connectionRegistry.withConnection(descriptor, password) { connection ->
@@ -389,12 +580,11 @@ class EnginePipeline(
             val warnings = result.warnings.toMutableList()
             if (verdict.autoLimited) warnings += "A row limit of ${policy.maxRows} was added automatically - export to get everything."
             if (verdict.loweredLimit) warnings += "The row limit was lowered to ${policy.maxRows}."
-            // The injected LIMIT equals maxRows, so the executor cannot see the overflow row; when we
-            // auto-limited and the result filled the cap, surface truncation for the "export" banner.
+            // The injected LIMIT equals maxRows, so an auto-limited result that fills the cap counts as truncated.
             val truncated = result.truncated || (verdict.autoLimited && result.rowCount >= cappedMax)
             result.copy(warnings = warnings, truncated = truncated)
         } catch (e: kotlinx.coroutines.CancellationException) {
-            throw e // a user-initiated cancel, not a query failure; must propagate unwrapped and unaudited
+            throw e // a user-initiated cancel: propagate unwrapped and unaudited
         } catch (e: Exception) {
             val mapped = AskSqlException.from(e, AskSqlErrorCode.DB_QUERY_ERROR)
             history.add(auditEntry(descriptor.id, question, verdict.sql, HistoryStatus.ERROR, mapped.code.name, System.currentTimeMillis() - started))
@@ -433,8 +623,7 @@ class EnginePipeline(
             val extraction = Extract.extractSql(repaired.text) ?: return null
             val verdict = SqlGuard.guard(extraction.sql, dialect, policy)
             if (!verdict.allowed || verdict.sql == bad) return null
-            // ask()'s repair loop enforces these same floors: a "fix" referencing a table/column
-            // that doesn't exist would just fail again once re-approved.
+            // The same hallucination floors ask()'s repair loop enforces.
             if (HallucinationChecks.firstUnknownTable(verdict.sql, catalog, verdict.tables) != null) return null
             if (HallucinationChecks.firstUnknownColumn(verdict.sql, catalog) != null) return null
             verdict.sql
@@ -449,9 +638,7 @@ class EnginePipeline(
         val s = sql.trim()
         if (s.isEmpty()) throw AskSqlException(AskSqlErrorCode.INVALID_INPUT, userMessage = "Provide a SQL statement to explain.")
         val dialect = Dialects.of(descriptor.engine)
-        // Guard first: `sql` is caller-supplied, so without this, explain() is a free text channel
-        // to the model on the host's API key. Every caller today only passes already-guarded SQL,
-        // so this is defense-in-depth against a future "explain arbitrary selection" action.
+        // Guard first: `sql` is caller-supplied and not necessarily already guarded.
         val verdict = SqlGuard.guard(s, dialect, policy)
         if (!verdict.allowed) {
             throw AskSqlException(
@@ -475,38 +662,56 @@ class EnginePipeline(
 
 
     /**
-     * Answer a natural-language question about the schema in prose, grounded in the catalog.
-     * Structure only - never data values, since no query runs. [SchemaAnswer.grounded] is false
-     * if the answer named identifiers absent from the schema.
+     * Answers a schema question in prose, grounded in the catalog: structure only, never data values.
+     * [SchemaAnswer.grounded] is false if the answer named identifiers absent from the schema.
      */
     suspend fun explainSchema(
         question: String,
         descriptor: ConnectionDescriptor,
         password: String?,
         llmClient: LlmClient,
+        /** Prior turns, so a follow-up like "explain this query" knows which query. */
+        context: List<Prompts.ContextTurn> = emptyList(),
     ): Scope.SchemaAnswer {
         val q = question.trim()
         if (q.isEmpty()) throw AskSqlException(AskSqlErrorCode.INVALID_INPUT, userMessage = "Ask a question about the schema.")
+        // Same cap as every other entry point.
+        if (q.length > 10_000) {
+            throw AskSqlException(
+                AskSqlErrorCode.INVALID_INPUT,
+                userMessage = "The question is too long. Keep it under 10,000 characters.",
+            )
+        }
         val dialect = Dialects.of(descriptor.engine)
+        // Answered in code, not by the model.
+        if (Scope.isPromptInjection(q)) return Scope.offTopicAnswer(dialect.promptLabel)
+        if (Scope.isCapabilityQuestion(q)) return Scope.capabilityAnswer(dialect.promptLabel)
         val fullCatalog = catalog(descriptor, password)
         if (fullCatalog.tables.isEmpty()) {
             return Scope.SchemaAnswer("This connection has no tables the current user can read.", emptyList(), true, emptyList(), false)
         }
-        val isSchemaChange = Grounding.SCHEMA_CHANGE_RE.containsMatchIn(q)
-        // A whole-schema question ("how are the tables related?", "summarize this database") needs the full
-        // picture. Term-based pruning would narrow it to a couple of tables, so instead pass a compact list of
-        // ALL tables plus the full join graph (declared + naming-inferred).
+        // Advice counts too: names that do not exist yet are proposals, not hallucinations.
+        val isSchemaChange = Grounding.SCHEMA_CHANGE_RE.containsMatchIn(q) || isSchemaProposalQuestion(q)
+        // A whole-schema question gets a compact list of ALL tables plus the full join graph instead of term pruning.
         val schemaText: String
         val relationships: List<String>
         val contextTables: List<TableInfo>
         if (BROAD_SCHEMA_RE.containsMatchIn(q)) {
-            relationships = CatalogPruner.joinGraph(fullCatalog)
-            val list = fullCatalog.tables.joinToString("\n") { t ->
+            // Bounded list, with the omitted count stated in the preamble.
+            val listed = fullCatalog.tables.take(BROAD_MAX_TABLES)
+            relationships = CatalogPruner.joinGraph(fullCatalog).take(BROAD_MAX_EDGES)
+            val list = listed.joinToString("\n") { t ->
                 val pk = if (t.primaryKey.isNotEmpty()) ", pk ${t.primaryKey.joinToString(",")}" else ""
                 "${if (t.schema != null) "${t.schema}." else ""}${t.name} (${t.kind.name.lowercase()}, ${t.columns.size} cols$pk)"
             }
-            schemaText = "This database has exactly ${fullCatalog.tables.size} tables/views. Full list:\n$list"
-            contextTables = fullCatalog.tables
+            val omitted = fullCatalog.tables.size - listed.size
+            val preamble = if (omitted > 0) {
+                " The ${listed.size} listed below are a sample; $omitted more are not shown, so describe the database in general terms and say the list is partial."
+            } else {
+                " Full list:"
+            }
+            schemaText = "This database has exactly ${fullCatalog.tables.size} tables/views.$preamble\n$list"
+            contextTables = listed
         } else {
             val pruned = CatalogPruner.pruneCatalog(fullCatalog, q)
             schemaText = pruned.schemaText
@@ -516,25 +721,22 @@ class EnginePipeline(
         val tables = contextTables.map { if (it.schema != null) "${it.schema}.${it.name}" else it.name }
         val system = Prompts.buildSchemaAnswerSystem(dialect, isSchemaChange)
         var answer = com.rahulmahadik.asksql.ide.llm.LlmClients.withChatTimeout {
-            llmClient.chat(system, Prompts.buildSchemaAnswerUser(q, schemaText, relationships))
+            llmClient.chat(system, Prompts.buildSchemaAnswerUser(q, schemaText, relationships, context))
         }.text.trim()
-        // Naming a real table, view or column counts as a database question by itself, so unusual
-        // phrasing or bad grammar cannot get a legitimate request declined.
+        // Naming a real catalog object, or carrying prior turns, makes the question one about this database.
         val questionIsAboutThisDatabase =
-            Scope.looksDatabaseRelated(q) || isSchemaChange || Grounding.mentionsCatalogName(q, fullCatalog)
+            Scope.looksDatabaseRelated(q) || isSchemaChange || Grounding.mentionsCatalogName(q, fullCatalog) || context.any { it.sql.isNotBlank() }
         if (Scope.isOffTopic(answer) || (Scope.isDegenerateAnswer(answer) && !PROPOSED_WRITE_RE.containsMatchIn(answer))) {
             // Challenge the refusal once when the question is plainly about data; accept it otherwise.
             if (!questionIsAboutThisDatabase) return Scope.offTopicAnswer(dialect.promptLabel)
-            // No sentinel in this system prompt: the question is already known to be about data,
-            // so the model has no refusal to repeat.
+            // No sentinel in this system prompt: the question is already known to be about data.
             answer = com.rahulmahadik.asksql.ide.llm.LlmClients.withChatTimeout {
                 llmClient.chat(
                     Prompts.buildSchemaAnswerSystem(dialect, isSchemaChange, allowOutOfScope = false),
                     Prompts.buildSchemaAnswerScopeRepairUser(q, schemaText, dialect.promptLabel, relationships),
                 )
             }.text.trim()
-            // The retry has no sentinel to emit, so a model that still will not answer says so in
-            // prose; give those the same decline rather than surfacing a bare apology.
+            // The retry has no sentinel, so a continued refusal arrives as prose; decline on that too.
             if (
                 Scope.isOffTopic(answer) ||
                 (Scope.isDegenerateAnswer(answer) && !PROPOSED_WRITE_RE.containsMatchIn(answer)) ||
@@ -543,9 +745,7 @@ class EnginePipeline(
                 return Scope.offTopicAnswer(dialect.promptLabel)
             }
         }
-        // Deterministic backstop, for models too small to follow the sentinel rule. Nothing here
-        // is about data: not the question, not a name in the catalog, not the language of the
-        // reply, and not a statement to run. A model that answered anyway answered something else.
+        // Deterministic backstop for models too small to follow the sentinel rule.
         if (
             !questionIsAboutThisDatabase &&
             !Grounding.mentionsCatalogName(answer, fullCatalog) &&
@@ -554,17 +754,14 @@ class EnginePipeline(
         ) {
             return Scope.offTopicAnswer(dialect.promptLabel)
         }
-        // Strip before grounding: the marker is internal protocol, and `out_of_scope` is
-        // snake_case, so leaving it in would report AskSQL's own token as an invented name.
+        // Strip before grounding: snake_case `out_of_scope` would otherwise read as an invented name.
         answer = Scope.stripSentinel(answer)
         // Grounding floor checked against the full catalog, so a real table dropped by pruning isn't flagged.
         var unknown = Grounding.unknownReferencesInProse(answer, fullCatalog)
-        // One repair pass for understanding questions: a name absent from the schema is a hallucination,
-        // so regenerate constrained to real names. Skipped for a change request, where new names are the proposal.
+        // One repair pass for understanding questions; skipped for a change request, where new names are the proposal.
         if (unknown.isNotEmpty() && !isSchemaChange) {
             answer = com.rahulmahadik.asksql.ide.llm.LlmClients.withChatTimeout {
-                // No sentinel: this pass exists to fix names, and an escape hatch here would let
-                // the raw sentinel through as the final answer.
+                // No sentinel: this pass only fixes names.
                 llmClient.chat(
                     Prompts.buildSchemaAnswerSystem(dialect, isSchemaChange, allowOutOfScope = false),
                     Prompts.buildSchemaAnswerRepairUser(q, schemaText, unknown, relationships),
@@ -574,11 +771,21 @@ class EnginePipeline(
             if (Scope.isOffTopic(answer)) return Scope.offTopicAnswer(dialect.promptLabel)
             unknown = Grounding.unknownReferencesInProse(answer, fullCatalog)
         }
-        // Deterministic, not prompt-hoped: a proposed write statement always carries the read-only note.
-        if (PROPOSED_WRITE_RE.containsMatchIn(answer) && !answer.contains("read-only", ignoreCase = true)) {
+        // A proposed write, in the answer or pasted into the question, always carries the read-only note.
+        if ((PROPOSED_WRITE_RE.containsMatchIn(answer) || WRITE_IN_QUESTION_RE.containsMatchIn(q)) && !answer.contains("read-only", ignoreCase = true)) {
             answer += "\n\n*Proposal only - AskSQL is read-only and never executes statements; run it yourself if you want it applied.*"
         }
-        return Scope.SchemaAnswer(answer, tables, unknown.isEmpty(), unknown, isSchemaChange)
+        // A prose answer often ends in a query the user then asks to run; a write is never carried.
+        val proposed = Extract.extractSql(answer)?.sql?.trim()
+        // Read-only is not enough to be worth handing back: prose is not held to the hallucination
+        // floor the ask path applies, so the names it used may not exist.
+        val proposedSql = proposed?.takeIf {
+            val verdict = SqlGuard.guard(it, Dialects.of(descriptor.engine), policy)
+            verdict.allowed &&
+                HallucinationChecks.firstUnknownTable(it, fullCatalog, verdict.tables) == null &&
+                HallucinationChecks.firstUnknownColumn(it, fullCatalog) == null
+        }
+        return Scope.SchemaAnswer(answer, tables, unknown.isEmpty(), unknown, isSchemaChange, proposedSql)
     }
 
     private fun auditEntry(

@@ -28,6 +28,10 @@ import java.net.http.HttpResponse
 import java.time.Duration
 import java.util.Properties
 import kotlin.time.Duration.Companion.seconds
+import com.rahulmahadik.asksql.ide.errors.AskSqlErrorCode
+import com.rahulmahadik.asksql.ide.errors.AskSqlException
+import org.junit.Assert.assertEquals
+import org.junit.Assert.fail
 
 /** A real, non-mocked run of [EnginePipeline.ask]/[EnginePipeline.execute] against DuckDB's real lazy-downloaded driver and a locally-running Ollama model; skips itself when Ollama isn't reachable. */
 @Category(IntegrationTest::class)
@@ -164,4 +168,31 @@ class DuckDbEndToEndTest {
         customersCsv.delete()
         ordersCsv.delete()
     }
+
+    /**
+     * A model that returns nothing is a different problem from a model that returns bad SQL: it
+     * means the wrong model name or one the account cannot reach. Needs a real catalog, not a real
+     * model, so it runs against DuckDB with a stub client.
+     */
+    @Test
+    fun `an empty reply is reported as an unreachable model, not as bad SQL`() = runTest(timeout = 60.seconds) {
+        val registry = ConnectionRegistry(fakeProject(), CoroutineScope(SupervisorJob() + Dispatchers.Default))
+        val pipeline = EnginePipeline(registry)
+        val silent = object : com.rahulmahadik.asksql.ide.llm.LlmClient {
+            override suspend fun chat(
+                system: String,
+                userPrompt: String,
+                onToken: com.rahulmahadik.asksql.ide.llm.TokenListener?,
+            ) = com.rahulmahadik.asksql.ide.llm.LlmResult("", com.rahulmahadik.asksql.ide.llm.LlmUsage())
+
+            override suspend fun listModels(): List<String> = emptyList()
+        }
+        try {
+            pipeline.ask("how many customers are there", descriptor(), null, silent)
+            fail("expected an empty reply to be reported")
+        } catch (e: AskSqlException) {
+            assertEquals(AskSqlErrorCode.LLM_UNAVAILABLE, e.code)
+        }
+    }
+
 }

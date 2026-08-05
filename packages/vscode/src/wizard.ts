@@ -1,9 +1,6 @@
 /**
- * Guided "Add connection" flow.
- *
- * Hand-editing settings.json is not a setup experience, and it tempts people to
- * paste a password into a synced file. This walks the user through it and puts
- * the password straight into the OS keychain instead.
+ * Guided "Add connection" flow: walks the user through the fields and puts the
+ * password straight into the OS keychain rather than a hand-edited settings.json.
  */
 
 import * as vscode from 'vscode';
@@ -34,12 +31,8 @@ const ask = (prompt: string, value?: string, password = false): Thenable<string 
   vscode.window.showInputBox({ prompt, value, password, ignoreFocusOut: true });
 
 /**
- * Ask for a value that must not be blank.
- *
- * An empty database name was accepted and then CONNECTED fine - Postgres and
- * MySQL are happy to open a session with no default schema - so introspection
- * returned zero tables and the tree just said "No tables found". The user is
- * left thinking AskSQL cannot see their data. Refuse the blank instead.
+ * Ask for a value that must not be blank. Postgres and MySQL open a session with no
+ * default schema, so a blank database name connects and then introspects to nothing.
  */
 const askRequired = (prompt: string, value?: string): Thenable<string | undefined> =>
   vscode.window.showInputBox({
@@ -50,12 +43,9 @@ const askRequired = (prompt: string, value?: string): Thenable<string | undefine
   });
 
 /**
- * Where to save the connection.
- *
- * Never decide this silently: workspace settings live in the project's
- * .vscode/settings.json, which is usually committed - so a "quick add" would
- * quietly publish someone's host and username to their team's repo. Ask, and
- * default to user settings, which stay private to the machine.
+ * Where to save the connection. Workspace settings live in the project's
+ * .vscode/settings.json, which is usually committed, so this always asks and
+ * defaults to user settings.
  */
 async function pickTarget(): Promise<vscode.ConfigurationTarget | undefined> {
   if (!vscode.workspace.workspaceFolders?.length) return vscode.ConfigurationTarget.Global;
@@ -76,10 +66,7 @@ async function pickTarget(): Promise<vscode.ConfigurationTarget | undefined> {
   );
   if (!pick) return undefined;
 
-  // Workspace settings live in the project's .vscode/settings.json, which is
-  // usually committed. A one-line quick-pick description is not informed
-  // consent: spell out exactly what other people would see, and let them back
-  // out to the safe option from here.
+  // Spell out exactly what other people would see, and let the user back out to the safe option.
   if (pick.target === vscode.ConfigurationTarget.Workspace) {
     const choice = await vscode.window.showWarningMessage(
       'Save this connection in the project?',
@@ -99,11 +86,8 @@ async function pickTarget(): Promise<vscode.ConfigurationTarget | undefined> {
 }
 
 /**
- * Every scope that defines this id.
- *
- * Removing from just one is not a removal: the same id can be defined at user
- * AND workspace level, and taking it out of one simply reveals the other. The
- * user confirmed "remove this connection", so it goes from everywhere.
+ * Every scope that defines this id. The same id can be defined at user AND
+ * workspace level, and "remove this connection" means all of them.
  */
 function scopesDefining(id: string): vscode.ConfigurationTarget[] {
   const info = vscode.workspace.getConfiguration('asksql').inspect<ConnectionConfig[]>('connections');
@@ -172,9 +156,7 @@ export async function addConnection(secrets: vscode.SecretStorage): Promise<stri
     connectionString = dsn.trim();
     conn = { id, name, engine: 'mongodb', database, usesConnectionString: true };
   } else {
-    // Oracle takes discrete fields only - its EZConnect string is unlike the URL
-    // DSNs and the fields cover the common case. Postgres/MySQL also accept a
-    // pasted cloud connection string, the fast path when a provider hands you one.
+    // Oracle takes discrete fields only; Postgres/MySQL also accept a pasted cloud connection string.
     const method =
       engine.value === 'oracle'
         ? ({ value: 'fields' } as const)
@@ -217,8 +199,7 @@ export async function addConnection(secrets: vscode.SecretStorage): Promise<stri
     } else {
       const host = await ask('Host', 'localhost');
       if (host === undefined) return undefined;
-      // Validate inline (1-65535) so a typo is corrected in place, not by aborting
-      // the whole wizard and making the user start over.
+      // Validate inline (1-65535) so a typo is corrected in place.
       const portStr = await vscode.window.showInputBox({
         prompt: 'Port',
         value: String(DEFAULT_PORT[engine.value] ?? ''),
@@ -245,8 +226,7 @@ export async function addConnection(secrets: vscode.SecretStorage): Promise<stri
       if (!database?.trim()) return undefined;
       password = await ask('Password (stored in your OS keychain, not in settings)', '', true);
       if (password === undefined) return undefined;
-      // The Oracle thin driver negotiates TLS through the connect descriptor, so it has
-      // no discrete SSL toggle here; the others ask (cloud databases usually require it).
+      // The Oracle thin driver negotiates TLS through the connect descriptor, so it has no SSL toggle here.
       if (engine.value === 'oracle') {
         conn = { id, name, engine: 'oracle', host: host || 'localhost', port, user, database };
       } else {
@@ -288,10 +268,7 @@ export async function addConnection(secrets: vscode.SecretStorage): Promise<stri
   const scope = await pickTarget();
   if (!scope) return undefined;
   const connScope: ConnectionScope = scope === vscode.ConfigurationTarget.Workspace ? 'workspace' : 'user';
-  // Store secrets BEFORE writing the settings entry: the settings change triggers
-  // a connector rebuild, and a rebuild that races ahead of the secret would record
-  // a spurious "no password/connection string" failure. A secret with no settings
-  // entry is inert; the reverse is not.
+  // Store secrets BEFORE the settings entry: writing settings triggers a connector rebuild that reads them.
   if (password) await storePassword(secrets, conn, password);
   if (connectionString) await storeConnectionString(secrets, id, connectionString, connScope);
   await vscode.workspace.getConfiguration('asksql').update('connections', [...scopeValue(scope), conn], scope);
@@ -327,9 +304,7 @@ export async function removeConnection(secrets: vscode.SecretStorage, id?: strin
       scope,
     );
   }
-  // One stable key per id, so this always finds the secrets. Nothing is left in
-  // the OS keychain after a connection is removed - password (discrete mode) and
-  // connection string (DSN mode) are both cleared regardless of which was used.
+  // One stable key per id; password (discrete mode) and connection string (DSN mode) are both cleared.
   await secrets.delete(passwordKey(targetId));
   await secrets.delete(connectionStringKey(targetId));
   return scopes.length > 0;

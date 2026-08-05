@@ -1,12 +1,8 @@
 /**
- * The AskSQL panel - a dedicated WebviewView (VS Code has no API for a native
- * custom chat surface, and a chat participant can only live inside the shared
- * chat panel). All styling comes from VS Code's theme variables.
+ * The AskSQL panel - a dedicated WebviewView styled from VS Code's theme variables.
  *
- * Trust boundary: the webview only renders. It never sees a credential, never
- * touches a database, and never builds SQL; it posts questions to the extension
- * host and receives structured results back. All values are written with
- * textContent in media/chat.js, never innerHTML.
+ * Trust boundary: the webview only renders. It never sees a credential, touches a
+ * database, or builds SQL, and media/chat.js writes every value with textContent.
  */
 
 import * as vscode from 'vscode';
@@ -22,8 +18,9 @@ import {
 import { type ConnectionConfig, type EngineManager, connectionConfigs } from './engine.js';
 import { providerModels } from './models.js';
 import { LM_LIST_TIMEOUT_MS, MODEL_LOOKUP_TIMEOUT_MS } from './constants.js';
+import { toTsv } from './format.js';
 import { log } from './log.js';
-import { userMessage, UserFacingError, setupAction } from './errors.js';
+import { userMessage, dbErrorMessage, UserFacingError, setupAction } from './errors.js';
 
 /** Rows rendered inline before we stop and point at the editor instead. */
 const INLINE_ROWS = 50;
@@ -70,15 +67,13 @@ interface ModelOption {
 }
 
 /**
- * A cell for the webview: primitives only, so nothing exotic crosses the
- * boundary. NULL becomes `null` (JS null) and an empty string stays `''`, so the
- * grid can tell "no value" from "the empty string" instead of showing both as null.
+ * A cell for the webview: primitives only. NULL becomes JS `null` and an empty
+ * string stays `''`, so the grid can tell "no value" from "the empty string".
  */
 const cell = (v: unknown): string | null => {
   if (v === null || v === undefined) return null;
   const s = typeof v === 'object' ? JSON.stringify(v) : String(v);
-  // The grid is a preview: cap huge TEXT/JSON cells so a multi-MB payload never
-  // crosses postMessage whole. The full value is available via "Open results in editor".
+  // The grid is a preview: huge TEXT/JSON cells are capped, and "Open results in editor" has the rest.
   return s.length > MAX_CELL_CHARS
     ? `${s.slice(0, MAX_CELL_CHARS)}... (${s.length - MAX_CELL_CHARS} more characters)`
     : s;
@@ -91,9 +86,8 @@ const MODEL_CHOICE_KEY = 'asksql.modelChoice';
 const RESULT_GONE = 'This result is no longer kept in memory - run the query again.';
 
 /**
- * The only commands the webview may ask the host to run - it renders untrusted
- * result data, so it must not invoke arbitrary VS Code commands. Deny-by-default:
- * add a command only when an error banner offers it as an action button.
+ * The only commands the webview may ask the host to run. Deny-by-default: add a
+ * command only when an error banner offers it as an action button.
  */
 const WEBVIEW_COMMANDS: ReadonlySet<string> = new Set([
   'asksql.addConnection',
@@ -129,9 +123,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   /** Resolver for an inline "Run this query?" approval, so it is not a blocking modal. */
   private pendingApproval: { readonly id: string; readonly resolve: (ok: boolean) => void } | undefined;
   /**
-   * Per-result store, keyed by a turn-local id. Export CSV then exports the rows
-   * of the turn its button belongs to, not whatever ran most recently. Bounded so
-   * a long session does not pin every result set in memory.
+   * Per-result store, keyed by a turn-local id, so Export CSV exports the rows of
+   * the turn its button belongs to. Bounded.
    */
   private readonly results = new Map<string, ResultSet>();
   private readonly resultBytes = new Map<string, number>();
@@ -139,8 +132,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private resultSeq = 0;
   /**
    * Prior turns this session, passed to the engine as context so a follow-up
-   * ("now only for the west region") resolves against the previous query instead
-   * of being answered in isolation.
+   * ("now only for the west region") resolves against the previous query.
    */
   private readonly history: { question: string; sql: string; connectionId: string }[] = [];
 
@@ -162,14 +154,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       localResourceRoots: [vscode.Uri.joinPath(this.ctx.extensionUri, 'media')],
     };
 
-    // Register the listener before assigning html: loading the page posts `ready`
-    // immediately, and a late listener loses it, leaving the pickers empty.
+    // Register the listener before assigning html: loading the page posts `ready` immediately.
     view.webview.onDidReceiveMessage((m: { type: string; [k: string]: unknown }) => {
       if (m.type === 'ready') void this.pushState();
       if (m.type === 'ask') void this.ask(String(m.text ?? ''), m.connectionId ? String(m.connectionId) : undefined);
       if (m.type === 'stop') {
-        // Only the first Stop of a live turn does anything; extra presses must not
-        // append another "Cancelled." note or abort nothing.
+        // Only the first Stop of a live turn does anything.
         if (this.running && !this.running.signal.aborted) {
           this.running.abort();
           this.post({ type: 'cancelled' });
@@ -183,8 +173,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           pending.resolve(Boolean(m.ok));
         }
       }
-      // The SQL travels WITH the click, so an old turn's button opens that turn's
-      // query, not whatever ran most recently.
+      // The SQL travels WITH the click, so an old turn's button opens that turn's query.
       if (m.type === 'openSql') void vscode.commands.executeCommand('asksql.openSqlInEditor', String(m.sql ?? ''));
       if (m.type === 'exportCsv') {
         const res = this.results.get(String(m.resultId ?? ''));
@@ -221,8 +210,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       if (view.visible) void this.pushState();
     });
 
-    // A disposed view must be forgotten, or post() targets a dead webview and
-    // every later refresh is silently swallowed.
+    // A disposed view must be forgotten, or post() targets a dead webview.
     view.onDidDispose(() => {
       if (this.view === view) {
         this.view = undefined;
@@ -245,8 +233,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   clear(): void {
     // End any live turn first, or a pending approval would wait forever.
     this.running?.abort();
-    // Clearing the panel also clears the context, or the next question would
-    // silently be a follow-up to a conversation the user can no longer see.
+    // Clearing the panel also clears the context, so the next question is not a hidden follow-up.
     this.history.length = 0;
     this.results.clear();
     this.resultBytes.clear();
@@ -263,15 +250,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     try {
       void this.view?.webview.postMessage(msg);
     } catch (err) {
-      // The view can be disposed between the check above and the post; a dead
-      // webview is not an error worth surfacing.
+      // The view can be disposed between the check above and the post; not an error worth surfacing.
       log.info('post to webview skipped (view gone)', String(err));
     }
   }
 
   /**
    * The configured-provider option, built synchronously - no network, no
-   * language-model activation - so the pickers render instantly.
+   * language-model activation.
    */
   private configuredOption(): ModelOption {
     const cfg = vscode.workspace.getConfiguration('asksql');
@@ -293,8 +279,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       ]);
       return models.map((m) => ({ id: `vscode:${m.id}`, label: m.name, detail: m.vendor }));
     } catch (err) {
-      // No chat models available (no Copilot, no consent). Not an error: the
-      // user's own provider is the point of this product.
+      // No chat models available (no Copilot, no consent), which is not an error.
       log.info('no VS Code chat models available', String(err));
       return [];
     }
@@ -319,15 +304,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   /**
    * Disambiguated label per connection id, used by BOTH the dropdown and the
-   * per-turn attribution so they never disagree. Two connections that share a
-   * "name - database" label get a host:port (or SQLite parent folder) discriminator.
+   * per-turn attribution. Duplicates get a host:port or SQLite-folder discriminator.
    */
   private connLabels(): Map<string, string> {
     const conns = connectionConfigs();
     const base = new Map<string, string>();
     for (const c of conns) base.set(c.id, this.connLabel(c));
-    // Discriminators tried in order until every label is unique: host:port (or the
-    // SQLite parent folder), then the user, then the connection id as a last resort.
+    // Discriminators tried in order until every label is unique: host:port or SQLite folder, user, id.
     const extras = (c: (typeof conns)[number]): string[] => {
       const hostPort = [c.host, c.port].filter((p) => p !== undefined && String(p).trim() !== '').join(':');
       const folder = (c.file ?? '').split(/[\\/]/).slice(-2, -1)[0] ?? '';
@@ -353,8 +336,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   /**
-   * The panel needs only the databases. The model is chosen in a QuickPick, so this
-   * never waits on the language-model lookup - a stalled provider cannot empty it.
+   * The panel needs only the databases, so this never waits on the language-model
+   * lookup.
    */
   private pushState(): void {
     const labels = this.connLabels();
@@ -376,14 +359,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   /**
    * Choose which model answers: a VS Code chat model, or your configured provider.
-   * A one-time choice, so it is a QuickPick rather than a permanent header control.
    */
   async pickModel(): Promise<void> {
     const cfg = vscode.workspace.getConfiguration('asksql');
     const provider = cfg.get<string>('provider') ?? 'ollama';
     const currentModel = cfg.get<string>('model')?.trim();
-    // The provider's OWN models (Ollama / OpenAI-compatible), listed so the picker
-    // shows every model, not just a single "configured" summary.
+    // The provider's OWN models (Ollama / OpenAI-compatible), so the picker shows every one.
     let provModels: string[] = [];
     try {
       provModels = await vscode.window.withProgress(
@@ -447,8 +428,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   /** The chat-picked language model, resolved and validated (shared by SQL and Mongo paths). */
   private async chatModel(): Promise<vscode.LanguageModelChat> {
     const choice = this.choice;
-    // Bounded: an unbounded selectChatModels() on the ask path could stall forever
-    // and leave the panel locked (turnEnd never fires). Same guard as the picker.
+    // Bounded: an unbounded selectChatModels() on the ask path would leave the panel locked.
     const models = await Promise.race([
       vscode.lm.selectChatModels(),
       new Promise<vscode.LanguageModelChat[]>((resolve) => setTimeout(() => resolve([]), LM_LIST_TIMEOUT_MS)),
@@ -463,9 +443,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   /**
-   * An answering engine for one connection. MongoDB routes to the separate non-SQL
-   * engine and is adapted to the same AskResult shape the panel already renders (the
-   * pipeline JSON takes the place of SQL).
+   * An answering engine for one connection. MongoDB routes to the non-SQL engine and
+   * is adapted to the same AskResult shape, with pipeline JSON in place of SQL.
    */
   private async engineFor(
     connectionId: string,
@@ -500,9 +479,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             run: (execOpts) => mongo.execute(r.pipelineJson, r.collection, execOpts),
           };
         },
-        // The Mongo engine answers schema questions in its own vocabulary; the
-        // connectionId is implicit in the engine, so the option bag is dropped.
-        explainSchema: (question, opts) => mongo.explainSchema(question, { signal: opts?.signal }),
+        // The Mongo engine answers schema questions in its own vocabulary, with the connectionId implicit.
+        explainSchema: (question, opts) =>
+          mongo.explainSchema(question, {
+            signal: opts?.signal,
+            context: opts?.context?.map((c) => ({ question: c.question, pipelineJson: c.sql })),
+          }),
       };
     }
     if (configured) return this.engines.forConfiguredModel();
@@ -510,10 +492,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   /**
-   * Describe a table straight from the catalog - a structure question the
-   * extension can answer exactly without a model. Only fires when the named
-   * thing is really a table in this connection, so "describe the trend in
-   * orders" still goes to the model.
+   * Describe a table straight from the catalog, without a model. Only fires when the
+   * named thing is really a table in this connection.
    */
   private describeFromCatalog(
     question: string,
@@ -531,8 +511,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       const full = `${t.schema ? `${t.schema}.` : ''}${t.name}`.toLowerCase();
       return full === wanted || t.name.toLowerCase() === bare;
     });
-    // The question named a table; if it is not in THIS connection, say which
-    // connection and what tables it does have, rather than guessing with the model.
+    // The question named a table absent from THIS connection: say which connection, and what it has.
     return table ? { table } : { missing: bare };
   }
 
@@ -541,8 +520,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     if (!sql) return;
     const id = connectionId || connectionConfigs()[0]?.id;
     if (!id) return;
-    // planId routes the plan's progress/result/error to the turn whose button was
-    // clicked, not the globally-current turn.
+    // planId routes the plan's progress/result/error to the turn whose button was clicked.
     this.post({ type: 'progress', label: 'Asking the database for its plan', planId });
     try {
       const res = await this.engines.explain(id, sql);
@@ -564,11 +542,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const question = text.trim();
     if (!question) return;
     const conns = connectionConfigs();
-    // A provided id that no longer resolves is stale; fall back to the first
-    // connection only when none was provided, never on a stale id.
+    // A provided id that no longer resolves is stale; fall back to the first connection only when none was given.
     const conn = connectionId ? conns.find((c) => c.id === connectionId) : conns[0];
-    // Open the turn first, so even the no-connection case renders the question
-    // and an actionable error.
+    // Open the turn first, so even the no-connection case renders the question and an error.
     this.post({ type: 'turnStart', question, connection: conn ? (this.connLabels().get(conn.id) ?? conn.name) : '' });
     if (conns.length === 0) {
       this.post({
@@ -591,13 +567,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.running?.abort();
     const ac = new AbortController();
     this.running = ac;
-    // Non-fatal notices the engine emits mid-turn (schema narrowed, row limit
-    // lowered) - shown with the result rather than lost as transient progress.
+    // Non-fatal notices the engine emits mid-turn (schema narrowed, row limit lowered), shown with the result.
     const turnWarnings: string[] = [];
 
     try {
-      // "What tables are here?" is answered from the catalog, not the model,
-      // which refuses it as unanswerable.
+      // "What tables are here?" is answered from the catalog, not the model.
       if (LIST_TABLES_PATTERNS.some((re) => re.test(question))) {
         this.post({ type: 'progress', label: 'Reading schema' });
         const cat = await this.engines.catalogFor(conn.id);
@@ -624,9 +598,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         return;
       }
 
-      // Structure questions are answered from the catalog, not the model. Only
-      // fetch the catalog when the question looks like one, so an ordinary question
-      // does not pay for an introspect the engine will do anyway.
+      // Structure questions are answered from the catalog; fetch it only when the question looks like one.
       if (DESCRIBE_PATTERNS.some((re) => re.test(question))) {
         this.post({ type: 'progress', label: 'Reading schema' });
         const cat = await this.engines.catalogFor(conn.id);
@@ -671,11 +643,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       let answer;
       try {
         answer = await engine.ask(question, {
-          // The resolved connection, matching the turn's displayed attribution - not
-          // the raw webview id, which can be stale before its state refresh arrives.
+          // The resolved connection, matching the turn's displayed attribution, not the raw webview id.
           connectionId: conn.id,
-          // Follow-up context, but only for the connection being asked now: a prior
-          // query against another database references tables this one does not have.
+          // Follow-up context, but only for the connection being asked now.
           context: this.history
             .filter((h) => h.connectionId === conn.id)
             .slice(-CONTEXT_TURNS)
@@ -687,8 +657,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           },
         });
       } catch (askErr) {
-        // Schema-understanding fallback: when no SQL could be built and the setting is
-        // on, answer a conceptual question from the schema in prose instead of erroring.
+        // Schema-understanding fallback: with no SQL and the setting on, answer from the schema in prose.
         if (
           engine.explainSchema &&
           vscode.workspace.getConfiguration('asksql').get<boolean>('answerSchemaQuestions') === true &&
@@ -697,7 +666,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         ) {
           if (ac.signal.aborted) return;
           this.post({ type: 'progress', label: 'Reading schema' });
-          const sa = await engine.explainSchema(question, { connectionId: conn.id, signal: ac.signal });
+          const sa = await engine.explainSchema(question, {
+            connectionId: conn.id,
+            signal: ac.signal,
+            // The same prior turns the ask used, so "explain this query" knows which one.
+            context: this.history
+              .filter((h) => h.connectionId === conn.id)
+              .slice(-CONTEXT_TURNS)
+              .map((h) => ({ question: h.question, sql: h.sql })),
+          });
           if (ac.signal.aborted) return;
           this.post({
             type: 'schemaAnswer',
@@ -705,15 +682,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             grounded: sa.grounded,
             unknownReferences: [...sa.unknownReferences],
             isSchemaChange: sa.isSchemaChange,
+            proposedSql: sa.proposedSql,
           });
+          // A prose turn is still a turn: without it, "run that query" has nothing to refer to.
+          this.history.push({ question, sql: sa.proposedSql ?? '', connectionId: conn.id });
+          if (this.history.length > MAX_HISTORY) this.history.shift();
           return;
         }
         throw askErr;
       }
       if (ac.signal.aborted) return;
 
-      // Remember this turn as context for the next follow-up (bounded), tagged with
-      // its connection so a later switch does not carry the wrong schema's queries.
+      // Remember this turn as context for the next follow-up (bounded), tagged with its connection.
       this.history.push({ question, sql: answer.sql, connectionId: conn.id });
       if (this.history.length > MAX_HISTORY) this.history.shift();
 
@@ -760,6 +740,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         type: 'result',
         resultId,
         columns: res.columns.map((c) => c.name),
+        // The webview needs declared types to tell a numeric column from a text one.
+        columnKinds: res.columns.map((c) => c.kind),
         rows: res.rows.slice(0, INLINE_ROWS).map((r) => r.map(cell)),
         rowCount: res.rowCount,
         shown: Math.min(res.rowCount, INLINE_ROWS),
@@ -769,21 +751,19 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       });
     } catch (err) {
       if (ac.signal.aborted) return;
-      // A connection that failed to build is absent from the engine and surfaces
-      // as a generic "unknown connection"; show the recorded reason instead.
+      // A connection that failed to build surfaces as "unknown connection"; show the recorded reason.
       const failure = this.engines.failureFor(conn.id);
       if (failure) {
         this.post({ type: 'error', message: userMessage(failure) });
         return;
       }
-      // A provider/key/model failure carries a one-click fix so the user is not
-      // dead-ended in the chat with instructions to hunt for a command.
+      // A provider/key/model failure carries a one-click fix.
       const setup = setupAction(err);
       if (AskSqlError.is(err)) {
         const suggested = (err as { suggestedSql?: string }).suggestedSql;
         this.post({
           type: 'error',
-          message: err.userMessage,
+          message: dbErrorMessage(err),
           guard: err.code === 'GUARD_BLOCKED',
           suggestedSql: suggested ?? '',
           ...(setup ?? {}),
@@ -795,8 +775,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       else log.error('chat turn failed', err);
       this.post({ type: 'error', message: userMessage(err), ...(setup ?? {}) });
     } finally {
-      // Only the current turn unlocks the UI; a superseded turn must not post
-      // turnEnd while the newer turn is still running.
+      // Only the current turn unlocks the UI; a superseded turn must not post turnEnd.
       if (this.running === ac) {
         this.running = undefined;
         this.post({ type: 'turnEnd' });
@@ -810,8 +789,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.results.set(id, res);
     this.resultBytes.set(id, bytes);
     this.totalResultBytes += bytes;
-    // Evict oldest first, but never the just-stored result (a visible turn's
-    // export/copy must keep working).
+    // Evict oldest first, but never the just-stored result.
     while (this.results.size > 1 && (this.results.size > MAX_RESULTS || this.totalResultBytes > MAX_RESULT_BYTES)) {
       const oldest = this.results.keys().next().value;
       if (oldest === undefined || oldest === id) break;
@@ -822,8 +800,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   /**
-   * Open the whole result in an editor as JSON, which preserves NULL vs "" vs a
-   * literal "NULL" and keeps rows as arrays so duplicate column names survive.
+   * Open the whole result in an editor as JSON, preserving NULL vs "" vs a literal
+   * "NULL" and keeping rows as arrays so duplicate column names survive.
    */
   private async openResultInEditor(res: ResultSet): Promise<void> {
     // JSON has no BigInt, NaN, or Infinity - stringify them, or a non-finite float exports as null.
@@ -845,16 +823,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   /** Copy the result to the clipboard as TSV (header row + all rows), for pasting into a sheet. */
   private async copyResult(res: ResultSet, resultId: string): Promise<void> {
-    const val = (v: unknown): string => {
-      const s = v === null || v === undefined ? '' : typeof v === 'object' ? JSON.stringify(v) : String(v);
-      // Excel-style quoting: a tab or newline inside a cell must not break the grid.
-      return /[\t\n\r"]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-    };
-    const tsv = [res.columns.map((c) => val(c.name)).join('\t'), ...res.rows.map((r) => r.map(val).join('\t'))].join(
-      '\n',
-    );
     try {
-      await vscode.env.clipboard.writeText(tsv);
+      await vscode.env.clipboard.writeText(toTsv(res));
       // The webview flashes success only on this ack, never optimistically.
       this.post({ type: 'copied', resultId });
     } catch (err) {

@@ -5,7 +5,7 @@ import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.project.DumbAwareAction
 import com.rahulmahadik.asksql.ide.settings.AskSqlConfigurableOpener
 
-/** Tool-window title-bar quick icon that opens AskSQL's Settings without going through the IDE's own Settings menu. Matches the VS Code extension's gear icon on its Databases view. */
+/** Tool-window title-bar icon that opens AskSQL's settings directly. */
 class OpenSettingsAction : DumbAwareAction() {
     override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.BGT
 

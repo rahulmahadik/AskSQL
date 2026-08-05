@@ -15,9 +15,8 @@ export interface SetupAction {
 }
 
 /**
- * An error whose message was written for the user and may be shown as-is.
- * Setup failures (no model, no key) carry a `setup` action so the chat can
- * render a button that jumps straight to the fix.
+ * An error whose message was written for the user and may be shown as-is. Setup
+ * failures carry a `setup` action so the chat can render a jump-to-fix button.
  */
 export class UserFacingError extends Error {
   readonly setup?: SetupAction;
@@ -29,9 +28,8 @@ export class UserFacingError extends Error {
 }
 
 /**
- * Default fix-it action for AskSqlError codes that unambiguously mean the AI
- * provider is not set up right. CONFIG_ERROR is excluded: it also covers sqlite
- * file-open failures and connector validation, where a model picker would be wrong.
+ * Default fix-it action for AskSqlError codes that mean the AI provider is not set
+ * up right. CONFIG_ERROR is excluded: it also covers sqlite and connector failures.
  */
 const SETUP_ACTION_BY_CODE: Readonly<Record<string, SetupAction>> = {
   LLM_AUTH: { action: 'asksql.setApiKey', actionLabel: 'Update API key' },
@@ -67,9 +65,8 @@ const BY_CODE: Readonly<Record<string, string>> = {
 };
 
 /**
- * The first string `code` on the error or in its `cause` chain (a refused
- * connection carries ECONNREFUSED on the cause, not the top error). Bounded so
- * a self-referential cause cannot loop.
+ * The first string `code` on the error or in its `cause` chain (ECONNREFUSED rides
+ * on the cause, not the top error). Bounded so a self-referential cause cannot loop.
  */
 const codeOf = (err: unknown): string | undefined => {
   let cur: unknown = err;
@@ -88,4 +85,18 @@ export function userMessage(err: unknown): string {
   const mapped = BY_CODE[codeOf(err) ?? ''];
   if (mapped) return mapped;
   return 'Something went wrong. See the AskSQL output channel for details.';
+}
+
+/** Driver prefixes that name a pooled connection rather than the problem. */
+const DRIVER_NOISE = /^\s*(?:\(conn=\d+\)|error:)\s*/i;
+
+/**
+ * The database's own words after the friendly line. DB_QUERY_ERROR only: a
+ * connection failure's detail carries the host and user.
+ */
+export function dbErrorMessage(err: unknown): string {
+  const base = userMessage(err);
+  if (!AskSqlError.is(err) || err.code !== 'DB_QUERY_ERROR') return base;
+  const detail = err.detail?.split('\n')[0]?.replace(DRIVER_NOISE, '').trim().slice(0, 300);
+  return detail ? `${base} ${detail}` : base;
 }

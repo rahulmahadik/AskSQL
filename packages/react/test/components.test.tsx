@@ -5,7 +5,8 @@
  * rendering, the connection picker, and standalone SqlBlock / ResultTable.
  */
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { createRoot } from 'react-dom/client';
 import userEvent from '@testing-library/user-event';
 import { AskSqlBubble, AskSqlChat, ResultTable, SqlBlock } from '../src/components.js';
 import type { ResultSet } from '@asksql/core';
@@ -201,6 +202,97 @@ describe('AskSqlChat', () => {
     await waitFor(() => expect(screen.getByText(/2 rows/)).toBeTruthy());
   });
 
+  it('applying a suggested fix in approval mode leaves a runnable query, not a blank turn', async () => {
+    const user = userEvent.setup();
+    let attempt = 0;
+    const transport = makeTransport({
+      chat: chatOf({ type: 'sql', sql: 'SELCT 1' }, { type: 'done' }),
+      execute: async () => {
+        attempt += 1;
+        if (attempt === 1) throw { code: 'DB_QUERY_ERROR', userMessage: 'bad syntax', suggestedSql: 'SELECT 1' };
+        return resultOf();
+      },
+    });
+    render(<AskSqlChat transport={transport} requireApproval />);
+    await user.type(screen.getByRole('textbox', { name: /Ask a question/i }), 'q');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await user.click(await screen.findByRole('button', { name: 'Run query' }));
+
+    expect((await screen.findByRole('alert')).textContent).toContain('bad syntax');
+    await user.click(screen.getByRole('button', { name: 'Apply suggested fix' }));
+
+    // The correction becomes the turn's query and waits behind Run, rather than vanishing.
+    const runBtn = await screen.findByRole('button', { name: 'Run query' });
+    expect(screen.getByText('SELECT 1')).toBeTruthy();
+    await user.click(runBtn);
+    await waitFor(() => expect(screen.getByText(/2 rows/)).toBeTruthy());
+  });
+
+  it('announces answers in a live region that reports its busy state', async () => {
+    const user = userEvent.setup();
+    const gate = deferred();
+    const transport = makeTransport({
+      chat: async function* () {
+        yield { type: 'stage', stage: 'llm' } as const;
+        await gate.promise;
+        yield { type: 'sql', sql: 'SELECT 1' } as const;
+        yield { type: 'done' } as const;
+      },
+    });
+    const { container } = render(<AskSqlChat transport={transport} />);
+    const thread = container.querySelector('.asksql-thread')!;
+    expect(thread.getAttribute('role')).toBe('log');
+    expect(thread.getAttribute('aria-live')).toBe('polite');
+
+    await user.type(screen.getByRole('textbox', { name: /Ask a question/i }), 'q');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await waitFor(() => expect(thread.getAttribute('aria-busy')).toBe('true'));
+    gate.resolve();
+    await waitFor(() => expect(thread.getAttribute('aria-busy')).toBe('false'));
+  });
+
+  it('shows one query when a correction is offered, not the rejected one as well', async () => {
+    const user = userEvent.setup();
+    const transport = makeTransport({
+      chat: chatOf({ type: 'sql', sql: 'SELECT * FROM ordrs' }, { type: 'done' }),
+      execute: async () => {
+        throw { code: 'DB_QUERY_ERROR', userMessage: 'no such table', suggestedSql: 'SELECT * FROM orders' };
+      },
+    });
+    const { container } = render(<AskSqlChat transport={transport} />);
+    await user.type(screen.getByRole('textbox', { name: /Ask a question/i }), 'q');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    await screen.findByRole('alert');
+    const shown = [...container.querySelectorAll('pre')].map((n) => n.textContent);
+    expect(shown).toContain('SELECT * FROM orders');
+    expect(shown).not.toContain('SELECT * FROM ordrs');
+    expect(screen.getByText(/Corrected to match your schema/)).toBeTruthy();
+  });
+
+  it("appends the database's own message to a query error", async () => {
+    const user = userEvent.setup();
+    const transport = makeTransport({
+      chat: chatOf({ type: 'sql', sql: 'SELECT 1' }, { type: 'done' }),
+      execute: async () => {
+        throw {
+          code: 'DB_QUERY_ERROR',
+          userMessage: 'The query failed to run.',
+          detail: "(conn=10) The user specified as a definer ('x'@'%') does not exist",
+        };
+      },
+    });
+    render(<AskSqlChat transport={transport} />);
+    await user.type(screen.getByRole('textbox', { name: /Ask a question/i }), 'q');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toContain('The query failed to run.');
+    expect(alert.textContent).toContain('does not exist');
+    // The pooled-connection prefix says nothing to the reader.
+    expect(alert.textContent).not.toContain('conn=10');
+  });
+
   it('retries an LLM (ask-phase) failure by re-asking the question', async () => {
     const user = userEvent.setup();
     let attempt = 0;
@@ -342,6 +434,42 @@ describe('AskSqlBubble', () => {
     await user.keyboard('{Escape}');
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
     expect(document.activeElement).toBe(screen.getByRole('button', { name: /Open database chat/i }));
+  });
+
+  it('traps Tab inside the dialog when it renders in a shadow root', async () => {
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const shadow = host.attachShadow({ mode: 'open' });
+    const container = document.createElement('div');
+    shadow.appendChild(container);
+    const root = createRoot(container);
+    try {
+      await act(async () => {
+        root.render(<AskSqlBubble transport={makeTransport()} title="Ask data" />);
+      });
+      await act(async () => {
+        (shadow.querySelector('.asksql-bubble-btn') as HTMLButtonElement).click();
+      });
+      const panel = shadow.querySelector('.asksql-bubble-panel') as HTMLElement;
+      const items = [
+        ...panel.querySelectorAll<HTMLElement>(
+          'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+        ),
+      ].filter((el) => !el.hasAttribute('disabled'));
+      const first = items[0]!;
+      const last = items[items.length - 1]!;
+      act(() => last.focus());
+      expect(shadow.activeElement).toBe(last);
+
+      // document.activeElement retargets to the shadow host, so Tab has to be checked against the root.
+      fireEvent.keyDown(panel, { key: 'Tab' });
+      expect(shadow.activeElement).toBe(first);
+    } finally {
+      await act(async () => {
+        root.unmount();
+      });
+      host.remove();
+    }
   });
 
   it('anchors to the requested corner with a custom offset', () => {

@@ -17,12 +17,43 @@ export interface EngineProfile {
 
 // Mirrors ENGINE_DEFAULTS in @asksql/server and the JetBrains connection dialog.
 export const ENGINE_PROFILES: Readonly<Record<DatabaseEngine, EngineProfile>> = {
-  postgres: { label: 'PostgreSQL', port: 5432, user: 'postgres', usesFilePath: false, databaseLabel: 'Database', supportsSsl: true },
-  mysql: { label: 'MySQL', port: 3306, user: 'root', usesFilePath: false, databaseLabel: 'Database', supportsSsl: true },
-  oracle: { label: 'Oracle', port: 1521, user: 'system', usesFilePath: false, databaseLabel: 'Service name', supportsSsl: false },
+  postgres: {
+    label: 'PostgreSQL',
+    port: 5432,
+    user: 'postgres',
+    usesFilePath: false,
+    databaseLabel: 'Database',
+    supportsSsl: true,
+  },
+  mysql: {
+    label: 'MySQL',
+    port: 3306,
+    user: 'root',
+    usesFilePath: false,
+    databaseLabel: 'Database',
+    supportsSsl: true,
+  },
+  oracle: {
+    label: 'Oracle',
+    port: 1521,
+    user: 'system',
+    usesFilePath: false,
+    databaseLabel: 'Service name',
+    supportsSsl: false,
+  },
   mongodb: { label: 'MongoDB', usesFilePath: false, usesUri: true, databaseLabel: 'Database', supportsSsl: false },
-  sqlite: { label: 'SQLite', usesFilePath: true, databaseLabel: 'Database file path (on the server)', supportsSsl: false },
-  duckdb: { label: 'DuckDB', usesFilePath: true, databaseLabel: 'Database file path (on the server)', supportsSsl: false },
+  sqlite: {
+    label: 'SQLite',
+    usesFilePath: true,
+    databaseLabel: 'Database file path (on the server)',
+    supportsSsl: false,
+  },
+  duckdb: {
+    label: 'DuckDB',
+    usesFilePath: true,
+    databaseLabel: 'Database file path (on the server)',
+    supportsSsl: false,
+  },
 };
 
 export const DATABASE_ENGINES = Object.keys(ENGINE_PROFILES) as DatabaseEngine[];
@@ -59,9 +90,8 @@ export interface CreatedDatabaseConnection {
 }
 
 /**
- * Sends the details to the server and returns the connection it opened.
- * The server connects eagerly, so a wrong password or host fails here, while
- * the user is still looking at the form.
+ * Sends the details to the server and returns the connection it opened; the
+ * server connects eagerly, so a wrong password or host fails here.
  */
 export async function createRemoteDatabaseConnection(
   serverBaseUrl: string,
@@ -69,8 +99,7 @@ export async function createRemoteDatabaseConnection(
   name: string,
   form: DatabaseForm,
 ): Promise<CreatedDatabaseConnection> {
-  // Credentials are about to cross this link, so plaintext http to anything
-  // but localhost is refused - the same rule core applies to API keys.
+  // Credentials cross this link, so plaintext http to anything but localhost is refused.
   assertBaseUrl(serverBaseUrl, true);
 
   const profile = ENGINE_PROFILES[form.engine];
@@ -78,8 +107,7 @@ export async function createRemoteDatabaseConnection(
     name,
     engine: form.engine,
     database: form.database.trim(),
-    // Mongo is addressed by connection string but still takes credentials as
-    // their own fields, so user/password travel for both non-file engines.
+    // Mongo is addressed by connection string but still takes credentials as their own fields.
     ...(profile.usesUri ? { uri: form.uri.trim() } : {}),
     ...(profile.usesFilePath
       ? {}
@@ -104,8 +132,7 @@ export async function createRemoteDatabaseConnection(
       body: JSON.stringify(body),
     });
   } catch {
-    // A bare "Failed to fetch" is what the browser gives when nothing is
-    // listening; say what to do instead of passing that through.
+    // "Failed to fetch" is what the browser gives when nothing is listening; say what to do.
     throw new Error(
       `No AskSQL server is reachable at ${serverBaseUrl}. Start one in a terminal and leave it running: ` +
         `npx --package=@asksql/server asksql serve --provider <provider> --model <model-id> ` +
@@ -118,9 +145,10 @@ export async function createRemoteDatabaseConnection(
       'That AskSQL server does not accept database connections. Restart it with dynamic connections enabled, or add the database to its own configuration instead.',
     );
   }
-  const payload = (await res.json().catch(() => null)) as
-    | { connection?: { id: string; engine: string; database?: string }; error?: { userMessage?: string } }
-    | null;
+  const payload = (await res.json().catch(() => null)) as {
+    connection?: { id: string; engine: string; database?: string };
+    error?: { userMessage?: string };
+  } | null;
   if (!res.ok || !payload?.connection) {
     throw new Error(payload?.error?.userMessage ?? `The server rejected the connection (${res.status}).`);
   }
@@ -143,8 +171,7 @@ export async function testRemoteDatabaseConnection(
     method: 'DELETE',
     ...(headers ? { headers } : {}),
   }).catch(() => {
-    // The database answered, which is what was being tested; a failed cleanup
-    // leaves one idle connection on the server, not a wrong result here.
+    // The database answered, which is what was tested; a failed cleanup only leaks an idle connection.
   });
   return `Connected to ${created.engine}${created.database ? ` · ${created.database}` : ''}.`;
 }

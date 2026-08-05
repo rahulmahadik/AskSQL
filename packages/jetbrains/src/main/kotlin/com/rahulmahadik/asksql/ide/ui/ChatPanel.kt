@@ -36,10 +36,7 @@ import javax.swing.JPanel
 import javax.swing.KeyStroke
 import javax.swing.SwingUtilities
 
-/**
- * Formats [ChatPanel]'s model-label text. A pure function (no Settings/Project access) so
- * [ChatPanelModelLabelTest] can cover it without a real Swing/Project fixture.
- */
+/** Formats [ChatPanel]'s model-label text. Pure (no Settings/Project access) so [ChatPanelModelLabelTest] can cover it. */
 internal fun formatModelLabel(provider: com.rahulmahadik.asksql.ide.llm.ProviderKind?, model: String): String =
     if (provider != null && model.isNotBlank()) "Model: ${provider.wireName} · $model" else "Model: not configured"
 
@@ -53,7 +50,7 @@ class ChatPanel(private val project: Project) : Disposable {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
-    /** The turn's single in-flight job (ask, then the follow-up execute), so Stop and Ask track the whole turn; see [beginBusy]. Volatile: handoff reassigns it off the EDT. */
+    /** The turn's single in-flight job (ask, then the follow-up execute); see [beginBusy]. Volatile: handoff reassigns it off the EDT. */
     @Volatile
     private var activeJob: Job? = null
 
@@ -81,7 +78,7 @@ class ChatPanel(private val project: Project) : Disposable {
     // EDT-confined: read via a snapshot before each background ask, appended back on the EDT.
     private var contextTurns = ArrayDeque<Prompts.ContextTurn>()
     private var mongoContextTurns = ArrayDeque<MongoPrompts.ContextTurn>()
-    /** Tracks the previously selected connection so switching databases clears stale conversation history instead of leaking it into a question about a different database. */
+    /** Tracks the previously selected connection so switching databases clears the stale conversation history. */
     private var lastSelectedConnectionId: String? = null
 
     /** A single button that toggles Ask/Cancel rather than two side-by-side buttons; see [beginBusy]/[endBusy]. */
@@ -91,14 +88,14 @@ class ChatPanel(private val project: Project) : Disposable {
         preferredSize = java.awt.Dimension(width, preferredSize.height)
         minimumSize = java.awt.Dimension(width, minimumSize.height)
     }
-    /** Target of the currently selected connection ("mysql · host:port/db"); the combo shows the name, this shows where it actually points. */
+    /** Target of the currently selected connection ("mysql · host:port/db"); the combo shows only the name. */
     private val connectionDetailLabel = javax.swing.JLabel().apply {
         foreground = com.intellij.ui.JBColor.GRAY
         font = com.intellij.util.ui.JBUI.Fonts.smallFont()
     }
-    /** Shows the currently configured provider/model so it's visible without opening Settings. Click to open Settings. */
+    /** Shows the currently configured provider/model. Click to open Settings. */
     private val modelLabel = javax.swing.JLabel().apply {
-        // One-time setup, so it stays small and muted rather than competing with the connection picker.
+        // Small and muted rather than competing with the connection picker.
         foreground = com.intellij.ui.JBColor.GRAY
         font = com.intellij.util.ui.JBUI.Fonts.smallFont()
         cursor = java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.HAND_CURSOR)
@@ -115,8 +112,7 @@ class ChatPanel(private val project: Project) : Disposable {
     private val chatCard = JPanel(BorderLayout())
 
     init {
-        // ConnectionDescriptor#toString isn't a friendly label (it's the data class default,
-        // host/user/id and all); this renderer must render the value itself instead of that toString().
+        // ConnectionDescriptor#toString is the data class default, so this renderer draws the name itself.
         connectionCombo.renderer = object : javax.swing.DefaultListCellRenderer() {
             override fun getListCellRendererComponent(
                 list: javax.swing.JList<*>?, value: Any?, index: Int, isSelected: Boolean, cellHasFocus: Boolean,
@@ -129,8 +125,7 @@ class ChatPanel(private val project: Project) : Disposable {
         buildChatCard()
         component.add(onboardingCard, BorderLayout.CENTER)
         refresh()
-        // Settings can also be opened the ordinary way (IDE Settings menu), not just through this
-        // tab's own onboarding buttons; without this, the combo/model label would go stale until rebuilt.
+        // Settings can also be opened from the IDE Settings menu, not just this tab's onboarding buttons.
         project.messageBus.connect(this).subscribe(AskSqlSettingsListener.TOPIC, AskSqlSettingsListener { refresh() })
     }
 
@@ -152,8 +147,7 @@ class ChatPanel(private val project: Project) : Disposable {
                 hasProvider = hasProvider,
                 onAddConnection = { com.rahulmahadik.asksql.ide.actions.AddConnectionAction.showWizard(project) { refresh() } },
                 onTrySampleData = { com.rahulmahadik.asksql.ide.actions.TrySampleDataAction.createSampleConnection(project) { refresh() } },
-                // showSettingsDialog is modal: it returns only after the dialog closes, so refresh()
-                // here really does run after any provider change.
+                // showSettingsDialog is modal, so refresh() runs after the dialog closes.
                 onUseLocalModel = { com.rahulmahadik.asksql.ide.settings.AskSqlConfigurableOpener.openWithLocalModelHint(project); refresh() },
                 onConfigureProvider = { com.rahulmahadik.asksql.ide.settings.AskSqlConfigurableOpener.open(project); refresh() },
             )
@@ -166,7 +160,7 @@ class ChatPanel(private val project: Project) : Disposable {
         component.repaint()
     }
 
-    /** Keeps [modelLabel] in sync with [AskSqlAppSettings]; called from [refresh], which already runs after every settings change. */
+    /** Keeps [modelLabel] in sync with [AskSqlAppSettings]; called from [refresh]. */
     private fun updateModelLabel() {
         val settings = AskSqlAppSettings.getInstance()
         val provider = settings.provider.takeIf { it.isNotBlank() }?.let {
@@ -175,7 +169,7 @@ class ChatPanel(private val project: Project) : Disposable {
         modelLabel.text = formatModelLabel(provider, settings.model)
     }
 
-    /** Keeps [connectionDetailLabel] in sync, and clears conversation history on a REAL switch to a different connection - stale context from one database must never leak into a question asked of another. */
+    /** Keeps [connectionDetailLabel] in sync, and clears conversation history on a REAL switch to a different connection. */
     private fun onConnectionSelectionChanged() {
         val selected = connectionCombo.selectedItem as? ConnectionDescriptor
         connectionDetailLabel.text = selected?.let { "${it.engine.wireName} · ${it.target()}" } ?: ""
@@ -188,10 +182,7 @@ class ChatPanel(private val project: Project) : Disposable {
         lastSelectedConnectionId = selectedId
     }
 
-    /**
-     * Picks up a question stashed by [com.rahulmahadik.asksql.ide.actions.AskAboutSelectionAction]; that
-     * action also calls this directly, since the tool window content is created once and then reused.
-     */
+    /** Picks up a question stashed by [com.rahulmahadik.asksql.ide.actions.AskAboutSelectionAction], which also calls this directly. */
     fun consumePendingQuestion() {
         PendingQuestion.consume(project)?.let { pending ->
             inputArea.text = pending
@@ -199,8 +190,8 @@ class ChatPanel(private val project: Project) : Disposable {
         }
     }
 
-    /** Disables the input box and flips Ask into Cancel; one button, not two. */
-    /** The input stays editable so the next question can be composed mid-answer; only submitting is blocked (see [submitQuestion]). */
+    /** Flips Ask into Cancel; one button, not two. */
+    /** The input stays editable mid-answer; only submitting is blocked (see [submitQuestion]). */
     private fun beginBusy(job: Job) {
         activeJob = job
         onEdt {
@@ -233,8 +224,7 @@ class ChatPanel(private val project: Project) : Disposable {
     }
 
     private fun buildChatCard() {
-        // The picker leads (per-question), Clear sits opposite it on the same row, and the connection
-        // target plus the one-time model choice sit underneath in small muted text.
+        // The picker leads with Clear opposite it, and the connection target plus model sit underneath.
         val toolbar = JPanel().apply { layout = BoxLayout(this, BoxLayout.Y_AXIS) }
 
         val clearButton = JButton(com.intellij.icons.AllIcons.Actions.GC).apply {
@@ -267,8 +257,7 @@ class ChatPanel(private val project: Project) : Disposable {
         inputPanel.border = com.intellij.util.ui.JBUI.Borders.empty(4, 8, 0, 8)
         inputPanel.add(JBScrollPane(inputArea), BorderLayout.CENTER)
         askButton.addActionListener { if (activeJob != null) activeJob?.cancel() else submitQuestion() }
-        // BorderLayout.CENTER, not a glue-pushed column: the button then matches the input's full
-        // height instead of sitting as a small control against a much taller editor.
+        // BorderLayout.CENTER, not a glue-pushed column, so the button matches the input's full height.
         val buttonColumn = JPanel(BorderLayout()).apply {
             border = com.intellij.util.ui.JBUI.Borders.emptyLeft(6)
             add(askButton, BorderLayout.CENTER)
@@ -295,8 +284,7 @@ class ChatPanel(private val project: Project) : Disposable {
 
         val job = scope.launch {
             val engineService = AskSqlEngineService.getInstance(project)
-            // Set synchronously, not inside the onEdt{} lambdas below (scheduled via invokeLater): the
-            // finally block needs to know, before it runs, whether "busy" was handed off to a follow-up job.
+            // Set synchronously, not inside the onEdt{} lambdas below: the finally block reads it before those run.
             var handedOffToExecute = false
             try {
                 val password = AskSqlSecrets.getDbPassword(descriptor)
@@ -313,17 +301,22 @@ class ChatPanel(private val project: Project) : Disposable {
                             context = sqlContext,
                             onEvent = { event -> onEngineEvent(turn, event) },
                             customInstructions = AskSqlAppSettings.getInstance().customInstructions,
+                            glossaryText = AskSqlAppSettings.getInstance().glossary,
                         )
                     } catch (e: Exception) {
-                        // Schema-understanding fallback: when no SQL could be built and the setting is on,
-                        // answer a conceptual question from the schema in prose instead of erroring.
+                        // Schema-understanding fallback: answer a conceptual question from the schema in prose.
                         val code = ErrorPresenter.present(e).code
                         if (
                             AskSqlAppSettings.getInstance().answerSchemaQuestions &&
                             (code == AskSqlErrorCode.LLM_CANNOT_ANSWER || code == AskSqlErrorCode.LLM_REFUSAL)
                         ) {
-                            val sa = engineService.pipeline.explainSchema(question, descriptor, password, llmClient)
-                            onEdt { turn.showSchemaAnswer(sa.answer, sa.unknownReferences, sa.isSchemaChange) }
+                            val sa = engineService.pipeline.explainSchema(question, descriptor, password, llmClient, sqlContext)
+                            onEdt { turn.showSchemaAnswer(sa.answer, sa.unknownReferences, sa.isSchemaChange, sa.proposedSql) }
+                            // A prose turn is still a turn: without it, "run that query" has nothing to refer to.
+                            sa.proposedSql?.let {
+                                contextTurns.addLast(Prompts.ContextTurn(question, it))
+                                while (contextTurns.size > 6) contextTurns.removeFirst()
+                            }
                             return@launch
                         }
                         throw e
@@ -364,8 +357,8 @@ class ChatPanel(private val project: Project) : Disposable {
                             AskSqlAppSettings.getInstance().answerSchemaQuestions &&
                             (code == AskSqlErrorCode.LLM_CANNOT_ANSWER || code == AskSqlErrorCode.LLM_REFUSAL)
                         ) {
-                            val sa = engineService.mongoPipeline.explainSchema(question, descriptor, password, llmClient)
-                            onEdt { turn.showSchemaAnswer(sa.answer, sa.unknownReferences, sa.isSchemaChange) }
+                            val sa = engineService.mongoPipeline.explainSchema(question, descriptor, password, llmClient, mongoContext)
+                            onEdt { turn.showSchemaAnswer(sa.answer, sa.unknownReferences, sa.isSchemaChange, sa.proposedSql, proposedIsPipeline = true) }
                             return@launch
                         }
                         throw e
@@ -412,10 +405,7 @@ class ChatPanel(private val project: Project) : Disposable {
         }
     }
 
-    /**
-     * Runs an approved (or auto-run) query. Always starts a NEW tracked job via [beginBusy],
-     * so Stop and Ask track the query's whole duration, not just SQL generation.
-     */
+    /** Runs an approved (or auto-run) query on a NEW tracked job via [beginBusy], so Stop covers the query itself. */
     private fun runApprovedSql(turn: TurnPanel, descriptor: ConnectionDescriptor, password: String?, sql: String, question: String) {
         val job = scope.launch {
             try {
@@ -431,7 +421,7 @@ class ChatPanel(private val project: Project) : Disposable {
                         onOpenInEditor = { it.openInEditor() },
                         onExplain = { explainSql(turn, descriptor, password, sql) },
                     )
-                    // A description by default: if the model's reply carried no inline explanation, fetch one now.
+                    // Fetch a description when the model's reply carried no inline explanation.
                     if (!turn.hasExplanation() && AskSqlAppSettings.getInstance().explainAutomatically) {
                         explainSql(turn, descriptor, password, sql)
                     }
@@ -441,8 +431,7 @@ class ChatPanel(private val project: Project) : Disposable {
             } catch (e: Exception) {
                 val presented = ErrorPresenter.present(e)
                 onEdt { turn.updateStatus("") }
-                // Only a query the DATABASE itself rejected is worth asking the model to repair; a
-                // GUARD_BLOCKED/CONFIG_ERROR/etc. has nothing a corrected SQL string would fix.
+                // Only a query the DATABASE itself rejected is worth asking the model to repair.
                 if (presented.code == AskSqlErrorCode.DB_QUERY_ERROR) {
                     trySuggestSqlFix(turn, descriptor, password, sql, question, presented)
                 } else {
@@ -453,6 +442,23 @@ class ChatPanel(private val project: Project) : Disposable {
             }
         }
         beginBusy(job)
+    }
+
+    /**
+     * The database's own words appended to the friendly line. DB_QUERY_ERROR only: a connection
+     * failure's detail carries the host and user.
+     */
+    private fun dbErrorText(presented: AskSqlException): String {
+        if (presented.code != AskSqlErrorCode.DB_QUERY_ERROR) return presented.userMessage
+        val detail = presented.detail
+            ?.lineSequence()?.firstOrNull()
+            // MariaDB/MySQL prefix messages with the pooled connection number, which means nothing here.
+            ?.replace(Regex("""^\s*\(conn=\d+\)\s*"""), "")
+            ?.trim()
+            ?.take(300)
+            ?.takeIf { it.isNotEmpty() }
+            ?: return presented.userMessage
+        return "${presented.userMessage} $detail"
     }
 
     private suspend fun trySuggestSqlFix(turn: TurnPanel, descriptor: ConnectionDescriptor, password: String?, failedSql: String, question: String, presented: AskSqlException) {
@@ -470,12 +476,12 @@ class ChatPanel(private val project: Project) : Disposable {
         onEdt {
             if (fix != null) {
                 turn.showErrorWithSuggestedSqlFix(
-                    errorMessage = presented.userMessage, suggestedSql = fix,
+                    errorMessage = dbErrorText(presented), suggestedSql = fix,
                     onRunFix = { runApprovedSql(turn, descriptor, password, fix, question) },
-                    onDismiss = { turn.showError(presented.userMessage) },
+                    onDismiss = { turn.showError(dbErrorText(presented)) },
                 )
             } else {
-                turn.showError(presented.userMessage)
+                turn.showError(dbErrorText(presented))
             }
         }
     }
@@ -531,12 +537,12 @@ class ChatPanel(private val project: Project) : Disposable {
         onEdt {
             if (fix != null) {
                 turn.showErrorWithSuggestedMongoFix(
-                    errorMessage = presented.userMessage, collection = fix.collection, pipelineJson = fix.pipelineJson,
+                    errorMessage = dbErrorText(presented), collection = fix.collection, pipelineJson = fix.pipelineJson,
                     onRunFix = { runApprovedMongoPipeline(turn, descriptor, password, fix.collection, fix.pipelineJson, question) },
-                    onDismiss = { turn.showError(presented.userMessage) },
+                    onDismiss = { turn.showError(dbErrorText(presented)) },
                 )
             } else {
-                turn.showError(presented.userMessage)
+                turn.showError(dbErrorText(presented))
             }
         }
     }
@@ -545,8 +551,7 @@ class ChatPanel(private val project: Project) : Disposable {
         onEdt {
             when (event) {
                 is EngineEvent.StageEvent -> turn.updateStatus(stageLabel(event.stage))
-                // Raw tokens are the model's unparsed reply (prose, fences, discarded text); the stage
-                // label and spinner already show progress, so showing then replacing them just flickers.
+                // Raw tokens are the model's unparsed reply; the stage label and spinner already show progress.
                 is EngineEvent.Token -> Unit
                 is EngineEvent.Warning -> turn.updateStatus(event.message)
                 EngineEvent.Done -> turn.updateStatus("")
@@ -570,30 +575,33 @@ class ChatPanel(private val project: Project) : Disposable {
         if (SwingUtilities.isEventDispatchThread()) block() else ApplicationManager.getApplication().invokeLater { block() }
     }
 
+    /** Shows the turn's spinner for the whole model round-trip. */
     private fun explainSql(turn: TurnPanel, descriptor: ConnectionDescriptor, password: String?, sql: String) {
         scope.launch {
+            onEdt { turn.updateStatus("Describing the query…") }
             try {
                 val engineService = AskSqlEngineService.getInstance(project)
                 val llmClient = engineService.currentLlmClient()
                 val explanation = engineService.pipeline.explain(sql, descriptor, password, llmClient)
-                onEdt { turn.appendExplanation(explanation) }
+                onEdt { turn.updateStatus(""); turn.appendExplanation(explanation) }
             } catch (e: Exception) {
                 val presented = ErrorPresenter.present(e)
-                onEdt { turn.showExplanationError(presented.userMessage) }
+                onEdt { turn.updateStatus(""); turn.showExplanationError(presented.userMessage) }
             }
         }
     }
 
     private fun explainMongoPipeline(turn: TurnPanel, descriptor: ConnectionDescriptor, password: String?, pipelineJson: String) {
         scope.launch {
+            onEdt { turn.updateStatus("Describing the pipeline…") }
             try {
                 val engineService = AskSqlEngineService.getInstance(project)
                 val llmClient = engineService.currentLlmClient()
                 val explanation = engineService.mongoPipeline.explain(pipelineJson, descriptor, password, llmClient)
-                onEdt { turn.appendExplanation(explanation) }
+                onEdt { turn.updateStatus(""); turn.appendExplanation(explanation) }
             } catch (e: Exception) {
                 val presented = ErrorPresenter.present(e)
-                onEdt { turn.showExplanationError(presented.userMessage) }
+                onEdt { turn.updateStatus(""); turn.showExplanationError(presented.userMessage) }
             }
         }
     }

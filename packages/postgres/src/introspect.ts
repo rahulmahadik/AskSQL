@@ -1,12 +1,8 @@
 /**
- * PostgreSQL schema introspection from pg_catalog. Covers every object
- * type AskSQL treats as first-class: tables, views, matviews,
- * columns + types + defaults + generated + comments, PKs, FKs, unique &
- * check constraints, indexes (partial/expression/method), triggers,
- * functions with volatility, enums, sequences, partitions, extensions.
- *
- * Permission-tolerant: objects the connecting role cannot read
- * are simply absent; nothing here throws on a locked-down schema.
+ * PostgreSQL schema introspection from pg_catalog: tables, views, matviews, columns, PKs,
+ * FKs, unique & check constraints, indexes, triggers, functions with volatility, enums,
+ * sequences, partitions, extensions. Objects the connecting role cannot read are absent
+ * rather than fatal, so nothing here throws on a locked-down schema.
  */
 
 import type {
@@ -40,8 +36,7 @@ type SampleRunner = {
 
 const SYSTEM_SCHEMAS = ['pg_catalog', 'information_schema', 'pg_toast'];
 
-// Value sampling (opt-in) guards: bound how many columns are probed per
-// introspect, how long a sampled value may be, and how long each scan may run.
+// Value sampling (opt-in) guards: columns probed per introspect, value length, per-scan runtime.
 const MAX_SAMPLED_COLUMNS = 300;
 const MAX_SAMPLE_VALUE_LEN = 64;
 const SAMPLE_STATEMENT_TIMEOUT_MS = 2000;
@@ -56,9 +51,8 @@ function quotePg(ident: string): string {
 }
 
 /**
- * Distinct values of one short text column, or undefined when it is not
- * categorical (too many distinct values, or any value is long). LIMIT bounds the
- * result; the caller bounds how many columns are probed.
+ * Distinct values of one short text column, or undefined when it is not categorical
+ * (too many distinct values, or any value is long). LIMIT bounds the result.
  */
 async function samplePgColumn(
   db: SampleRunner,
@@ -87,6 +81,11 @@ function str(v: unknown): string {
 }
 function strOrNull(v: unknown): string | null {
   return v === null || v === undefined ? null : String(v);
+}
+/** reltuples is -1 on a relation that was never analyzed (and on every plain view): unknown, not empty. */
+function rowEstimate(v: unknown): number | null {
+  const n = typeof v === 'number' ? v : Number(v);
+  return Number.isFinite(n) && n >= 0 ? n : null;
 }
 
 export async function introspectPostgres(
@@ -327,8 +326,7 @@ export async function introspectPostgres(
       comment: strOrNull(r['comment']),
       ...(enumVals ? { enumValues: enumVals } : {}),
     });
-    // Sample base tables only (r/p), never views/matviews/foreign tables - their
-    // scan runs the defining query (side effects, cost) - and never system schemas.
+    // Sample base tables only (r/p): scanning a view or matview runs its defining query.
     const relkind = str(r['relkind']);
     if (
       sampleColumnValues &&
@@ -347,9 +345,8 @@ export async function introspectPostgres(
     }
   }
 
-  // Opt-in: observe the distinct codes a short non-enum text column holds. Sampling
-  // scans user tables, so run it on a dedicated client with a SET LOCAL
-  // statement_timeout - an unindexed column can otherwise full-scan unbounded.
+  // Opt-in: observe the distinct codes a short non-enum text column holds, on a dedicated
+  // client with a SET LOCAL statement_timeout bounding each scan.
   if (sampleTargets.length > 0) {
     const client = db.connect ? await db.connect().catch(() => null) : null;
     const runner: SampleRunner = client ?? db;
@@ -439,10 +436,7 @@ export async function introspectPostgres(
       checks: checkByTable.get(key) ?? [],
       indexes: idxByTable.get(key) ?? [],
       comment: strOrNull(r['comment']),
-      rowEstimate:
-        typeof r['row_estimate'] === 'number'
-          ? Math.max(0, r['row_estimate'] as number)
-          : Number(r['row_estimate']) || null,
+      rowEstimate: rowEstimate(r['row_estimate']),
       isPartitioned: r['is_partitioned'] === true,
       partitionOf: strOrNull(r['partition_of']),
       definition: strOrNull(r['definition']),

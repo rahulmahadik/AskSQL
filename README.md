@@ -156,9 +156,11 @@ and an API key - see [Install only what your mode needs](#install-only-what-your
 **Schema Q&A** (on by default in the IDE extensions; `engine.explainSchema` in code):
 questions that aren't a data query - "how do these tables relate?", "how should I add a
 phone column?", "suggest an index" - get grounded prose answers, with any proposed
-INSERT/UPDATE/DELETE/DDL returned as text that is never executed. Ask something with
-nothing to do with data and AskSQL says so plainly rather than guessing; ask about
-databases in general, or about another engine, and it answers for the one you're on.
+INSERT/UPDATE/DELETE/DDL returned as text that is never executed. A bare imperative write
+("delete all cancelled orders") takes the same path, and is recognised before any model call,
+so it comes back as a proposal rather than a SELECT. Ask something with nothing to do with
+data and AskSQL says so plainly rather than guessing; ask about databases in general, or
+about another engine, and it answers for the one you're on.
 
 ## Packages
 
@@ -210,9 +212,6 @@ Pick the **one** model-provider SDK that matches your `provider` - they are opti
 | `nvidia` | `@ai-sdk/openai-compatible` |
 | `ollama`, `openai-compatible` (LM Studio, vLLM, OpenRouter, Azure AI Foundry, ...) | `@ai-sdk/openai-compatible` |
 
-You pay for exactly what you import: install `@asksql/core` plus only the adapter(s) you use.
-A MySQL-only app never pulls in DuckDB's WASM or `pg`.
-
 ## Databases
 
 Six engines are first-class. Each connector introspects the schema (tables, views, columns,
@@ -236,7 +235,7 @@ new DuckDbConnector({ id: 'files', name: 'Files', files: [{ table: 'sales', path
 ```
 
 MongoDB is non-SQL: pass `MongodbConnector` to `createMongoAskSql` from `@asksql/core/mongo` (not
-`createAskSql`): the same ask, guard, run flow, over aggregation pipelines.
+`createAskSql`). The flow is the same ask, guard, run, but over aggregation pipelines.
 
 Connectors open **read-only** sessions where the engine supports it, so the AST guard has a
 second line of defense at the database itself. Registering multiple connectors lets one engine
@@ -336,11 +335,13 @@ const engine = createAskSql({
   connectors: [connector],
   model,
   policy: {
-    maxRows: 1000,               // LIMIT injected when missing / lowered when higher
+    maxRows: 1000,               // LIMIT injected when missing / lowered when higher.
+                                 // Default 1000, clamped to at most 100000.
     denyFunctions: ['pg_sleep'], // extra names blocked on top of the built-in denylist
-    allowFileFunctions: false,   // read_csv/read_parquet - true only for browser DuckDB
+    allowFileFunctions: false,   // read_csv/read_parquet - true only for browser DuckDB.
+                                 // Credential and settings functions stay denied either way.
     maxSqlLength: 100000,        // reject pathologically long SQL
-    maxDepth: 400,               // parser recursion cap (fails closed)
+    maxDepth: 400,               // AST walk depth cap (fails closed)
   },
 });
 ```
@@ -378,10 +379,12 @@ const engine = createAskSql({ connectors: [/* ... */], model });
 await startAskSqlMcpServer(engine); // speaks MCP over stdin/stdout
 ```
 
-Four tools are advertised: `asksql_list_connections`, `asksql_schema`, `asksql_query`
-(question -> SQL, no execution), and `asksql_run` (execute an approved read-only SELECT).
+Five tools are advertised: `asksql_list_connections`, `asksql_schema`, `asksql_query`
+(question -> SQL, no execution), `asksql_explain_schema` (a question about the schema itself,
+answered in prose, nothing executed), and `asksql_run` (execute an approved read-only SELECT).
 `createAskSqlMcpTools(engine)` returns the raw tool defs for a custom transport; the SDK is an
-optional peer, needed only by `startAskSqlMcpServer`. See
+optional peer, needed only by `startAskSqlMcpServer`. It takes a `createAskSql` engine, so it
+covers the five SQL engines, not MongoDB. See
 [packages/mcp/README.md](packages/mcp/README.md).
 
 ## What else is in the box
@@ -392,10 +395,10 @@ Beyond ask -> approve -> run, the engine and server ship these (all optional):
   what a statement does, grounded in the schema. `useAskSql().planFor()` is separate: it runs
   `EXPLAIN` through the guard and returns the database's own plan.
 - **Streaming progress** - `config.onEvent` (and per-ask `onEvent`) emits stage + token events
-  across the pipeline (`catalog`, `prompt`, `llm`, `guard`, `execute`, ...) for live UIs.
+  across the pipeline (`catalog`, `prune`, `llm`, `extract`, `guard`, `execute`, `done`) for live UIs.
 - **Cancellation** - pass an `AbortSignal` to any ask/run/explain and Postgres/MySQL cancel the
-  running query at the database. Through `@asksql/server` the signal is not yet threaded, so
-  `useAskSql().cancel()` stops the browser request but not the query behind it.
+  running query at the database. `@asksql/server` threads the request's signal through, so
+  `useAskSql().cancel()` stops the query too, not just the browser request.
 - **Hallucination floor** - before a query runs, the engine deterministically checks every
   referenced table *and* column against your schema; if the model invents or mis-guesses a
   column (a common small-model slip), it is handed the real column list and re-asked, so the
@@ -403,22 +406,27 @@ Beyond ask -> approve -> run, the engine and server ship these (all optional):
   retried once on context overflow.
 - **Suggested fix on failure** - if a query still fails at the database, the server asks the
   model for a corrected query and returns it as a suggestion; the UI shows an **"Apply suggested
-  fix"** button so the user can review and re-run it (it never auto-runs). Toggle with the
-  server's `suggestFixOnError` option (default on; set false to disable the extra model call).
+  fix"** button so the user can review and re-run it (it never auto-runs). The driver's error text
+  is redacted first: row values are stripped out, the column, table and constraint names the model
+  needs are kept. Toggle with the server's `suggestFixOnError` option (default on; set false to
+  disable the extra model call).
 - **Follow-up context** - prior turns are threaded into the prompt so "now break that down by
   month" works; the UI sends the last few turns automatically.
 - **Query history + audit** - `config.history` records every attempt (status, duration) and
-  `@asksql/server` serves it at a paginated `GET /history`, backed by an in-memory store;
-  `config.audit` is a pluggable sink with the guard verdict.
+  `@asksql/server` serves it at a paginated `GET /history`, backed by an in-memory store; the
+  server's `audit` option is a pluggable sink with the guard verdict.
 - **Saved queries** - `useSavedQueries` / `SavedQueryStore` pin and reuse questions
   (localStorage-backed, SSR-safe).
 - **Schema pruning + token budget** - large catalogs are pruned to the most relevant tables
   under a token budget (`config.pruner`) before prompting.
 - **Privacy by default** - only the schema is ever sent. `allowDataInPrompt` (default off) is the
-  opt-in for sampled cell values; with it off they are stripped from the catalog before any prompt
-  is built, so a connector that samples cannot leak them.
-- **Server hardening** - `GET /health`, a request-body size cap (`maxBodyBytes`), and built-in
-  `cors` handling on the Express adapter.
+  opt-in for sampled cell values; with it off they are stripped at the single exit from the catalog,
+  so a connector that samples cannot leak them into any prompt - the first prompt, a repair,
+  `explain`, or `explainSchema`. The MongoDB engine takes the same option, gating the values its
+  document sampling infers. Declared enum labels come from the schema and are kept either way.
+- **Server hardening** - `GET /health`, a request-body size cap (`maxBodyBytes`), a JSON
+  content-type gate on every state-changing request, an optional loopback `Host` check
+  (`requireLoopbackHost`), and built-in `cors` handling on the Express adapter.
 
 ## Customizing the UI
 
@@ -455,12 +463,15 @@ function MyChat({ transport }) {
 The LLM is untrusted input. A deterministic guard - not the prompt - decides what runs:
 
 - Single read-only `SELECT` only (CTEs verified recursively); every write/DDL form, stacked
-  statement, data-modifying CTE, `SELECT INTO`, locking clause, `INTO OUTFILE`, and a
-  per-dialect dangerous-function denylist are **blocked**. Anything unparseable fails closed.
+  statement, data-modifying CTE, `SELECT INTO`, locking clause, `INTO OUTFILE`, backtick-quoted
+  identifiers outside MySQL, and a dangerous-function denylist are **blocked**. Anything
+  unparseable fails closed.
 - Runs client-side for UX **and** server-side for authority; where the engine supports it
   (Postgres, MySQL, SQLite, Oracle) the connector also opens a read-only session, so a bypass
-  still hits a read-only transaction. DuckDB has no read-only session, so the AST guard is its
-  only barrier there.
+  still hits a read-only transaction. DuckDB has no read-only session: in Node it opens a plain
+  database file with `access_mode=READ_ONLY` (verified after opening, and a missing file is not
+  created), but registering `files` needs `CREATE VIEW`, so that mode and the browser build are
+  read-write and the AST guard is the only barrier.
 - Row caps injected automatically; the generated SQL is always shown before it runs, and an
   optional `requireApproval` gate can hold every query behind a Run button; every query (and
   every block) is recorded.
@@ -482,7 +493,9 @@ read-only and is shown to you before it runs. It does **not** guarantee the quer
   board. But multi-table analytics - especially aggregating measures across several
   one-to-many tables at once - can trip a smaller model into a classic **join fan-out**
   (summing over a row-multiplied result and inflating the total), or a hallucinated column, even
-  though the SQL is valid and the guard passes.
+  though the SQL is valid and the guard passes. Both of those are caught before the query runs:
+  invented columns against the schema, and a fan-out against your foreign keys, each sending the
+  query back to be rewritten.
 
 **Rule of thumb, from real testing.** The more tables a question must join, and the larger or
 more inconsistently-named your schema, the more model capability you need:
@@ -496,15 +509,19 @@ more inconsistently-named your schema, the more model capability you need:
 In our testing the **7B** (for example `qwen2.5-coder:7b`) is the sweet spot for accuracy
 against speed, and it is easy to run locally.
 
+The table above is field experience on private schemas that are not in this repository, so unlike
+the benchmark below you cannot re-run it. Treat it as guidance; the numbers you can check yourself
+are in the next section.
+
 ### Measured, and reproducible
 
 Load the fixtures in `packages/postgres/test/fixture.sql` and `packages/mysql/test/fixture.sql`,
 build the workspace (`pnpm install && pnpm build`), then run
 `node tools/benchmark/run.mjs qwen2.5-coder:1.5b qwen2.5-coder:7b qwen2.5-coder:14b`. It asks seven
-data questions, executes the SQL that comes back, and scores a question right only when the rows
-the database returned contain the expected value **and** number the same as a right answer would -
-so a `SELECT *` that happens to include the word is still wrong. Plus seven questions that test
-whether AskSQL stays in its lane.
+data questions, executes the SQL that comes back, and scores a question right only when the
+returned rows contain the expected value **and** the row count matches what a correct answer
+would produce, so a `SELECT *` that happens to include the word is still wrong. Seven more
+questions test whether AskSQL stays in its lane.
 
 | Model | SQL correct | Blocked by the guard | Scope correct | DELETE request | Median ask | Median schema answer |
 |---|---|---|---|---|---|---|
@@ -548,9 +565,9 @@ standard Web Worker / OPFS / File APIs.
 
 ## FAQ
 
-Common questions - data privacy, supported databases, free and local LLM options, accuracy vs
-model choice, big schemas, multi-database, safety, and production-readiness - are answered in
-[docs/FAQ.md](docs/FAQ.md).
+Common questions are answered in [docs/FAQ.md](docs/FAQ.md): data privacy, supported databases,
+free and local LLM options, accuracy vs model choice, big schemas, multi-database, safety, and
+production-readiness.
 
 ## Development
 

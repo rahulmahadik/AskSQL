@@ -125,20 +125,27 @@ describe('mongo-shell syntax (what small models actually emit)', () => {
 
 describe('relaxed parsing is shape-only: it must not widen what runs', () => {
   // A seeded generator, so a failure names a reproducible pipeline rather than a random one.
-  const rand = (seed: number) => () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
+  const rand = (seed: number) => () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
 
   it('leaves valid strict JSON byte-identical over 200 generated pipelines', () => {
     const r = rand(7);
     const alphabet = ['a', 'Z', '0', ' ', ':', ',', '{', '}', '[', ']', '"', "'", '\\', '\n', 'é', '$', '.'];
-    const str = () => Array.from({ length: Math.floor(r() * 10) }, () => alphabet[Math.floor(r() * alphabet.length)]).join('');
+    const str = () =>
+      Array.from({ length: Math.floor(r() * 10) }, () => alphabet[Math.floor(r() * alphabet.length)]).join('');
     const val = (d = 0): unknown => {
       switch (Math.floor(r() * (d > 2 ? 4 : 6))) {
-        case 0: return str();
-        case 1: return Math.floor(r() * 1000) - 500;
-        case 2: return r() < 0.5;
-        case 3: return null;
-        case 4: return [val(d + 1), val(d + 1)];
-        default: return { [`f${Math.floor(r() * 4)}`]: val(d + 1) };
+        case 0:
+          return str();
+        case 1:
+          return Math.floor(r() * 1000) - 500;
+        case 2:
+          return r() < 0.5;
+        case 3:
+          return null;
+        case 4:
+          return [val(d + 1), val(d + 1)];
+        default:
+          return { [`f${Math.floor(r() * 4)}`]: val(d + 1) };
       }
     };
     for (let i = 0; i < 200; i++) {
@@ -150,15 +157,22 @@ describe('relaxed parsing is shape-only: it must not widen what runs', () => {
   it('round-trips the same 200 pipelines through the RELAXER, not just JSON.parse', () => {
     const r = rand(11);
     const alphabet = ['a', 'Z', '0', ' ', ':', ',', '{', '}', '[', ']', 'é', '$', '.'];
-    const str = () => Array.from({ length: Math.floor(r() * 10) }, () => alphabet[Math.floor(r() * alphabet.length)]).join('');
+    const str = () =>
+      Array.from({ length: Math.floor(r() * 10) }, () => alphabet[Math.floor(r() * alphabet.length)]).join('');
     const val = (d = 0): unknown => {
       switch (Math.floor(r() * (d > 2 ? 4 : 6))) {
-        case 0: return str();
-        case 1: return Math.floor(r() * 1000) - 500;
-        case 2: return r() < 0.5;
-        case 3: return null;
-        case 4: return [val(d + 1), val(d + 1)];
-        default: return { [`f${Math.floor(r() * 4)}`]: val(d + 1) };
+        case 0:
+          return str();
+        case 1:
+          return Math.floor(r() * 1000) - 500;
+        case 2:
+          return r() < 0.5;
+        case 3:
+          return null;
+        case 4:
+          return [val(d + 1), val(d + 1)];
+        default:
+          return { [`f${Math.floor(r() * 4)}`]: val(d + 1) };
       }
     };
     for (let i = 0; i < 200; i++) {

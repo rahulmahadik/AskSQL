@@ -2,13 +2,13 @@
 const PROVIDER_ORIGIN_STRIP_RULE_ID = 1;
 
 /**
- * Best-effort: a managed/locked-down profile can restrict this API. Failing to
- * install the rule only costs the pre-existing behavior (the provider sees the
- * real Origin), so it must never break connecting.
+ * Best-effort: a managed profile can restrict this API, so a failed install
+ * leaves the provider seeing the real Origin rather than breaking connecting.
  */
 export async function syncProviderOriginStripRule(origin: string | undefined): Promise<void> {
   try {
-    const addRules = origin
+    const target = origin ? new URL(origin) : undefined;
+    const addRules = target
       ? [
           {
             id: PROVIDER_ORIGIN_STRIP_RULE_ID,
@@ -18,7 +18,8 @@ export async function syncProviderOriginStripRule(origin: string | undefined): P
               requestHeaders: [{ header: 'origin', operation: 'remove' as const }],
             },
             condition: {
-              requestDomains: [new URL(origin).hostname],
+              // Pins scheme, host and port, not just the hostname every local service shares.
+              urlFilter: `|${target.protocol}//${target.host}/`,
               resourceTypes: ['xmlhttprequest' as const],
             },
           },

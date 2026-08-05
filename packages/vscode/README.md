@@ -34,7 +34,9 @@ how many appointments were booked last week?
   builds on the last, scoped to the database you are asking, so a follow-up never drags in another
   connection's tables.
 - **Results you can use.** An inline table, plus one click to **Copy** (with headers), open the full
-  result set or the SQL in an editor, or ask the database for its **query plan**.
+  result set or the SQL in an editor, or ask the database for its **query plan**. A **Chart** toggle
+  appears when the result suits one - at most 50 rows, at least 2 columns, a numeric column - and a
+  date label draws a line, anything else a bar. The table is always what you see first.
 - **Schema explorer.** Browse tables, views, columns, and keys in the sidebar - the same schema the
   model is given. "What tables are here?" and "describe the customers table" are answered instantly
   from the schema, with no query and no model call.
@@ -72,8 +74,8 @@ Add Connection flow. Connection strings are kept in your OS keychain, never in s
 
 For the model: if you already have a chat model in VS Code (for example GitHub Copilot's), it is
 offered automatically and needs no key. Otherwise run **AskSQL: Select AI Provider** - Ollama (local,
-no key), or OpenAI / Anthropic / Google / Groq / NVIDIA / any OpenAI-compatible endpoint with your
-own key.
+no key), or OpenAI / Anthropic / Google / Groq / NVIDIA / Azure OpenAI / any OpenAI-compatible
+endpoint with your own key.
 
 **Fastest free setup:** grab a Groq API key at [console.groq.com/keys](https://console.groq.com/keys)
 (free tier, no card), then run **AskSQL: Select AI Provider**, pick **Groq**, paste the key, and choose
@@ -104,6 +106,14 @@ Every command and setting is listed in the **Feature Contributions** tab of this
 Add / Test / Remove Database Connection, Set Database Password, **Select AI Provider**, Test AI
 Provider, Set AI Provider API Key, **Choose Answering Model**, Ask About Selection, Refresh Schema,
 Clear Chat, and Collect Diagnostics.
+
+Two settings are worth knowing about up front:
+
+- `asksql.customInstructions` - house rules the model cannot read off the schema ("amounts are in
+  cents", "prefer the `v_` views"). Appended to the built-in prompt, never replacing it, so the
+  read-only rules always still apply.
+- `asksql.maxSchemaTokens` - how much of a large schema reaches the model. Raise it when a database
+  has too many tables to fit, lower it to cut cost and latency.
 
 ## Open source
 

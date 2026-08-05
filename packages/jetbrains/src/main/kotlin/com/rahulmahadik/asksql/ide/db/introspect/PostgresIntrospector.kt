@@ -30,9 +30,7 @@ object PostgresIntrospector : Introspector {
                 columns = t.columns.map { c ->
                     c.copy(
                         comment = columnComments["${t.schema}.${t.name}.${c.name}"],
-                        // pgjdbc reports a user-defined enum column's TYPE_NAME as the enum type's
-                        // own (bare) name, e.g. "mood": the same lookup key the reference
-                        // `@asksql/postgres` connector uses.
+                        // pgjdbc reports an enum column's TYPE_NAME as the enum type's bare name, e.g. "mood".
                         enumValues = enumValuesByTypeName[c.dbType] ?: emptyList(),
                     )
                 },
@@ -114,7 +112,7 @@ object PostgresIntrospector : Introspector {
         return map
     }
 
-    /** Schema-qualified [EnumTypeInfo] list, plus a bare-type-name lookup for tagging column [ColumnInfo.enumValues]; matches the reference connector's `enumValuesByType` map exactly. */
+    /** Schema-qualified [EnumTypeInfo] list, plus a bare-type-name lookup for tagging column [ColumnInfo.enumValues]. */
     private fun enumTypes(connection: Connection): Pair<List<EnumTypeInfo>, Map<String, List<String>>> {
         val byType = linkedMapOf<Pair<String?, String>, MutableList<String>>()
         connection.createStatement().use { st ->
@@ -141,10 +139,7 @@ object PostgresIntrospector : Introspector {
 
     private data class PartitionMeta(val isPartitioned: Boolean, val partitionOf: String?)
 
-    /**
-     * Partition flags need their own `pg_inherits` query; `pg_inherits` also covers classic INHERITS,
-     * so the parent's `relkind` ('p' vs 'r') is the only way to tell partitioning from inheritance.
-     */
+    /** `pg_inherits` also covers classic INHERITS, so the parent's `relkind` ('p' vs 'r') tells partitioning from inheritance. */
     private fun partitionMeta(connection: Connection): Map<String, PartitionMeta> {
         val map = mutableMapOf<String, PartitionMeta>()
         connection.createStatement().use { st ->
@@ -168,7 +163,7 @@ object PostgresIntrospector : Introspector {
         return map
     }
 
-    /** Functions/procedures with volatility; powers the prompt's "CALLABLE READ-ONLY FUNCTIONS" section (only IMMUTABLE/STABLE functions are ever offered to the model, see [com.rahulmahadik.asksql.ide.engine.CatalogPruner.formatCatalogForPrompt]). */
+    /** Functions/procedures with volatility; powers the prompt's "CALLABLE READ-ONLY FUNCTIONS" section. */
     private fun routines(connection: Connection): List<RoutineInfo> {
         val list = mutableListOf<RoutineInfo>()
         connection.createStatement().use { st ->

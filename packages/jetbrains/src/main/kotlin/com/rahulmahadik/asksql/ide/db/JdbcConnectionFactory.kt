@@ -18,10 +18,7 @@ object JdbcConnectionFactory {
 
     private val LOG = Logger.getInstance(JdbcConnectionFactory::class.java)
 
-    /**
-     * `host`/`database` are interpolated raw into the JDBC URL, so these characters could inject connection
-     * parameters (e.g. MySQL's `autoDeserialize`); a crafted value can arrive via a committed `.idea/asksql.xml`.
-     */
+    /** `host`/`database` are interpolated raw into the JDBC URL, where these characters can inject driver parameters (e.g. MySQL's `autoDeserialize`). */
     private val UNSAFE_URL_CHARS = Regex("""[/?#&@\s]""")
 
     private fun requireSafeUrlSegment(value: String?, fieldName: String): String? {
@@ -34,10 +31,7 @@ object JdbcConnectionFactory {
         return value
     }
 
-    /**
-     * File paths legitimately contain `/`, so [UNSAFE_URL_CHARS] doesn't apply; `?`/`#`/`;` still carry
-     * JDBC-URL meaning and could smuggle driver options (e.g. `?mode=rwc`) past [ReadOnlySession].
-     */
+    /** File paths legitimately contain `/`, so [UNSAFE_URL_CHARS] doesn't apply; `?`/`#`/`;` still carry JDBC-URL meaning and can smuggle driver options past [ReadOnlySession]. */
     private val UNSAFE_FILE_PATH_CHARS = Regex("""[?#;]""")
 
     private fun requireSafeFilePath(value: String, fieldName: String): String {
@@ -57,7 +51,7 @@ object JdbcConnectionFactory {
         return port
     }
 
-    /** A missing file opened read-only fails with a cryptic driver IO error ("Could not reach the database"), so these connections never create a new file (that's what Try Sample Data / Load File into DuckDB are for). */
+    /** These connections never create a file; a missing one opened read-only fails with a cryptic driver IO error. */
     private fun requireExistingFile(path: String, engineName: String): String {
         if (path != ":memory:" && !java.io.File(path).isFile) {
             throw AskSqlException(
@@ -76,9 +70,7 @@ object JdbcConnectionFactory {
     ): Connection =
         withContext(Dispatchers.IO) {
             val (url, props) = jdbcUrlAndProps(descriptor, password)
-            // Checkpoint logging: a genuinely blocking socket call isn't interruptible by a
-            // coroutine withTimeout, so these timestamps show which phase (driver resolution,
-            // driver.connect, or ReadOnlySession.enforce) is actually stuck if this ever hangs.
+            // Checkpoint logging: the timestamps show which phase (driver resolution, driver.connect, ReadOnlySession.enforce) a hang is stuck in.
             LOG.info("AskSQL: opening ${descriptor.engine} connection to ${descriptor.host ?: descriptor.filePath ?: "?"}:${descriptor.port ?: "-"} (id=${descriptor.id})")
             val startNanos = System.nanoTime()
             val driver = when (descriptor.engine) {
@@ -110,17 +102,13 @@ object JdbcConnectionFactory {
                 val host = requireSafeUrlSegment(descriptor.host, "host")
                 val database = requireSafeUrlSegment(descriptor.database, "database")
                 val port = requireValidPort(descriptor.port)
-                // sslmode: TRUST maps to pgjdbc's own default (prefer: encrypt opportunistically,
-                // no certificate verification), made explicit rather than left implicit. VERIFY
-                // additionally validates the server certificate against the platform truststore.
+                // TRUST maps to pgjdbc's own "prefer" default (opportunistic encryption, no certificate check); VERIFY also validates against the platform truststore.
                 val sslmode = when (descriptor.sslMode) {
                     SslMode.DISABLE -> "disable"
                     SslMode.VERIFY -> "verify-full"
                     SslMode.TRUST -> "prefer"
                 }
-                // connectTimeout only bounds the initial TCP handshake, not what happens after (auth,
-                // TLS negotiation); without socketTimeout too, a hung server blocks the driver on an
-                // uninterruptible socket read that a coroutine withTimeout can't rescue. Both are in seconds.
+                // connectTimeout bounds only the TCP handshake, so socketTimeout covers a server that goes silent after it; both are in seconds.
                 val url = "jdbc:postgresql://$host:${port ?: 5432}/$database" +
                     "?readOnlyMode=always&connectTimeout=10&socketTimeout=15&sslmode=$sslmode"
                 descriptor.user?.let { props.setProperty("user", it) }
@@ -132,19 +120,14 @@ object JdbcConnectionFactory {
                 val host = requireSafeUrlSegment(descriptor.host, "host")
                 val database = requireSafeUrlSegment(descriptor.database, "database")
                 val port = requireValidPort(descriptor.port)
-                // sslMode=trust: encrypt opportunistically without certificate verification,
-                // matching pgjdbc's own "prefer" default above. MySQL 8+'s default
-                // caching_sha2_password auth plugin needs TLS (or RSA key retrieval) to exchange
-                // the password at all, so TRUST (not DISABLE) is this engine's default.
+                // sslMode=trust encrypts opportunistically without certificate verification, matching pgjdbc's "prefer" above.
+                // MySQL 8+'s default caching_sha2_password auth plugin needs TLS (or RSA key retrieval) to exchange the password at all.
                 val mariadbSslMode = when (descriptor.sslMode) {
                     SslMode.DISABLE -> "disable"
                     SslMode.VERIFY -> "verify-full"
                     SslMode.TRUST -> "trust"
                 }
-                // connectTimeout/socketTimeout are in milliseconds for mariadb-java-client (its own
-                // default is 30s, 3x pgjdbc's), lowered to 10s/15s for consistency across engines.
-                // Both are needed for the same reason as the Postgres branch above: a server that
-                // hangs mid-handshake would otherwise block the driver with no timeout at all.
+                // connectTimeout/socketTimeout are in milliseconds for mariadb-java-client, lowered from its 30s default to 10s/15s.
                 val url = "jdbc:mariadb://$host:${port ?: 3306}/$database" +
                     "?permitMysqlScheme=true&useReadAheadInput=false&sslMode=$mariadbSslMode&connectTimeout=10000&socketTimeout=15000"
                 descriptor.user?.let { props.setProperty("user", it) }
@@ -176,9 +159,7 @@ object JdbcConnectionFactory {
                 val host = requireSafeUrlSegment(descriptor.host, "host")
                 val database = requireSafeUrlSegment(descriptor.database, "database")
                 val port = requireValidPort(descriptor.port)
-                // descriptor.database is a service name, not a SID: modern Oracle (9i+) recommends
-                // service names, and every pluggable database in a multitenant (12c+) instance is
-                // only reachable by one, hence "/" syntax, not the legacy ":SID" form.
+                // descriptor.database is a service name, not a SID, hence the "/" form: a multitenant (12c+) pluggable database is reachable only by service name.
                 val url = "jdbc:oracle:thin:@$host:${port ?: 1521}/$database"
                 descriptor.user?.let { props.setProperty("user", it) }
                 password?.let { props.setProperty("password", it) }

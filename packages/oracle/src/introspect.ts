@@ -1,15 +1,8 @@
 /**
- * Oracle schema introspection from the ALL_* data dictionary views, scoped to a
- * single owner (the session's CURRENT_SCHEMA): tables, views, columns, primary
- * and foreign keys, unique constraints, indexes, comments, row estimates,
- * sequences, triggers, and routines (standalone functions/procedures).
- *
- * Permission-tolerant: each query is wrapped so a view the connecting user
- * cannot read simply yields nothing and adds a warning; nothing here throws
- * on a locked-down schema.
- *
- * Oracle has no enum type; enums are left empty. Value sampling is not
- * implemented for Oracle in this version — sampledValues is left unset.
+ * Oracle schema introspection from the ALL_* data dictionary views, scoped to a single owner
+ * (the session's CURRENT_SCHEMA): tables, views, columns, keys, unique constraints, indexes,
+ * comments, row estimates, sequences, triggers, and standalone functions/procedures. A view the
+ * user cannot read yields a warning, not a throw; enums and sampled values are always empty.
  */
 
 import type {
@@ -64,8 +57,7 @@ export async function introspectOracle(
     owner = str(rows[0]?.['SCHEMA']);
   }
   if (!owner) {
-    // Fall back to the session user; without a scope every ALL_* query would
-    // span the whole instance.
+    // Fall back to the session user; without a scope every ALL_* query spans the whole instance.
     const rows = await q('session user', `SELECT USER AS SCHEMA FROM DUAL`, {});
     owner = str(rows[0]?.['SCHEMA']);
   }
@@ -101,8 +93,7 @@ export async function introspectOracle(
   );
 
   // ---- foreign keys ----
-  // Resolve each referenced column by matching key position against the
-  // referenced (PK/unique) constraint's columns.
+  // Each referenced column resolves by matching key position against the referenced constraint.
   const fkRows = await q(
     'foreign keys',
     `SELECT c.constraint_name AS fk_name, cc.table_name, cc.column_name, cc.position,

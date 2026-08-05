@@ -9,16 +9,20 @@ name: CI
 # exactly those paths, so a required `check` always resolves - real npm work runs
 # via ci.yml when npm code changes, and this no-op stands in otherwise. Keep the
 # workflow name and the job id identical to ci.yml so both produce the same check.
+#
+# These paths are the exact complement of ci.yml's paths-ignore; ci.yml enforces that.
 on:
   push:
     branches: [main, develop]
     paths:
       - 'packages/vscode/**'
       - 'packages/jetbrains/**'
+      - 'packages/browser-extension/**'
   pull_request:
     paths:
       - 'packages/vscode/**'
       - 'packages/jetbrains/**'
+      - 'packages/browser-extension/**'
 
 jobs:
   check:

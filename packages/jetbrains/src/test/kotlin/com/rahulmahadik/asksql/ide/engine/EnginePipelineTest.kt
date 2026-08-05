@@ -257,6 +257,46 @@ class EnginePipelineTest {
         dbFile.delete()
     }
 
+    /** A rephrase is not a failed attempt: core's engine.ts rewinds the counter, so both repair attempts stay available for the SQL itself. */
+    @Test
+    fun `the catalog rephrase leaves both repair attempts available`() = runTest {
+        val dbFile = seedDb()
+        val (pipeline, _) = pipeline()
+        val llm = SequentialResponseLlmClient(
+            listOf(
+                "IMPOSSIBLE: SHOW TABLES is not a SELECT.",
+                "```sql\nDELETE FROM customers\n```",
+                "```sql\nDELETE FROM customers\n```",
+                "```sql\nSELECT name FROM customers\n```",
+            ),
+        )
+
+        val result = pipeline.ask(question = "how many tables are there", descriptor = descriptor(dbFile), password = null, llmClient = llm)
+        assertEquals(4, llm.callCount)
+        assertTrue(result.sql.contains("customers", ignoreCase = true))
+        dbFile.delete()
+    }
+
+    /** Same budget rule for the misspelling nudge. */
+    @Test
+    fun `the fuzzy table rephrase leaves both repair attempts available`() = runTest {
+        val dbFile = seedDb()
+        val (pipeline, _) = pipeline()
+        val llm = SequentialResponseLlmClient(
+            listOf(
+                "IMPOSSIBLE: There is no \"custamers\" table in the schema provided.",
+                "```sql\nDELETE FROM customers\n```",
+                "```sql\nDELETE FROM customers\n```",
+                "```sql\nSELECT name FROM customers\n```",
+            ),
+        )
+
+        val result = pipeline.ask(question = "show custamers", descriptor = descriptor(dbFile), password = null, llmClient = llm)
+        assertEquals(4, llm.callCount)
+        assertTrue(result.sql.contains("customers", ignoreCase = true))
+        dbFile.delete()
+    }
+
     /** A genuinely nonexistent table (nothing close in the schema) must still fail cleanly - the fuzzy-repair nudge must not fire when there's no plausible correction. */
     @Test
     fun `ask still reports cannot-answer for a table that has no close match in the schema`() = runTest {

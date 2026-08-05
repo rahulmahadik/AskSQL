@@ -30,7 +30,7 @@ class AskSqlEngineService(private val project: Project, private val scope: Corou
         fun getInstance(project: Project): AskSqlEngineService = project.service()
     }
 
-    /** A project-lifecycle-bound scope for one-shot background work (onboarding actions, file uploads) that must not outlive the project, unlike `GlobalScope`. */
+    /** A project-lifecycle-bound scope for one-shot background work (onboarding actions, file uploads). */
     val projectScope: CoroutineScope get() = scope
 
     private val pipelineInstance: EnginePipeline by lazy {
@@ -41,12 +41,15 @@ class AskSqlEngineService(private val project: Project, private val scope: Corou
         MongoEnginePipeline(clientRegistry = project.service<MongoClientRegistry>(), policy = currentMongoGuardPolicy())
     }
 
-    // `pipeline` is a long-lived singleton, but `policy` must reflect current settings on every
-    // access, not just what `by lazy` captured on first build.
+    // The pipeline is a long-lived singleton; its policy and token budget are re-read from settings on every access.
     val pipeline: EnginePipeline get() = pipelineInstance.also { it.policy = currentGuardPolicy(); it.maxSchemaTokens = currentSchemaTokenBudget() }
-    val mongoPipeline: MongoEnginePipeline get() = mongoPipelineInstance.also { it.policy = currentMongoGuardPolicy(); it.maxSchemaTokens = currentSchemaTokenBudget() }
+    val mongoPipeline: MongoEnginePipeline get() = mongoPipelineInstance.also {
+        it.policy = currentMongoGuardPolicy()
+        it.maxSchemaTokens = currentSchemaTokenBudget()
+        it.allowDataInPrompt = AskSqlAppSettings.getInstance().allowDataInPrompt
+    }
 
-    /** Clamped to a sane floor/ceiling so a corrupt setting can't send an empty or enormous schema. */
+    /** Clamps the configured schema-token budget to a sane floor and ceiling. */
     fun currentSchemaTokenBudget(): Int = AskSqlAppSettings.getInstance().maxSchemaTokens.coerceIn(1000, 60_000)
 
     fun currentGuardPolicy(): GuardPolicy {

@@ -6,10 +6,7 @@ package com.rahulmahadik.asksql.ide.model
  */
 enum class Stage { CATALOG, PRUNE, LLM, REPAIR, EXTRACT, GUARD, EXECUTE, DONE }
 
-/**
- * Engine lifecycle events streamed to the UI so the EDT can render each one as it arrives.
- * A sealed interface keeps `when` on [EngineEvent] exhaustive: a new event kind is a compile error, not a silent no-op.
- */
+/** Engine lifecycle events streamed to the UI so the EDT can render each one as it arrives. */
 sealed interface EngineEvent {
     data class StageEvent(val stage: Stage, val detail: String? = null) : EngineEvent
     data class Token(val text: String) : EngineEvent

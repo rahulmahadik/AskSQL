@@ -46,12 +46,30 @@ describe('guard fails closed on parser gaps, recoverably', () => {
 describe('Oracle FETCH FIRST (unparseable but valid - the model is told not to write it, yet sometimes does)', () => {
   const oracle = (sql: string, maxRows = 200) => guardSql({ sql, dialect: ORACLE_DIALECT, policy: { maxRows } });
 
-  it('accepts a trailing FETCH FIRST and re-applies it as a parseable ROWNUM wrap', () => {
+  it('accepts a trailing FETCH FIRST and keeps the clause in place', () => {
     const v = oracle('SELECT region FROM sales ORDER BY amount DESC FETCH FIRST 1 ROWS ONLY');
     expect(v.allowed).toBe(true);
-    expect(v.sql).toMatch(/^SELECT \* FROM \(/);
-    expect(v.sql).toContain('ROWNUM <= 1');
-    expect(v.sql).not.toMatch(/FETCH\s+FIRST/i);
+    // An inline-view wrap would make duplicate output column names an ORA-00918.
+    expect(v.sql).not.toMatch(/^SELECT \* FROM \(/);
+    expect(v.sql).toMatch(/FETCH\s+FIRST\s+1\s+ROWS\s+ONLY/i);
+  });
+
+  it('a duplicate output alias survives, as it does at top level in Oracle', () => {
+    const v = oracle('SELECT region AS r, area AS r FROM sales FETCH FIRST 5 ROWS ONLY');
+    expect(v.allowed).toBe(true);
+    expect(v.sql).not.toMatch(/^SELECT \* FROM \(/);
+  });
+
+  it('accepts every legal spelling of the row-limiting clause', () => {
+    for (const tail of [
+      'FETCH NEXT 5 ROWS ONLY',
+      'OFFSET 10 ROWS FETCH NEXT 5 ROWS ONLY',
+      'FETCH FIRST ROW ONLY',
+      'FETCH FIRST 10 PERCENT ROWS ONLY',
+      'FETCH FIRST 5 ROWS WITH TIES',
+    ]) {
+      expect(oracle(`SELECT region FROM sales ${tail}`).allowed, tail).toBe(true);
+    }
   });
 
   it('accepts the singular ROW form too', () => {
@@ -61,7 +79,7 @@ describe('Oracle FETCH FIRST (unparseable but valid - the model is told not to w
   it('caps an over-limit FETCH FIRST at maxRows and reports the lowering', () => {
     const v = oracle('SELECT region FROM sales FETCH FIRST 500 ROWS ONLY', 200);
     expect(v.allowed).toBe(true);
-    expect(v.sql).toContain('ROWNUM <= 200');
+    expect(v.sql).toMatch(/FETCH\s+FIRST\s+200\s+ROWS\s+ONLY/i);
     expect(v.loweredLimit).toBe(true);
   });
 

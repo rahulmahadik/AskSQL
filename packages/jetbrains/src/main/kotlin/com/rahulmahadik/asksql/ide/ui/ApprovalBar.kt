@@ -5,10 +5,7 @@ import com.intellij.ui.components.JBPanel
 import java.awt.FlowLayout
 import javax.swing.JButton
 
-/**
- * Inline (never modal) Run/Cancel affordance. Only shown when `requireApproval` is on;
- * the default is OFF, matching the VS Code extension: auto-run with the SQL always displayed first.
- */
+/** Inline (never modal) Run/Cancel affordance, shown only when `requireApproval` is on. */
 class ApprovalBar(onRun: () -> Unit, onCancel: () -> Unit) {
 
     val component = JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 4, 2))
@@ -17,9 +14,7 @@ class ApprovalBar(onRun: () -> Unit, onCancel: () -> Unit) {
         component.add(JBLabel("Review the query above, then:")) // "query", not "SQL": the same bar approves Mongo pipelines
         val runButton = JButton("Run")
         val cancelButton = JButton("Cancel")
-        // Without disabling both on the first click, this bar stays live below the (now-appended)
-        // result: a second click could re-run the query, or Cancel after Run already fired could
-        // show a stray "Cancelled." under a result that already ran.
+        // Both buttons disable on the first click: the bar stays live in the transcript after the query runs.
         runButton.addActionListener {
             runButton.isEnabled = false
             cancelButton.isEnabled = false

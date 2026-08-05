@@ -1,12 +1,8 @@
 /**
  * AskSQL error taxonomy.
  *
- * Every failure in the system surfaces as an {@link AskSqlError} with a
- * stable machine `code`, a plain-language actionable `userMessage`
- *, a `retryable` hint for UIs, and a `detail` string that is for
- * logs/console only - `toJSON` deliberately omits it so credentials,
- * hostnames and stack fragments can never leak through an API response
- * (by construction).
+ * Every failure surfaces as an {@link AskSqlError} with a stable machine `code`, an actionable
+ * `userMessage`, a `retryable` hint for UIs, and a `detail` string that `toJSON` omits.
  */
 
 export type ErrorCode =
@@ -110,10 +106,7 @@ export class AskSqlError extends Error {
     return new AskSqlError(fallback, { detail, cause: err });
   }
 
-  /**
-   * Wire-safe shape: code + userMessage + retryable only. `detail`, `stack`
-   * and `cause` are intentionally excluded.
-   */
+  /** Wire-safe shape: code + userMessage + retryable only. */
   toJSON(): { code: ErrorCode; userMessage: string; retryable: boolean } {
     return { code: this.code, userMessage: this.userMessage, retryable: this.retryable };
   }

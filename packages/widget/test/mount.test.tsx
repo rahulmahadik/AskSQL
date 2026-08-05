@@ -1,20 +1,29 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mount } from '../src/index.js';
 
-// The real chat opens a network transport on mount; this package's job is the
-// shadow-DOM host, not the chat, so the chat itself is stubbed out.
-vi.mock('@asksql/react', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@asksql/react')>();
-  return {
-    ...actual,
-    AskSqlChat: () => null,
-    AskSqlBubble: () => null,
-    HttpTransport: class {
-      constructor(readonly opts: unknown) {}
-    },
-  };
+// The real components render here - stubbing them out is what let a stylesheet
+// escape into the host page unnoticed. Only the network and the jsdom gaps they
+// rely on (element scrolling) are faked.
+beforeAll(() => {
+  Element.prototype.scrollTo = vi.fn();
 });
+
+beforeEach(() => {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(
+      async () =>
+        new Response(JSON.stringify({ connections: [] }), { headers: { 'content-type': 'application/json' } }),
+    ),
+  );
+});
+
+/** React schedules both the commit and its effects, so a mount needs two turns to settle. */
+const flush = async () => {
+  await new Promise((r) => setTimeout(r, 0));
+  await new Promise((r) => setTimeout(r, 0));
+};
 
 const handles: { unmount(): void }[] = [];
 const tracked = (h: { unmount(): void }) => {
@@ -36,12 +45,13 @@ afterEach(async () => {
   // task fires after teardown and crashes the run with "window is not defined".
   await new Promise((r) => setImmediate(r));
   document.body.innerHTML = '';
+  vi.unstubAllGlobals();
 });
 
 const opts = { serverUrl: 'http://localhost:3000' };
 
 describe('mount', () => {
-  it('never attaches a shadow root to the caller\'s element, which would blank its children', () => {
+  it("never attaches a shadow root to the caller's element, which would blank its children", () => {
     const host = document.createElement('div');
     host.innerHTML = '<p id="keep">host content</p>';
     document.body.appendChild(host);
@@ -54,11 +64,31 @@ describe('mount', () => {
     expect(host.querySelector('[data-asksql-widget]')).not.toBeNull();
   });
 
-  it('isolates its styles inside the shadow root, never the host page head', () => {
+  it('isolates its styles inside the shadow root, never the host page head', async () => {
     tracked(mount(opts));
+    // The components inject their own styles from an effect, so let it run first.
+    await flush();
     expect(document.head.querySelector('style')).toBeNull();
     const mp = document.body.querySelector('[data-asksql-widget]')!;
     expect(mp.shadowRoot).toBeNull(); // closed mode: not reachable from outside
+  });
+
+  it('renders the chat and exactly one stylesheet inside the shadow root', async () => {
+    const attachShadow = Element.prototype.attachShadow;
+    let shadow: ShadowRoot | undefined;
+    Element.prototype.attachShadow = function (init: ShadowRootInit): ShadowRoot {
+      shadow = attachShadow.call(this, init);
+      return shadow;
+    };
+    try {
+      tracked(mount({ ...opts, mode: 'chat' }));
+      await flush();
+      expect(shadow!.querySelector('.asksql-chat')).not.toBeNull();
+      expect(shadow!.querySelectorAll('style[data-asksql]')).toHaveLength(1);
+      expect(document.head.querySelector('style')).toBeNull();
+    } finally {
+      Element.prototype.attachShadow = attachShadow;
+    }
   });
 
   it('defaults to document.body when no target is given', () => {

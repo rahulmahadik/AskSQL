@@ -19,6 +19,8 @@ internal fun escapeHtml(text: String): String =
  * Models answer in Markdown, so raw `**bold**` and backticks would render as literal asterisks.
  * Escape first, then translate the few marks that actually show up in an explanation.
  */
+private val FENCED_BLOCK_RE = Regex("""```[A-Za-z0-9]*\n?[\s\S]*?```""")
+
 internal fun markdownToHtml(text: String): String = escapeHtml(text)
     // A leading "Explanation:" heading is redundant: this block already sits under the result.
     .replace(Regex("""^\s*(\*\*|__)?\s*Explanation\s*(\*\*|__)?\s*:\s*""", RegexOption.IGNORE_CASE), "")
@@ -160,10 +162,30 @@ class TurnPanel(private val project: Project, question: String) {
         clearFailure()
         val panel = ResultTablePanel(project, resultSet)
         resultTablePanel = panel
+        val wrapper = JPanel(BorderLayout())
+        wrapper.add(panel.component, BorderLayout.CENTER)
+
         val toolbar = JPanel(FlowLayout(FlowLayout.LEFT, 4, 0))
         toolbar.add(JButton("Export CSV").apply { addActionListener { onExportCsv(panel) } })
         toolbar.add(JButton("Copy").apply { addActionListener { onCopyResult(panel) } })
         toolbar.add(JButton("Open in Editor").apply { addActionListener { onOpenInEditor(panel) } })
+        // Table stays the default; the button only appears when [Charts.infer] finds something to draw.
+        Charts.infer(resultSet)?.let { spec ->
+            val chart = ResultChartPanel(spec).component
+            var showingChart = false
+            toolbar.add(
+                JButton("Chart").apply {
+                    addActionListener {
+                        wrapper.remove(if (showingChart) chart else panel.component)
+                        showingChart = !showingChart
+                        wrapper.add(if (showingChart) chart else panel.component, BorderLayout.CENTER)
+                        text = if (showingChart) "Table" else "Chart"
+                        wrapper.revalidate()
+                        wrapper.repaint()
+                    }
+                },
+            )
+        }
         if (onExplain != null) {
             val explainButton = JButton("Explain")
             explainButton.addActionListener { explainButton.isEnabled = false; onExplain() }
@@ -173,8 +195,6 @@ class TurnPanel(private val project: Project, question: String) {
             toolbar.add(JBLabel(resultSet.warnings.joinToString(" · ")).apply { foreground = com.intellij.ui.JBColor.ORANGE })
         }
 
-        val wrapper = JPanel(BorderLayout())
-        wrapper.add(panel.component, BorderLayout.CENTER)
         wrapper.add(toolbar, BorderLayout.SOUTH)
 
         bodyPanel.add(wrapper)
@@ -206,9 +226,37 @@ class TurnPanel(private val project: Project, question: String) {
     }
 
     /** Renders a grounded plain-language schema answer (the answerSchemaQuestions fallback); no SQL, no results. */
-    fun showSchemaAnswer(answer: String, unknownReferences: List<String>, isSchemaChange: Boolean) {
+    fun showSchemaAnswer(
+        answer: String,
+        unknownReferences: List<String>,
+        isSchemaChange: Boolean,
+        proposedSql: String? = null,
+        /** A MongoDB answer proposes a pipeline, which is JSON rather than SQL. */
+        proposedIsPipeline: Boolean = false,
+    ) {
         updateStatus("")
-        bodyPanel.add(wrappingHtml(markdownToHtml(answer)).apply { border = JBUI.Borders.empty(6, 8) })
+        // A query in a prose answer is the same artifact as a generated one, so it gets the same
+        // block and the same Copy button rather than being flattened into the text.
+        val fence = if (proposedSql != null) FENCED_BLOCK_RE.find(answer) else null
+        if (fence != null) {
+            val before = answer.substring(0, fence.range.first).trimEnd()
+            val after = answer.substring(fence.range.last + 1).trimStart()
+            if (before.isNotBlank()) {
+                bodyPanel.add(wrappingHtml(markdownToHtml(before)).apply { border = JBUI.Borders.empty(6, 8) })
+            }
+            bodyPanel.add(
+                if (proposedIsPipeline) {
+                    SqlBlockPanel(project, proposedSql!!, fileExtension = "json", languageId = "JSON").component
+                } else {
+                    SqlBlockPanel(project, proposedSql!!).component
+                },
+            )
+            if (after.isNotBlank()) {
+                bodyPanel.add(wrappingHtml(markdownToHtml(after)).apply { border = JBUI.Borders.empty(6, 8) })
+            }
+        } else {
+            bodyPanel.add(wrappingHtml(markdownToHtml(answer)).apply { border = JBUI.Borders.empty(6, 8) })
+        }
         if (unknownReferences.isNotEmpty()) {
             val names = escapeHtml(unknownReferences.joinToString(", "))
             val note = if (isSchemaChange) {
@@ -231,10 +279,7 @@ class TurnPanel(private val project: Project, question: String) {
         showFailure(wrappingHtml(errorHtml(userMessage)))
     }
 
-    /**
-     * A turn has at most one outcome, so a new failure replaces the previous one and a real result
-     * clears it. Appending instead would leave a stale "couldn't answer" sitting above the answer.
-     */
+    /** A turn has at most one outcome: a new failure replaces the previous one, and a real result clears it. */
     private fun showFailure(label: JEditorPane) {
         failureLabel?.let { bodyPanel.remove(it) }
         failureLabel = label
@@ -269,29 +314,49 @@ class TurnPanel(private val project: Project, question: String) {
         component.repaint()
     }
 
-    /** Shows a failed query's error alongside a model-suggested corrected SQL; the SAME approval flow as a fresh question's SQL, since a suggested fix is never executed without it. */
+    /** Replaces the rejected query with the corrected one; a turn shows a single statement. Approved like any other SQL. */
     fun showErrorWithSuggestedSqlFix(errorMessage: String, suggestedSql: String, onRunFix: () -> Unit, onDismiss: () -> Unit) {
         updateStatus("")
-        val stack = JPanel()
-        stack.layout = BoxLayout(stack, BoxLayout.Y_AXIS)
-        stack.add(wrappingHtml(errorHtml(errorMessage)).apply { border = JBUI.Borders.empty(2) })
-        stack.add(JBLabel("Suggested fix:").apply { border = JBUI.Borders.empty(6, 2, 2, 2) })
-        stack.add(SqlBlockPanel(project, suggestedSql).component)
-        stack.add(ApprovalBar(onRunFix, onDismiss).component)
-        bodyPanel.add(stack)
-        component.revalidate()
-        component.repaint()
+        replaceBodyWithSuggestion(
+            errorMessage = errorMessage,
+            heading = "Corrected to match your schema:",
+            block = SqlBlockPanel(project, suggestedSql).component,
+            onRunFix = onRunFix,
+            onDismiss = onDismiss,
+        )
     }
 
     /** Mongo counterpart to [showErrorWithSuggestedSqlFix]. */
     fun showErrorWithSuggestedMongoFix(errorMessage: String, collection: String, pipelineJson: String, onRunFix: () -> Unit, onDismiss: () -> Unit) {
         updateStatus("")
+        replaceBodyWithSuggestion(
+            errorMessage = errorMessage,
+            heading = "Corrected to match your schema - collection: $collection",
+            block = SqlBlockPanel(project, pipelineJson, fileExtension = "json", languageId = "JSON").component,
+            onRunFix = onRunFix,
+            onDismiss = onDismiss,
+        )
+    }
+
+    private fun replaceBodyWithSuggestion(
+        errorMessage: String,
+        heading: String,
+        block: JPanel,
+        onRunFix: () -> Unit,
+        onDismiss: () -> Unit,
+    ) {
+        bodyPanel.removeAll()
+        failureLabel = null
+        // Clears the rejected query's explanation; the caller auto-explains the corrected one.
+        pendingAskExplanation = null
+        explanationShown = false
         val stack = JPanel()
         stack.layout = BoxLayout(stack, BoxLayout.Y_AXIS)
         stack.add(wrappingHtml(errorHtml(errorMessage)).apply { border = JBUI.Borders.empty(2) })
-        stack.add(JBLabel("Suggested fix - collection: $collection").apply { border = JBUI.Borders.empty(6, 2, 2, 2) })
-        stack.add(SqlBlockPanel(project, pipelineJson, fileExtension = "json", languageId = "JSON").component)
-        stack.add(ApprovalBar(onRunFix, onDismiss).component)
+        stack.add(JBLabel(heading).apply { border = JBUI.Borders.empty(6, 2, 2, 2) })
+        stack.add(block)
+        // Dismiss drops the stack; the caller re-shows the error.
+        stack.add(ApprovalBar(onRunFix, { bodyPanel.remove(stack); onDismiss() }).component)
         bodyPanel.add(stack)
         component.revalidate()
         component.repaint()
@@ -307,7 +372,7 @@ class TurnPanel(private val project: Project, question: String) {
         font = com.intellij.util.ui.UIUtil.getLabelFont()
     }
 
-    /** A theme-aware error color (not a hardcoded hex that only reads correctly in one IDE theme). */
+    /** A theme-aware error color. */
     private fun errorHtml(message: String): String {
         val hex = com.intellij.ui.ColorUtil.toHex(com.intellij.util.ui.NamedColorUtil.getErrorForeground())
         return "<font color='#$hex'>${escapeHtml(message)}</font>"

@@ -22,7 +22,7 @@ class TranscriptView(project: Project, private val onSamplePick: (String) -> Uni
     companion object {
         private const val MAX_TURNS = 20
 
-        /** Matches the VS Code extension's empty-state sample questions, so both clients start users off the same way. */
+        /** Matches the VS Code extension's empty-state sample questions. */
         private val SAMPLE_QUESTIONS = listOf(
             "What tables are in this database?",
             "Show me 10 rows from one of the tables",
@@ -31,7 +31,7 @@ class TranscriptView(project: Project, private val onSamplePick: (String) -> Uni
 
     val component = JPanel(BorderLayout())
 
-    /** Tracks the viewport width so a wide child can't trigger a horizontal scrollbar; only the result table's own scroll pane scrolls horizontally. */
+    /** Tracks the viewport width so a wide child can't trigger a horizontal scrollbar. */
     private val turnsContainer = object : JPanel(), Scrollable {
         init { layout = BoxLayout(this, BoxLayout.Y_AXIS) }
         override fun getPreferredScrollableViewportSize(): Dimension = preferredSize
@@ -44,8 +44,7 @@ class TranscriptView(project: Project, private val onSamplePick: (String) -> Uni
         horizontalScrollBarPolicy = ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER
     }
     private val turns = ArrayDeque<TurnPanel>()
-    // Each turn's component and its trailing spacer are added to turnsContainer as ONE wrapper
-    // (not two independent children), so evicting a turn removes both.
+    // Each turn's component and its trailing spacer live in ONE wrapper child, so evicting a turn removes both.
     private val wrappers = ArrayDeque<JPanel>()
     private val emptyStatePanel = buildEmptyStatePanel()
 

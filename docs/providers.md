@@ -24,7 +24,7 @@ What each field means:
 |-------|---------|---------------|
 | `provider` | Which SDK adapter to load. Picks the wire protocol and default endpoint. | always |
 | `model` | The model id to call (`gpt-4o-mini`, `llama-3.3-70b-versatile`, ...). For **classic Azure**, this is your **deployment name**, not the base model name. | always |
-| `apiKey` | Your provider secret, sent as the bearer token. Keep it on the server, never in the browser. | all cloud providers (every one except `ollama`) |
+| `apiKey` | Your provider secret, sent as the bearer token. Keep it on the server, never in the browser. | `openai`, `anthropic`, `google`, `azure`, `groq`, `nvidia`. Not required for `ollama` or `openai-compatible` (pass one if your endpoint wants it) |
 | `baseURL` | Full endpoint URL to override the provider default. Point it at a local runtime (Ollama), any OpenAI-compatible host, or an Azure AI Foundry endpoint. | `openai-compatible`; optional for `ollama` (defaults to `http://localhost:11434/v1`) |
 | `resourceName` | Classic Azure OpenAI resource subdomain, from `https://<resourceName>.openai.azure.com`. Used only to build the classic Azure endpoint. | classic `azure` when `baseURL` is not set |
 | `headers` | Extra HTTP headers merged into every request (custom auth, routing tags for a gateway). | never; optional |
@@ -47,7 +47,7 @@ Install only the SDK for the provider you use (they are optional peer deps):
 | `azure` (classic) | `apiKey` + `resourceName` + deployment name | Azure Portal |
 
 Provider dashboards and their key formats change - the linked page is always the
-authoritative source. Only Ollama needs no key.
+authoritative source. Only Ollama and `openai-compatible` can go without a key.
 
 ## Cloud providers
 
@@ -126,6 +126,29 @@ In both cases you must **deploy a model first** in Azure (Portal or AI Foundry -
 Deployments). A brand-new Azure resource has no deployments, and every call fails
 with `The API deployment for this resource does not exist` until you create one.
 Azure OpenAI is paid; there is no free tier.
+
+## Which surface offers which provider
+
+The table above is the library's list. The editor plugins ship their own settings UI and do not all
+offer the same set:
+
+| Provider | `@asksql/core`, `asksql serve` | Browser extension | VS Code | JetBrains |
+|----------|---|---|---|---|
+| `ollama` | yes | yes | yes | yes |
+| `openai` | yes | yes | yes | yes |
+| `anthropic` | yes | yes | yes | yes |
+| `google` | yes | yes | yes | yes |
+| `groq` | yes | yes | yes | yes |
+| `nvidia` | yes | yes | yes | yes |
+| `openai-compatible` | yes | yes | yes | yes |
+| `azure` | yes | yes | yes | no |
+| LM Studio | use `openai-compatible` | use `openai-compatible` | use `openai-compatible` | yes, listed separately |
+
+In VS Code, set `asksql.resourceName` for classic Azure OpenAI, or leave it empty and point
+`asksql.baseURL` at an AI Foundry endpoint. `asksql.model` is your deployment name either way.
+
+JetBrains has no `azure` entry. Azure AI Foundry works there through `openai-compatible` with the
+Foundry endpoint as the base URL; classic Azure OpenAI is not reachable from the plugin.
 
 ## Reasoning models
 

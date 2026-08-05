@@ -1,5 +1,21 @@
 # @asksql/mysql
 
+## 0.2.5
+
+### Patch Changes
+
+- 1c52198: Stop a query timeout leaking onto the next query a pooled connection serves.
+
+  The execution cap was applied with `SET SESSION MAX_EXECUTION_TIME`, which outlives `release()`
+  and so capped whatever query the pooled connection served next, at whichever limit the previous
+  caller happened to ask for. It is now a statement-scoped hint on the query itself. The client-side
+  deadline is unchanged and still the real guarantee for a server that ignores the hint.
+
+- Updated dependencies [1c52198]
+- Updated dependencies [1c52198]
+- Updated dependencies [1c52198]
+  - @asksql/core@0.5.0
+
 ## 0.2.4
 
 ### Patch Changes

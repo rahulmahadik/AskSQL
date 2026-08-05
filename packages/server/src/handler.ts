@@ -1,10 +1,8 @@
 /**
- * Framework-agnostic AskSQL server core: one `handle(req)` entry maps the
- * sidecar's HTTP contract onto the engine. Guarantees enforced once for every adapter:
- * - Auth hook runs first; failure/empty -> 401/403, never fail-open.
- * - Every connectionId is checked against the caller's scope.
- * - The guard runs server-side on every execute (engine-enforced).
- * - Errors serialize via AskSqlError.toJSON -> code + userMessage only, never credentials/detail/stack.
+ * Framework-agnostic AskSQL server core: one `handle(req)` maps the sidecar's HTTP contract
+ * onto the engine, enforcing for every adapter that auth runs first, that each connectionId is
+ * in the caller's scope, that the guard runs server-side on execute, and that errors serialize
+ * through AskSqlError.toJSON (code + userMessage, never credentials/detail/stack).
  */
 
 import {
@@ -42,6 +40,9 @@ export function isStream(r: HandlerResponse): r is StreamResponse {
 }
 
 const DEFAULT_MAX_BODY = 64 * 1024;
+/** Prior turns accepted from a client, and the cap on each field. */
+const CONTEXT_TURNS = 6;
+const MAX_CONTEXT_FIELD = 10_000;
 
 /** Mongo answers with an aggregation pipeline, so the SQL-only capabilities do not apply. */
 const MONGO_CAPABILITIES = {
@@ -62,6 +63,52 @@ function canAccess(auth: AuthContext, connectionId: string): boolean {
   return auth.allowedConnectionIds.includes(ANY_CONNECTION) || auth.allowedConnectionIds.includes(connectionId);
 }
 
+/**
+ * Cross-site request rejection, applied to every adapter rather than to one of them. Requiring
+ * application/json forces a CORS preflight that a "simple request" would skip, and a non-loopback
+ * Host on a loopback bind is a DNS-rebinding attempt.
+ */
+function crossSiteRejection(req: ServerRequest, requireLoopbackHost: boolean): HandlerResponse | null {
+  const header = (name: string): string => {
+    const raw = req.headers?.[name] ?? req.headers?.[name.toLowerCase()];
+    return typeof raw === 'string' ? raw : '';
+  };
+  // The host check covers EVERY method: a rebound GET reads the schema and history just as well.
+  if (requireLoopbackHost) {
+    const host = hostnameOf(header('host'));
+    if (host && !LOOPBACK_HOSTS.has(host)) {
+      return json(403, {
+        error: {
+          code: 'SERVER_AUTHZ',
+          userMessage: 'This server only accepts requests addressed to localhost.',
+          retryable: false,
+        },
+      });
+    }
+  }
+  // Requiring application/json forces a CORS preflight that a "simple request" would skip.
+  // Anything that is not a read gets it, so a method added later inherits the gate.
+  if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') return null;
+  const contentType = header('content-type').split(';')[0]!.trim().toLowerCase();
+  if (contentType !== 'application/json') {
+    return json(415, {
+      error: { code: 'INVALID_INPUT', userMessage: 'Send this request as application/json.', retryable: false },
+    });
+  }
+  return null;
+}
+
+/** Hostname from a Host header, handling `[::1]:3000` and a bare `::1`. */
+function hostnameOf(hostHeader: string): string {
+  const value = hostHeader.trim().toLowerCase();
+  if (!value) return '';
+  if (value.startsWith('[')) return value.slice(0, value.indexOf(']') + 1);
+  // A bare IPv6 address has several colons; only a host:port pair is split.
+  if ((value.match(/:/g) ?? []).length > 1) return value;
+  return value.split(':')[0]!;
+}
+
+const LOOPBACK_HOSTS: ReadonlySet<string> = new Set(['localhost', '127.0.0.1', '[::1]', '::1', '0.0.0.0']);
 export class AskSqlServer {
   private readonly history = new MemoryHistoryStore(2000);
   private engine;
@@ -121,7 +168,10 @@ export class AskSqlServer {
     if (existing) return existing;
     const connector = this.mongoById.get(connectionId);
     if (!connector) {
-      throw new AskSqlError('INVALID_INPUT', { userMessage: 'Unknown database connection.', detail: `no mongo ${connectionId}` });
+      throw new AskSqlError('INVALID_INPUT', {
+        userMessage: 'Unknown database connection.',
+        detail: `no mongo ${connectionId}`,
+      });
     }
     const created = createMongoAskSql({
       connector,
@@ -137,13 +187,14 @@ export class AskSqlServer {
   /** Route one request. Adapters translate their req/res to this. */
   async handle(req: ServerRequest): Promise<HandlerResponse> {
     try {
+      const csrf = crossSiteRejection(req, this.config.requireLoopbackHost === true);
+      if (csrf) return csrf;
       const auth = await this.authenticate(req);
       const path = normalizePath(req.path);
 
-      // `return await` (not bare `return`) so rejected promises are caught
-      // by this try/catch and mapped to an error response, never escaping.
+      // `return await`, not a bare `return`, so rejections land in this try/catch.
       if (req.method === 'GET' && path === '/connections') return this.listConnections(auth);
-      if (req.method === 'POST' && path === '/connections') return await this.createConnection(req);
+      if (req.method === 'POST' && path === '/connections') return await this.createConnection(req, auth);
       if (req.method === 'DELETE' && path.startsWith('/connections/')) {
         return await this.deleteConnection(decodeURIComponent(path.slice('/connections/'.length)), auth);
       }
@@ -168,8 +219,7 @@ export class AskSqlServer {
     if (!this.config.onError) return;
     try {
       const r = this.config.onError(err, { method: req.method, path: normalizePath(req.path) }) as unknown;
-      // An async hook returns a promise; swallow its rejection too, or it would
-      // become an unhandled rejection (which crashes Node by default).
+      // An async hook returns a promise; swallow its rejection so it never becomes an unhandled rejection.
       void Promise.resolve(r).catch(() => {});
     } catch {
       // Swallowed on purpose: the response must go out regardless of the hook.
@@ -225,7 +275,13 @@ export class AskSqlServer {
         .map((c) => ({ id: c.id, name: c.name, engine: c.engine, database: c.database, capabilities: c.capabilities })),
       ...[...this.mongoById.values()]
         .filter((c) => canAccess(auth, c.id))
-        .map((c) => ({ id: c.id, name: c.name, engine: c.engine, database: c.database, capabilities: MONGO_CAPABILITIES })),
+        .map((c) => ({
+          id: c.id,
+          name: c.name,
+          engine: c.engine,
+          database: c.database,
+          capabilities: MONGO_CAPABILITIES,
+        })),
     ];
     return json(200, { connections: items });
   }
@@ -236,7 +292,7 @@ export class AskSqlServer {
   }
 
   /** Opens a connection from client-supplied details (see dynamicConnections.ts). Off unless the operator opts in. */
-  private async createConnection(req: ServerRequest): Promise<JsonResponse> {
+  private async createConnection(req: ServerRequest, auth: AuthContext): Promise<JsonResponse> {
     const options = this.dynamicOptions();
     if (!options) {
       return json(404, {
@@ -247,15 +303,22 @@ export class AskSqlServer {
         },
       });
     }
+    // Same scope rule as deleteConnection: creating a connection dials a host of the caller's
+    // choosing with their credentials, so it needs the same standing as using one.
+    if (!canAccess(auth, ANY_CONNECTION)) {
+      throw new AskSqlError('SERVER_AUTHZ', { detail: `user ${auth.userId} may not create connections` });
+    }
     const spec = (await req.json()) as ConnectionSpec;
     assertSpecAllowed(spec, options);
 
     const id = spec.id?.trim() || `dyn_${++this.dynamicSeq}`;
-    // Reserved SYNCHRONOUSLY: the driver import and eager connect below both
-    // await, so without this two concurrent POSTs with the same explicit id
-    // would each pass the duplicate check and the second would clobber the first.
+    // Reserved synchronously: the driver import and eager connect below both await, so two
+    // concurrent POSTs carrying the same explicit id must not both clear this check.
     if (this.byId.has(id) || this.mongoById.has(id) || this.creatingIds.has(id)) {
-      throw new AskSqlError('INVALID_INPUT', { detail: `duplicate id ${id}`, userMessage: 'A connection with that id already exists.' });
+      throw new AskSqlError('INVALID_INPUT', {
+        detail: `duplicate id ${id}`,
+        userMessage: 'A connection with that id already exists.',
+      });
     }
     this.creatingIds.add(id);
     try {
@@ -266,8 +329,7 @@ export class AskSqlServer {
         return json(201, { connection: { id, name: mongo.name, engine: mongo.engine, database: mongo.database } });
       }
       const connector = await createConnector(spec, id);
-      // Connect eagerly: a bad host or password should fail here, while the user
-      // is looking at the form, not later inside an unrelated question.
+      // Connect eagerly, so a bad host or password fails here while the user is still on the form.
       await connector.connect();
       this.setConnectors([...this.connectors, connector]);
       return json(201, {
@@ -281,11 +343,14 @@ export class AskSqlServer {
   private async deleteConnection(id: string, auth: AuthContext): Promise<JsonResponse> {
     if (!this.dynamicOptions()) {
       return json(404, {
-        error: { code: 'INVALID_INPUT', userMessage: 'This AskSQL server does not manage connections.', retryable: false },
+        error: {
+          code: 'INVALID_INPUT',
+          userMessage: 'This AskSQL server does not manage connections.',
+          retryable: false,
+        },
       });
     }
-    // Same scope rule as every query endpoint: a caller who cannot use a
-    // connection cannot tear it down either.
+    // Same scope rule as every query endpoint: a caller who cannot use a connection cannot tear it down.
     this.assertAccess(id, auth);
     const mongo = this.mongoById.get(id);
     if (mongo) {
@@ -294,8 +359,7 @@ export class AskSqlServer {
       this.mongoEngines.delete(id);
       return json(200, { removed: id });
     }
-    // assertAccess already rejected an id in neither map, and nothing awaits in between, so a
-    // non-mongo id is necessarily a SQL connector here.
+    // assertAccess already rejected an id in neither map, so a non-mongo id here is a SQL connector.
     const connector = this.byId.get(id)!;
     await connector.close?.();
     this.setConnectors(this.connectors.filter((c) => c.id !== id));
@@ -307,8 +371,7 @@ export class AskSqlServer {
     const refresh = req.query['refresh'] === '1' || req.query['refresh'] === 'true';
     let catalog;
     if (this.isMongo(connectionId)) {
-      // The Mongo engine has no refresh parameter; drop its cached catalog so
-      // the next read re-samples, otherwise ?refresh=1 serves TTL-stale schema.
+      // The Mongo engine has no refresh parameter; drop its cached catalog so the next read re-samples.
       const engine = this.mongoEngine(connectionId);
       if (refresh) engine.invalidateCatalog();
       catalog = await engine.catalog();
@@ -347,17 +410,27 @@ export class AskSqlServer {
         n?.();
       };
 
-      let settled: { ok: true; result: Awaited<ReturnType<MongoAskEngine['ask']>> } | { ok: false; error: unknown } | undefined;
+      let settled:
+        { ok: true; result: Awaited<ReturnType<MongoAskEngine['ask']>> } | { ok: false; error: unknown } | undefined;
       void engine
         .ask(question, {
           context: mongoContext,
-          onEvent: (e: EngineEvent) => { queue.push(e); wake(); },
+          onEvent: (e: EngineEvent) => {
+            queue.push(e);
+            wake();
+          },
           signal: req.signal,
         })
         .then(
-        (result) => { settled = { ok: true, result }; wake(); },
-        (error: unknown) => { settled = { ok: false, error }; wake(); },
-      );
+          (result) => {
+            settled = { ok: true, result };
+            wake();
+          },
+          (error: unknown) => {
+            settled = { ok: false, error };
+            wake();
+          },
+        );
 
       const drain = function* (): Generator<ChatStreamEvent> {
         while (queue.length > 0) {
@@ -370,13 +443,21 @@ export class AskSqlServer {
       while (!settled) {
         yield* drain();
         if (settled) break;
-        await new Promise<void>((resolve) => { notify = resolve; });
+        await new Promise<void>((resolve) => {
+          notify = resolve;
+        });
       }
       yield* drain();
 
       if (settled.ok) {
         const r = settled.result;
-        yield { type: 'sql', sql: r.pipelineJson, collection: r.collection, explanation: r.explanation, autoLimited: r.autoLimited };
+        yield {
+          type: 'sql',
+          sql: r.pipelineJson,
+          collection: r.collection,
+          explanation: r.explanation,
+          autoLimited: r.autoLimited,
+        };
       } else {
         report(settled.error);
         yield { type: 'error', ...AskSqlError.from(settled.error, 'LLM_UNAVAILABLE').toJSON() };
@@ -395,7 +476,8 @@ export class AskSqlServer {
     };
     const connectionId = this.resolveConnectionId(req, auth, body.connectionId);
     const question = String(body.question ?? '');
-    if (this.isMongo(connectionId)) return this.mongoChat(question, connectionId, req, body.context);
+    if (this.isMongo(connectionId))
+      return this.mongoChat(question, connectionId, req, AskSqlServer.parseContext(body.context));
     const engine = this.requireEngine();
 
     type Settled = { ok: true; result: AskResult } | { ok: false; error: unknown };
@@ -418,17 +500,23 @@ export class AskSqlServer {
 
       let settled: Settled | undefined;
       void engine
-        .ask(question, { connectionId, context: body.context, onEvent, userId: auth.userId, signal: req.signal })
+        .ask(question, {
+          connectionId,
+          context: AskSqlServer.parseContext(body.context),
+          onEvent,
+          userId: auth.userId,
+          signal: req.signal,
+        })
         .then(
-        (result: AskResult) => {
-          settled = { ok: true, result };
-          wake();
-        },
-        (error: unknown) => {
-          settled = { ok: false, error };
-          wake();
-        },
-      );
+          (result: AskResult) => {
+            settled = { ok: true, result };
+            wake();
+          },
+          (error: unknown) => {
+            settled = { ok: false, error };
+            wake();
+          },
+        );
 
       const drain = function* (): Generator<ChatStreamEvent> {
         while (queue.length > 0) {
@@ -475,7 +563,9 @@ export class AskSqlServer {
     if (this.isMongo(connectionId)) {
       const collection = String(body.collection ?? '');
       if (!collection) {
-        throw new AskSqlError('INVALID_INPUT', { userMessage: 'A MongoDB query needs the collection it runs against.' });
+        throw new AskSqlError('INVALID_INPUT', {
+          userMessage: 'A MongoDB query needs the collection it runs against.',
+        });
       }
       try {
         const result = await this.mongoEngine(connectionId).execute(sql, collection, {
@@ -516,8 +606,7 @@ export class AskSqlServer {
         e.code === 'GUARD_BLOCKED' ? 'blocked' : 'allowed',
         e.code === 'GUARD_BLOCKED' ? 'blocked' : 'error',
       );
-      // On a runtime DB error, offer a corrected query for the user to review
-      // and re-run (never auto-run). Needs the original question for context.
+      // On a runtime DB error, offer a corrected query for the user to review and re-run; never auto-run it.
       if (this.config.suggestFixOnError !== false && e.code === 'DB_QUERY_ERROR' && body.question) {
         const fix = await this.requireEngine()
           .suggestFix(sql, { connectionId, question: body.question, errorDetail: e.detail })
@@ -535,17 +624,45 @@ export class AskSqlServer {
       const explanation = await this.mongoEngine(connectionId).explain(String(body.sql ?? ''), { signal: req.signal });
       return json(200, { explanation });
     }
-    const explanation = await this.requireEngine().explain(String(body.sql ?? ''), { connectionId, signal: req.signal });
+    const explanation = await this.requireEngine().explain(String(body.sql ?? ''), {
+      connectionId,
+      signal: req.signal,
+    });
     return json(200, { explanation });
   }
 
+  /** Prior turns from a client are untrusted: shape-check them so a junk entry cannot 500 or bloat. */
+  private static parseContext(raw: unknown): { question: string; sql: string }[] | undefined {
+    if (!Array.isArray(raw)) return undefined;
+    const turns = raw
+      .filter((t): t is { question?: unknown; sql?: unknown } => typeof t === 'object' && t !== null)
+      .filter((t) => typeof t.sql === 'string' && t.sql.trim().length > 0)
+      .slice(-CONTEXT_TURNS)
+      .map((t) => ({
+        question: typeof t.question === 'string' ? t.question.slice(0, MAX_CONTEXT_FIELD) : '',
+        sql: String(t.sql).slice(0, MAX_CONTEXT_FIELD),
+      }));
+    return turns.length > 0 ? turns : undefined;
+  }
+
   private async explainSchema(req: ServerRequest, auth: AuthContext): Promise<JsonResponse> {
-    const body = (await this.readBody(req)) as { question?: string; connectionId?: string };
+    const body = (await this.readBody(req)) as {
+      question?: string;
+      connectionId?: string;
+      context?: { question: string; sql: string }[];
+    };
     const connectionId = this.resolveConnectionId(req, auth, body.connectionId);
     const question = String(body.question ?? '');
     const answer = this.isMongo(connectionId)
-      ? await this.mongoEngine(connectionId).explainSchema(question, { signal: req.signal })
-      : await this.requireEngine().explainSchema(question, { connectionId, signal: req.signal });
+      ? await this.mongoEngine(connectionId).explainSchema(question, {
+          signal: req.signal,
+          context: AskSqlServer.parseContext(body.context)?.map((t) => ({ question: t.question, pipelineJson: t.sql })),
+        })
+      : await this.requireEngine().explainSchema(question, {
+          connectionId,
+          signal: req.signal,
+          context: AskSqlServer.parseContext(body.context),
+        });
     return json(200, answer);
   }
 
@@ -561,22 +678,21 @@ export class AskSqlServer {
   }
 
   private health(auth: AuthContext): JsonResponse {
-    // Scope this like every other endpoint. Listing every connector let a caller
-    // enumerate ids they have no access to - and those ids are exactly what
-    // /schema and /execute take, so it was a targeting primitive.
+    // Scoped like every other endpoint: a caller sees only the connection ids it may use.
     return json(200, {
       status: 'ok',
       connections: [
         ...this.connectors.filter((c) => canAccess(auth, c.id)).map((c) => ({ id: c.id, engine: c.engine })),
-        ...[...this.mongoById.values()].filter((c) => canAccess(auth, c.id)).map((c) => ({ id: c.id, engine: c.engine })),
+        ...[...this.mongoById.values()]
+          .filter((c) => canAccess(auth, c.id))
+          .map((c) => ({ id: c.id, engine: c.engine })),
       ],
     });
   }
 
   private async readBody(req: ServerRequest): Promise<Record<string, unknown>> {
     const raw = await req.json().catch((err: unknown) => {
-      // The adapter may reject with a real reason (e.g. body too large); keep it
-      // instead of mislabeling every failure as invalid JSON.
+      // Keep the adapter's own reason (e.g. body too large) rather than labelling every failure invalid JSON.
       if (AskSqlError.is(err)) throw err;
       throw new AskSqlError('INVALID_INPUT', { userMessage: 'Request body must be valid JSON.' });
     });
@@ -605,8 +721,7 @@ export class AskSqlServer {
         ...(rowCount !== undefined ? { rowCount } : {}),
       });
     } catch {
-      // Audit failure must never block a read. Surfaced via health
-      // in a fuller impl; swallowed here so the query still returns.
+      // Audit failure must never block a read.
     }
   }
 
@@ -614,7 +729,7 @@ export class AskSqlServer {
     return this.config.maxBodyBytes ?? DEFAULT_MAX_BODY;
   }
 
-async close(): Promise<void> {
+  async close(): Promise<void> {
     // engine is null on a mongo-only (or empty) server.
     if (this.engine) await this.engine.close();
     for (const mongo of this.mongoById.values()) {

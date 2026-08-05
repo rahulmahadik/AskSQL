@@ -6,7 +6,7 @@ import com.rahulmahadik.asksql.ide.model.SchemaCatalog
 import com.rahulmahadik.asksql.ide.model.TableInfo
 import java.sql.Connection
 
-/** SQLite has no comment/row-estimate metadata surface, so the common [DatabaseMetaData] extraction is the whole story, except foreign keys, which need SQLite's own `PRAGMA` (see [loadForeignKeys]). */
+/** SQLite exposes no comment or row-estimate metadata; only foreign keys need SQLite's own `PRAGMA` (see [loadForeignKeys]). */
 object SqliteIntrospector : Introspector {
 
     override fun introspect(connection: Connection): SchemaCatalog {
@@ -28,16 +28,12 @@ object SqliteIntrospector : Introspector {
         return SchemaCatalog(engine = EngineKind.SQLITE, tables = tables)
     }
 
-    /**
-     * SQLite's `getImportedKeys()` reports blank FK names and scrambles multi-column FK rows;
-     * `PRAGMA foreign_key_list` groups correctly via an explicit `id` column, so it replaces the generic path.
-     */
+    /** SQLite's `getImportedKeys()` reports blank FK names and scrambles multi-column FK rows; `PRAGMA foreign_key_list` groups them by an explicit `id` column. */
     private fun loadForeignKeys(connection: Connection, table: String): List<ForeignKeyInfo>? {
         data class Row(val id: Int, val seq: Int, val refTable: String, val from: String, val to: String)
         val rows = mutableListOf<Row>()
         return try {
-            // PRAGMA doesn't support bind parameters; the name is quoted as
-            // an identifier (embedded quotes doubled), not interpolated as a string literal.
+            // PRAGMA doesn't support bind parameters; the name is quoted as an identifier.
             val quoted = "\"${table.replace("\"", "\"\"")}\""
             connection.createStatement().use { st ->
                 st.executeQuery("PRAGMA foreign_key_list($quoted)").use { rs ->
@@ -61,7 +57,7 @@ object SqliteIntrospector : Introspector {
                 )
             }
         } catch (e: Exception) {
-            null // fall back to the (less precise) generic JDBC result rather than losing FK info entirely
+            null // fall back to the generic JDBC result
         }
     }
 }

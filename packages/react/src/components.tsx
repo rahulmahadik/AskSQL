@@ -71,6 +71,8 @@ export interface AskSqlChatProps {
   readonly suggestions?: readonly string[];
   /** CSP nonce for the injected stylesheet (strict-CSP pages). */
   readonly nonce?: string;
+  /** Where to inject the stylesheet. Pass the shadow root when rendering into one; defaults to the document. */
+  readonly styleRoot?: Document | ShadowRoot;
   /** Show a connection picker when the sidecar exposes more than one. */
   readonly showConnectionPicker?: boolean;
   /** Answer questions that aren't a data query in plain language from the schema. Off by default. */
@@ -80,10 +82,9 @@ export interface AskSqlChatProps {
   /** Where the SQL block renders relative to results (default 'before'). Forced to 'before' when `requireApproval` is on - a query can't be approved unseen. */
   readonly sqlDisplayPlacement?: 'before' | 'after';
   /**
-   * Asked automatically whenever this changes to a new non-empty value (e.g.
-   * a question seeded from outside the component, such as a browser
-   * extension's "ask about selection"). Setting the same value twice in a
-   * row asks it only once; the existing transcript is preserved either way.
+   * Asked automatically whenever this changes to a new non-empty value, such as
+   * a question seeded by a browser extension's "ask about selection". The same
+   * value twice in a row asks once; the transcript is preserved either way.
    */
   readonly initialQuestion?: string;
   /** Called when initialQuestion is actually asked, so the host can clear its state (enabling the same text to seed again later). */
@@ -91,7 +92,7 @@ export interface AskSqlChatProps {
 }
 
 export function AskSqlChat(props: AskSqlChatProps): JSX.Element {
-  useEffect(() => ensureStyles(undefined, props.nonce), [props.nonce]);
+  useEffect(() => ensureStyles(props.styleRoot, props.nonce), [props.styleRoot, props.nonce]);
   const [connections, setConnections] = useState<ConnectionSummary[]>([]);
   const [activeConn, setActiveConn] = useState<string | undefined>(props.connectionId);
 
@@ -140,8 +141,7 @@ export function AskSqlChat(props: AskSqlChatProps): JSX.Element {
       return;
     }
     if (q === lastAskedInitial.current) return;
-    // Mid-stream: leave it unrecorded - the busy flip re-runs this effect, so
-    // the question is asked when the stream ends instead of silently dropped.
+    // Mid-stream: leave it unrecorded - the busy flip re-runs this effect when the stream ends.
     if (busy) return;
     lastAskedInitial.current = q;
     void ask(q);
@@ -177,7 +177,7 @@ export function AskSqlChat(props: AskSqlChatProps): JSX.Element {
           </label>
         </div>
       )}
-      <div className="asksql-thread" ref={threadRef}>
+      <div className="asksql-thread" ref={threadRef} role="log" aria-live="polite" aria-busy={busy}>
         {turns.length === 0 ? (
           <EmptyState
             suggestions={props.suggestions}
@@ -279,7 +279,8 @@ function TurnView({
   const [draft, setDraft] = useState('');
   const placement = requireApproval ? 'before' : (sqlDisplayPlacement ?? 'before');
 
-  const sqlSection = turn.sql && (
+  // A correction replaces the rejected query; two statements under one question read as two answers.
+  const sqlSection = turn.sql && !turn.suggestedSql && (
     <>
       {editing ? (
         <div className="asksql-sqlblock">
@@ -314,35 +315,35 @@ function TurnView({
       {turn.explanation && !editing && <Markdown className="asksql-explain" text={turn.explanation} />}
       {turn.autoLimited && (
         <div className="asksql-warn">
-          A row limit was added automatically, so these are the first rows only. Raise the row cap to see
-          more; an export writes the rows shown here.
+          A row limit was added automatically, so these are the first rows only. Raise the row cap to see more; an
+          export writes the rows shown here.
         </div>
       )}
       {!editing &&
         (turn.phase === 'sql_ready' || turn.phase === 'done' || turn.phase === 'error' || turn.phase === 'stopped') && (
-        <div className="asksql-actions">
-          {turn.phase === 'sql_ready' && requireApproval && (
-            <button className="asksql-btn asksql-btn-primary" onClick={onRun} disabled={busy}>
-              Run query
+          <div className="asksql-actions">
+            {turn.phase === 'sql_ready' && requireApproval && (
+              <button className="asksql-btn asksql-btn-primary" onClick={onRun} disabled={busy}>
+                Run query
+              </button>
+            )}
+            <button
+              className="asksql-btn"
+              onClick={() => {
+                setDraft(turn.sql!);
+                setEditing(true);
+              }}
+              disabled={busy}
+            >
+              Edit
             </button>
-          )}
-          <button
-            className="asksql-btn"
-            onClick={() => {
-              setDraft(turn.sql!);
-              setEditing(true);
-            }}
-            disabled={busy}
-          >
-            Edit
-          </button>
-          {canPlan && (
-            <button className="asksql-btn" onClick={onPlan} disabled={busy || turn.planning}>
-              {turn.planning ? 'Explaining...' : 'Plan'}
-            </button>
-          )}
-        </div>
-      )}
+            {canPlan && (
+              <button className="asksql-btn" onClick={onPlan} disabled={busy || turn.planning}>
+                {turn.planning ? 'Explaining...' : 'Plan'}
+              </button>
+            )}
+          </div>
+        )}
       {turn.plan && (
         <div className="asksql-sqlblock">
           <div className="asksql-sqlhead">
@@ -414,7 +415,7 @@ function TurnView({
             {turn.suggestedSql && (
               <div style={{ marginTop: 8 }}>
                 <div className="asksql-meta" style={{ marginBottom: 4 }}>
-                  A corrected query is suggested:
+                  Corrected to match your schema:
                 </div>
                 <SqlBlock sql={turn.suggestedSql} />
                 <button
@@ -593,7 +594,7 @@ function bubblePlacement(
 const FOCUSABLE = 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
 
 export function AskSqlBubble(props: AskSqlBubbleProps): JSX.Element | null {
-  useEffect(() => ensureStyles(undefined, props.nonce), [props.nonce]);
+  useEffect(() => ensureStyles(props.styleRoot, props.nonce), [props.styleRoot, props.nonce]);
   const [open, setOpen] = useState(false);
   const [duplicate, setDuplicate] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -635,7 +636,8 @@ export function AskSqlBubble(props: AskSqlBubbleProps): JSX.Element | null {
     if (items.length === 0) return;
     const first = items[0]!;
     const last = items[items.length - 1]!;
-    const active = document.activeElement;
+    // Inside a shadow root document.activeElement is the host; the root tracks the real one.
+    const active = (panelRef.current.getRootNode() as Document | ShadowRoot).activeElement;
     if (e.shiftKey && (active === first || active === panelRef.current)) {
       e.preventDefault();
       last.focus();

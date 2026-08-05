@@ -22,7 +22,7 @@
     "engine": "postgres",
     "allowed": true,
     "ruleId": null,
-    "finalSql": "SELECT * FROM \"users\" LIMIT 1000",
+    "finalSql": "SELECT * FROM users LIMIT 1000",
     "autoLimited": false,
     "loweredLimit": true
   },

@@ -7,8 +7,7 @@ object Extract {
 
     data class Extraction(val sql: String, val explanation: String, val source: ExtractionSource = ExtractionSource.FENCE)
 
-    // \w* (not a literal "sql"/"SQL") matches ANY fence language tag, so
-    // ```postgresql, ```MySQL, ```sqlite, etc. are still recognized as fenced blocks.
+    // \w* matches ANY fence language tag, so ```postgresql, ```MySQL and ```sqlite all count as fences.
     private val FENCE_RE = Regex("""```\w*\s*\n?([\s\S]*?)```""")
 
     /** Any statement-shaped start, including write/DDL verbs: the guard, not the extractor, decides what may run. */
@@ -17,14 +16,13 @@ object Extract {
         RegexOption.IGNORE_CASE,
     )
 
-    /** Conservative set for INLINE extraction from prose: read verbs only, to avoid grabbing English sentences that begin with "Update"/"Insert". */
+    /** Conservative set for INLINE extraction from prose: read verbs only. */
     private val INLINE_START_RE = Regex(
         """(?:^|\n)\s*((?:select|with|explain)\b[\s\S]*?)(?=\n\s*\n|$)""",
         RegexOption.IGNORE_CASE,
     )
 
-    // Case-sensitive to match core exactly: the model emits this sentinel verbatim in
-    // uppercase, so a lowercase "impossible:" is ordinary prose, not the sentinel.
+    // Case-sensitive: a lowercase "impossible:" is ordinary prose, not the sentinel.
     private val IMPOSSIBLE_SENTINEL = Regex(
         """^\s*IMPOSSIBLE\s*:\s*(.+)""",
         RegexOption.DOT_MATCHES_ALL,
@@ -40,7 +38,7 @@ object Extract {
 
     private const val REASON_MAX_LENGTH = 300
 
-    /** The sentinel word is internal protocol; a model that repeats it mid-sentence must not leak it into the chat. */
+    /** Strips the internal sentinel word so it never reaches the chat. */
     private val SENTINEL_WORD = Regex("""\bIMPOSSIBLE\b\s*:?\s*""", RegexOption.IGNORE_CASE)
 
     /** "Your question isn't about this data" said many robotic ways; all of them collapse to one plain sentence. */
@@ -50,7 +48,7 @@ object Extract {
         RegexOption.IGNORE_CASE,
     )
 
-    /** Model-speak to plain English, applied in order. Deterministic and local: no second model call. */
+    /** Model-speak to plain English, applied in order. */
     private val PHRASINGS = listOf(
         Regex("""\bthe provided schema\b""", RegexOption.IGNORE_CASE) to "this database",
         Regex("""\bthe (given |current )?schema\b""", RegexOption.IGNORE_CASE) to "this database",
@@ -69,7 +67,7 @@ object Extract {
         return out.replace(Regex("""\s{2,}"""), " ").trim()
     }
 
-    /** The prompt asks for "IMPOSSIBLE: <one-line reason>"; a noncompliant model rambles on, so only the first line is the reason. */
+    /** Reads the "IMPOSSIBLE: <reason>" sentinel, taking only its first line as the reason. */
     fun extractImpossible(text: String): String? {
         val captured = IMPOSSIBLE_SENTINEL.find(text.trim())?.groupValues?.get(1)?.trim() ?: return null
         val firstLine = captured.substringBefore('\n').trim()
@@ -116,6 +114,14 @@ object Extract {
 
     fun looksLikeRefusal(text: String): Boolean = REFUSAL.containsMatchIn(text)
 
+    /** A hedging "IMPOSSIBLE:" line, stripped from the explanation. */
+    private val SENTINEL_LINE = Regex("""^[^\S\n]*IMPOSSIBLE\b[^\n]*$""", setOf(RegexOption.IGNORE_CASE, RegexOption.MULTILINE))
+
     private fun tidy(explanation: String): String =
-        explanation.replace(Regex("""\s+"""), " ").trim().take(2000)
+        explanation
+            .replace(SENTINEL_LINE, " ")
+            .replace(SENTINEL_WORD, "")
+            .replace(Regex("""\s+"""), " ")
+            .trim()
+            .take(2000)
 }

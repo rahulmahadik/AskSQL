@@ -22,20 +22,16 @@ const CLI_ENTRY_POINTS = new Set(['cli.js', 'bin.js']);
 
 // KB (gzipped) ceilings for each package's OWN emitted JS.
 const BUDGETS: Record<string, number> = {
-  // 45 -> 46 for real features: Oracle FETCH FIRST acceptance in the guard,
-  // the 403 key-vs-origin message, browser-origin provider support.
-  // 46 -> 51: the scope guard (off-topic decline, challenged retry, sentinel stripping),
-  // MongoDB schema answers with their own grounding floor, and the mongo-shell JSON parser
-  // small models need. Kept just above the real figure so it still gates: a budget with
-  // slack stops measuring.
-  // 51 -> 54: correctness fixes with a real byte cost - the SQL-vocabulary list that stops
-  // backticked keywords being reported as invented names, the everyday-name list that stops the
-  // off-topic backstop matching "my name is", CJK/lowercase-any-script handling in the
-  // degenerate-answer check, and the case-sensitive sentinel forms that keep the English
-  // phrase "out of scope" from being read as the marker.
-  core: 54,
+  // Raised only for shipped features, and kept just above the real figure: a budget with slack
+  // stops measuring. History: 45->51 scope guard + Mongo, 51->54 grounding vocabularies,
+  // 54->60 question routing + the ungrouped-aggregate lint, 60->63 routing precision +
+  // identifier quoting, 63->65 routing words disambiguated from identifiers ("the archive table",
+  // "the best selling products", "the prompts table").
+  core: 65,
   react: 20,
-  server: 12,
+  // 12 -> 13: the CSRF/Host gate every adapter inherits, client-path confinement for
+  // file engines, and the link-local check covering hex, octal and IPv4-mapped forms.
+  server: 13,
   postgres: 14,
   mysql: 14,
   sqlite: 10,
@@ -67,7 +63,7 @@ describe('bundle-size budgets (gzipped, own code)', () => {
     const core = gzippedKb('core');
     const react = gzippedKb('react');
     if (core === null || react === null) return;
-    // Own code only (React is a peer): must stay well under the 80 KB budget.
-    expect(core + react).toBeLessThan(80);
+    // Own code only (React is a peer): must stay well under the 85 KB budget.
+    expect(core + react).toBeLessThan(85);
   });
 });

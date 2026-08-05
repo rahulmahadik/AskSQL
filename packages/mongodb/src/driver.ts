@@ -1,8 +1,6 @@
 /**
- * Minimal structural views over the parts of the `mongodb` driver this
- * connector uses. The dynamic import is cast through `unknown` to these, so the
- * package typechecks against its own contract rather than the driver's ambient
- * types (which pull a large BSON type surface).
+ * Structural views over the parts of the `mongodb` driver this connector uses; the dynamic
+ * import is cast through `unknown` to these rather than the driver's large ambient BSON types.
  */
 
 export interface MongoModule {

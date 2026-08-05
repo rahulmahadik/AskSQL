@@ -5,7 +5,7 @@ import { installChromeMock, uninstallChromeMock, type ChromeMock } from './chrom
 interface StripRule {
   id: number;
   action: { type: string; requestHeaders: { header: string; operation: string }[] };
-  condition: { requestDomains: string[]; resourceTypes: string[] };
+  condition: { urlFilter: string; resourceTypes: string[] };
 }
 
 const firstRule = (mock: ChromeMock) => [...mock.dynamicRules.values()][0] as StripRule;
@@ -22,20 +22,27 @@ describe('syncProviderOriginStripRule', () => {
     vi.restoreAllMocks();
   });
 
-  it("removes the Origin header for the provider host, for the request type an LLM call uses", async () => {
+  it('removes the Origin header for the provider host, for the request type an LLM call uses', async () => {
     await syncProviderOriginStripRule('http://localhost:11434/v1');
 
     expect(mock.dynamicRules.size).toBe(1);
     const rule = firstRule(mock);
     expect(rule.action.type).toBe('modifyHeaders');
     expect(rule.action.requestHeaders).toEqual([{ header: 'origin', operation: 'remove' }]);
-    expect(rule.condition.requestDomains).toEqual(['localhost']);
+    expect(rule.condition.urlFilter).toBe('|http://localhost:11434/');
     expect(rule.condition.resourceTypes).toEqual(['xmlhttprequest']);
   });
 
   it('scopes the rule to the provider host only, never all hosts', async () => {
     await syncProviderOriginStripRule('https://api.groq.com/openai/v1');
-    expect(firstRule(mock).condition.requestDomains).toEqual(['api.groq.com']);
+    expect(firstRule(mock).condition.urlFilter).toBe('|https://api.groq.com/');
+  });
+
+  it('leaves every other service on the same host alone, which a hostname-only rule would not', async () => {
+    await syncProviderOriginStripRule('http://localhost:11434/v1');
+    const { urlFilter } = firstRule(mock).condition;
+    expect(urlFilter).toContain(':11434');
+    expect('http://localhost:3000/api/private'.startsWith(urlFilter.slice(1))).toBe(false);
   });
 
   it('replaces the rule rather than accumulating one per provider ever configured', async () => {
@@ -43,7 +50,7 @@ describe('syncProviderOriginStripRule', () => {
     await syncProviderOriginStripRule('https://api.example.com/v1');
 
     expect(mock.dynamicRules.size).toBe(1);
-    expect(firstRule(mock).condition.requestDomains).toEqual(['api.example.com']);
+    expect(firstRule(mock).condition.urlFilter).toBe('|https://api.example.com/');
   });
 
   it('clears the rule when given undefined', async () => {

@@ -41,7 +41,10 @@ async function parseJsonOrThrow(res: Response, endpointLabel: string): Promise<u
   try {
     return await res.json();
   } catch {
-    throw new ModelListError(`${endpointLabel} responded, but not with a model list AskSQL understands. Is that the right URL?`, res.status);
+    throw new ModelListError(
+      `${endpointLabel} responded, but not with a model list AskSQL understands. Is that the right URL?`,
+      res.status,
+    );
   }
 }
 
@@ -63,14 +66,21 @@ async function listOllama(baseURL: string, signal: AbortSignal): Promise<string[
   return (body.models ?? []).map((m) => m.name).filter((n): n is string => Boolean(n && !isEmbedding(n)));
 }
 
-async function listOpenAICompatible(baseURL: string, apiKey: string | undefined, signal: AbortSignal): Promise<string[]> {
+async function listOpenAICompatible(
+  baseURL: string,
+  apiKey: string | undefined,
+  signal: AbortSignal,
+): Promise<string[]> {
   assertBaseUrl(baseURL, Boolean(apiKey));
   const res = await fetch(`${baseURL.replace(/\/$/, '')}/models`, {
     headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {},
     signal,
   });
   if (!res.ok) {
-    const msg = res.status === 401 || res.status === 403 ? `The API key was not accepted (${res.status}).` : `The endpoint replied ${res.status}.`;
+    const msg =
+      res.status === 401 || res.status === 403
+        ? `The API key was not accepted (${res.status}).`
+        : `The endpoint replied ${res.status}.`;
     throw new ModelListError(msg, res.status);
   }
   const body = (await parseJsonOrThrow(res, baseURL)) as { data?: { id?: string }[] };

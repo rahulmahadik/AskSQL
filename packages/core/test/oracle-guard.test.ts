@@ -48,6 +48,27 @@ describe('Oracle guard', () => {
     expect(guard('SELECT request FROM tickets').allowed).toBe(true);
   });
 
+  // Oracle has no LIMIT. Left to the database it is ORA-03049 after the repair loop has finished,
+  // so it is refused here where the repair loop can still rewrite it.
+  it('refuses a LIMIT clause, which Oracle cannot parse', () => {
+    for (const sql of [
+      'SELECT * FROM emp LIMIT 100',
+      'SELECT ename FROM emp ORDER BY ename LIMIT 10 OFFSET 5',
+      'select * from emp limit 5;',
+    ]) {
+      const verdict = guard(sql);
+      expect(verdict.allowed, sql).toBe(false);
+      expect(verdict.ruleId, sql).toBe('limit_unsupported');
+    }
+  });
+
+  it('leaves the row-limiting Oracle does support alone', () => {
+    expect(guard('SELECT * FROM emp FETCH FIRST 10 ROWS ONLY').allowed).toBe(true);
+    expect(guard('SELECT * FROM emp ORDER BY empno').allowed).toBe(true);
+    // "limit" inside a string is a value, not a clause.
+    expect(guard("SELECT * FROM emp WHERE note = 'limit 5'").allowed).toBe(true);
+  });
+
   it('blocks writes and DDL like every other dialect', () => {
     expect(guard('UPDATE emp SET sal = 0').allowed).toBe(false);
     expect(guard('DELETE FROM emp').allowed).toBe(false);

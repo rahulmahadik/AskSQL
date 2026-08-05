@@ -1,14 +1,48 @@
 /** Build-time only: lays the DuckDB `excel` extension out under public/duckdb-extensions/ in the $duckdb_version/$platform/ layout LOAD expects (MV3 forbids fetching WASM from extensions.duckdb.org at runtime). The engine version is not derivable from the npm semver, so the URL is discovered by running INSTALL excel in headless Chrome and capturing the request. */
 import http from 'node:http';
+import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import * as esbuild from 'esbuild';
 import puppeteer from 'puppeteer-core';
 
 const here = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const DUCKDB_DIST = path.join(here, 'node_modules/@duckdb/duckdb-wasm/dist');
 const OUT_DIR = path.join(here, 'public/duckdb-extensions');
+/** Digests of the exact bytes that ship in the signed store package, so a tag rebuild is reproducible. */
+const LOCK_PATH = path.join(here, 'scripts/duckdb-extensions.lock.json');
+
+/** True only for duckdb.org itself or a subdomain of it - a substring test also accepts duckdb.org.attacker.example. */
+export function isDuckDbExtensionUrl(url) {
+  try {
+    const { protocol, hostname } = new URL(url);
+    return (protocol === 'https:' || protocol === 'http:') && /(^|\.)duckdb\.org$/.test(hostname);
+  } catch {
+    return false;
+  }
+}
+
+/** Verifies bytes against the lockfile, recording the digest the first time a path appears. */
+export function pinDigest(lock, relative, bytes) {
+  const digest = createHash('sha256').update(bytes).digest('hex');
+  const pinned = lock[relative];
+  if (pinned && pinned !== digest) {
+    throw new Error(
+      `${relative} hashes to ${digest}, not the pinned ${pinned}. Update scripts/duckdb-extensions.lock.json only after verifying the new bytes.`,
+    );
+  }
+  if (!pinned) lock[relative] = digest;
+  return { digest, recorded: !pinned };
+}
+
+function readLock() {
+  try {
+    return JSON.parse(readFileSync(LOCK_PATH, 'utf8'));
+  } catch {
+    return {};
+  }
+}
 
 const CHROME_CANDIDATES = {
   darwin: [
@@ -104,7 +138,7 @@ async function discoverExtensionUrls(chromePath) {
     const seen = [];
     page.on('request', (req) => {
       const url = req.url();
-      if (url.includes('duckdb.org') && url.includes('excel')) seen.push(url);
+      if (isDuckDbExtensionUrl(url) && url.includes('excel')) seen.push(url);
     });
     await page.goto(`http://localhost:${port}/`);
     await page.waitForFunction(() => window.__done === true, { timeout: 30_000 });
@@ -146,7 +180,14 @@ async function main() {
     return;
   }
 
+  const lock = readLock();
+  let recordedAny = false;
   for (const url of urls) {
+    // Re-checked at the download, not only at capture: these bytes go into a signed package.
+    if (!isDuckDbExtensionUrl(url)) {
+      console.warn(`fetch-duckdb-extensions: ${url} is not on duckdb.org - skipping.`);
+      continue;
+    }
     const relative = new URL(url).pathname.replace(/^\//, '');
     const outPath = path.join(OUT_DIR, relative);
     mkdirSync(path.dirname(outPath), { recursive: true });
@@ -155,9 +196,17 @@ async function main() {
       console.warn(`fetch-duckdb-extensions: ${url} responded ${res.status} - skipping.`);
       continue;
     }
-    writeFileSync(outPath, Buffer.from(await res.arrayBuffer()));
-    console.log(`fetch-duckdb-extensions: wrote ${relative}`);
+    const bytes = Buffer.from(await res.arrayBuffer());
+    const { digest, recorded } = pinDigest(lock, relative, bytes);
+    recordedAny ||= recorded;
+    writeFileSync(outPath, bytes);
+    console.log(`fetch-duckdb-extensions: wrote ${relative} (sha256 ${digest.slice(0, 16)})`);
+  }
+  if (recordedAny) {
+    writeFileSync(LOCK_PATH, `${JSON.stringify(lock, null, 2)}\n`);
+    console.log('fetch-duckdb-extensions: recorded new digests in scripts/duckdb-extensions.lock.json - commit it.');
   }
 }
 
-await main();
+// Runs only as a script, so the URL and digest checks can be unit-tested.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) await main();

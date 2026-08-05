@@ -18,6 +18,9 @@ vi.mock('@ai-sdk/groq', () => ({
 vi.mock('@ai-sdk/openai-compatible', () => ({
   createOpenAICompatible: vi.fn((opts: unknown) => (model: string) => ({ tag: 'compat', opts, model })),
 }));
+vi.mock('@ai-sdk/azure', () => ({
+  createAzure: vi.fn((opts: unknown) => (model: string) => ({ tag: 'azure', opts, model })),
+}));
 
 import { buildModel, assertBaseUrl } from '../src/providers.js';
 import { UserFacingError } from '../src/errors.js';
@@ -122,5 +125,42 @@ describe('buildModel', () => {
 
   it('rejects an unknown provider', () => {
     expect(() => buildModel({ provider: 'mystery' as never, model: 'x' })).toThrow(/Unknown AI provider/);
+  });
+});
+
+describe('azure', () => {
+  it('builds classic Azure from a resource name, passing the model through as the deployment', () => {
+    const m = buildModel({ provider: 'azure', model: 'my-deployment', apiKey: 'k', resourceName: 'my-resource' }) as {
+      tag: string;
+      opts: { resourceName: string; apiKey: string };
+      model: string;
+    };
+    expect(m.tag).toBe('azure');
+    expect(m.opts.resourceName).toBe('my-resource');
+    expect(m.model).toBe('my-deployment');
+  });
+
+  it('builds from a baseURL alone, which is how AI Foundry endpoints are reached', () => {
+    const m = buildModel({
+      provider: 'azure',
+      model: 'gpt-5-mini',
+      apiKey: 'k',
+      baseURL: 'https://r.services.ai.azure.com/openai/v1',
+    }) as { opts: { baseURL: string; resourceName?: string } };
+    expect(m.opts.baseURL).toBe('https://r.services.ai.azure.com/openai/v1');
+    expect(m.opts.resourceName).toBeUndefined();
+  });
+
+  it('fails at config time when neither a resource name nor a baseURL is set', () => {
+    expect(() => buildModel({ provider: 'azure', model: 'x', apiKey: 'k' })).toThrow(/resource name/);
+  });
+
+  // The resource name becomes part of a hostname, so anything that could redirect the request is refused.
+  it('rejects a resource name that is not a bare Azure subdomain', () => {
+    for (const bad of ['bad_name', 'has space', '-leading', 'trailing-', 'a', 'evil.example.com', 'a/../b']) {
+      expect(() => buildModel({ provider: 'azure', model: 'x', apiKey: 'k', resourceName: bad })).toThrow(
+        /invalid characters/,
+      );
+    }
   });
 });

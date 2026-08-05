@@ -1,11 +1,7 @@
 /**
- * List the sheet names in an .xlsx workbook, in tab order.
- *
- * DuckDB's `excel` extension has no sheet-listing function (a still-open
- * upstream feature request: github.com/duckdb/duckdb-excel/issues/54) - only
- * `read_xlsx(file, sheet = 'name')` for a *known* name. So discovery happens
- * here instead: an .xlsx is a ZIP archive, and its sheet names live in
- * `xl/workbook.xml`'s `<sheet name="...">` entries.
+ * List the sheet names in an .xlsx workbook, in tab order. DuckDB's `excel`
+ * extension has no sheet-listing function (github.com/duckdb/duckdb-excel/issues/54),
+ * so the names come out of the ZIP archive's `xl/workbook.xml` entries.
  */
 import { listZipEntries, readZipEntryBytes } from './zip.js';
 
@@ -22,9 +18,7 @@ export async function listXlsxSheets(file: File): Promise<string[]> {
     const xml = new TextDecoder('utf-8').decode(bytes);
     const doc = new DOMParser().parseFromString(xml, 'application/xml');
     if (doc.getElementsByTagName('parsererror').length > 0) return [];
-    // workbook.xml declares a default namespace, so `querySelectorAll('sheet')`
-    // (which only matches the null namespace) silently matches nothing against
-    // a real file - getElementsByTagNameNS('*', ...) matches regardless.
+    // workbook.xml declares a default namespace, which `querySelectorAll('sheet')` never matches.
     return [...doc.getElementsByTagNameNS('*', 'sheet')]
       .map((el) => el.getAttribute('name'))
       .filter((name): name is string => Boolean(name));

@@ -51,6 +51,29 @@ describe('ResultChart negative values', () => {
     }
   });
 
+  it('one non-finite cell does not blank every bar in the chart', () => {
+    const { container } = render(
+      <ResultChart
+        result={rs(
+          [
+            { name: 'region', kind: 'text' },
+            { name: 'total', kind: 'number' },
+          ],
+          [
+            ['EU', 100],
+            ['NA', NaN],
+          ],
+        )}
+      />,
+    );
+    const rects = Array.from(container.querySelectorAll('rect'));
+    expect(rects.length).toBe(2);
+    for (const r of rects) {
+      expect(Number.isFinite(Number(r.getAttribute('y')))).toBe(true);
+      expect(Number.isFinite(Number(r.getAttribute('height')))).toBe(true);
+    }
+  });
+
   it('mixed-sign line points all stay inside the viewBox', () => {
     const { container } = render(
       <ResultChart

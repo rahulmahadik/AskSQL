@@ -163,10 +163,12 @@ describe('introspectPostgres', () => {
     expect(view.definition).toBe('SELECT sum(total) FROM orders');
     expect(view.columns[0]!.generated).toBe(true);
 
-    // A negative reltuples estimate clamps to 0; partition metadata is carried.
+    // reltuples -1 means "never analyzed" - unknown, not empty; partition metadata is carried.
     const part = catalog.tables.find((t) => t.name === 'orders_2024')!;
-    expect(part.rowEstimate).toBe(0);
+    expect(part.rowEstimate).toBeNull();
     expect(part.partitionOf).toBe('public.orders');
+    // A genuine zero still reports zero.
+    expect(view.rowEstimate).toBe(0);
 
     expect(catalog.enums).toEqual([{ schema: 'public', name: 'order_status', values: ['open', 'closed'] }]);
   });

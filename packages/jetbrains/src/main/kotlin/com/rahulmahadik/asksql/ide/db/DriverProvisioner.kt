@@ -31,8 +31,7 @@ object DriverProvisioner {
     private const val READ_TIMEOUT_MS = 30_000
 
     // Verified against Maven Central on 2026-07-16; re-verify (version AND hash) before bumping.
-    // Hash is pinned in source as the trust root, not fetched from Maven's own .sha256 file
-    // (same channel as the jar itself).
+    // The hash is pinned in source as the trust root, never fetched from Maven's own .sha256 file.
     private const val DUCKDB_VERSION = "1.5.4.0"
     private const val DUCKDB_SHA256 = "6bfca0c795f78bab000de41e848e730011d5c3834592042460d5fe2bd68218fd"
     private const val DUCKDB_GROUP_PATH = "org/duckdb/duckdb_jdbc"
@@ -75,10 +74,7 @@ object DriverProvisioner {
         driverClass.getDeclaredConstructor().newInstance() as Driver
     }
 
-    /**
-     * Same lazy-download/verify/isolated-classloader pattern as
-     * [duckDbDriver], for Oracle's `ojdbc11`.
-     */
+    /** Same lazy-download/verify/isolated-classloader pattern as [duckDbDriver], for Oracle's `ojdbc11`. */
     suspend fun oracleDriver(explicitJarPath: String? = null): Driver = withContext(Dispatchers.IO) {
         val loader = cachedOracleClassLoader ?: driverInitLock.withLock {
             cachedOracleClassLoader ?: run {
@@ -109,9 +105,7 @@ object DriverProvisioner {
         val tmp = Files.createTempFile(driversDir(), tempPrefix, ".jar.tmp")
         try {
             try {
-                // No explicit timeouts here would make this a fully blocking, non-cancellable call:
-                // a stalled connection to Maven Central (corporate proxy, firewall) would hang
-                // forever, since coroutine cancellation can't interrupt a plain blocking network call.
+                // Explicit timeouts: coroutine cancellation cannot interrupt this blocking network call.
                 HttpRequests.request(mavenUrl).connectTimeout(CONNECT_TIMEOUT_MS).readTimeout(READ_TIMEOUT_MS).saveToFile(tmp.toFile(), null)
             } catch (e: Exception) {
                 throw AskSqlException(
