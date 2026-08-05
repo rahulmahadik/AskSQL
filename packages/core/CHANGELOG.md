@@ -1,5 +1,76 @@
 # @asksql/core
 
+## 0.5.0
+
+### Minor Changes
+
+- 1c52198: Recognise a write request however politely it is phrased, and keep row values out of errors.
+
+  "can you delete all cancelled orders" used to come back as a SELECT. The pattern that recognises
+  a write request was anchored to the start of the question, so any preamble ("please", "can you",
+  "i need you to") hid it and the question was answered as if it asked for data. Those phrasings now
+  return the statement as a proposal AskSQL never runs, which is what every other phrasing already
+  did. A capability question ("can you delete my data?") still gets the answer written in code
+  rather than a proposed statement.
+
+  A destructive request is also recognised when it uses a verb other than the SQL keyword. "wipe the
+  orders table", "purge all old records", and the same phrasing with clear, erase, empty, flush or
+  nuke used to be answered as if they asked for data. The guard refused the statement either way, so
+  nothing was ever at risk; what was missing is that the user's intent went unacknowledged.
+
+  Routing was measured against a corpus of several thousand phrasings rather than a handful of
+  examples, which turned up five more gaps now closed: a column called `archived_at` no longer reads
+  as a request to archive data, "are there unused indexes on orders" is answered as advice instead of
+  a table listing, and "my joins on orders are slow", "the orders query is really slow" and
+  "is it worth archiving old orders" are recognised as questions about the schema rather than
+  questions about rows. The JetBrains plugin replays the same corpus, so the two implementations
+  cannot drift apart on it.
+
+  A total inflated by a one-to-many join is now caught and repaired. Summing `orders.total_cents`
+  while joined to `order_items` counts each order once per line item, which on the test fixture
+  doubles the figure; the query is valid, it runs, and nothing downstream can tell the inflated total
+  from the real one. The check reads the foreign keys already in the catalog, so it needs no
+  configuration and no assumptions about how anything is named. Aggregates over the child table,
+  `COUNT`, and `SUM(DISTINCT ...)` are left alone.
+
+  Oracle no longer fails outright on a `LIMIT` it cannot parse. Oracle has no LIMIT clause, so a
+  query carrying one used to reach the database and come back as ORA-03049, after the repair loop
+  had already finished. It is refused up front instead, which sends the query back to be rewritten
+  with the row cap applied the way Oracle expects.
+
+  Driver errors are redacted before they reach a caller: identifiers are kept, so "column x does not
+  exist" still says which column, but row values quoted back by the database are removed. A LIMIT
+  that has to be lowered is edited in place rather than re-serialized, which used to quote every
+  identifier in the statement and change `SELECT * FROM Orders` into `SELECT * FROM "Orders"`.
+  MongoDB catalogs strip sampled values at the single exit from `catalog()`, so no path can leak
+  them into a prompt while `allowDataInPrompt` is off.
+
+- 1c52198: Let a follow-up refer to a query the answer suggested in prose.
+
+  Asked something a query alone cannot answer, AskSQL replies in prose, and that reply often ends in
+  a query. Saying "run that query" next used to be answered as a brand-new question, because only
+  turns that produced SQL were remembered and a prose turn produced none. The query came back as
+  `SELECT * FROM one_table`, and asking again got the honest but unhelpful reply that no previous
+  query existed - the model had never been shown one.
+
+  A prose answer now hands back the query it suggested, as `proposedSql`, and every surface records
+  that as the turn's query. Only a read-only query is carried: a write is offered as a proposal to
+  run by hand, and "run that" must never resolve to one.
+
+  "Run that query" is also recognised for what it is. It asks for the query already on screen rather
+  than a new one, which a model reads as a request it cannot answer from the schema, so it gave up
+  instead. It now reproduces the query it was shown.
+
+### Patch Changes
+
+- 1c52198: Declare `zod`, so the package imports under a package manager that does not auto-install peers.
+
+  `ai` requires `zod` as a peer dependency and nothing in AskSQL passed that on. npm 7+ and pnpm
+  install peers automatically, which hid it; Yarn Classic, Yarn PnP and any `--legacy-peer-deps`
+  install left `import '@asksql/core'` throwing `Cannot find package 'zod'` before a single line of
+  AskSQL ran. The declared range mirrors what `ai` accepts, so a project already on zod 3 keeps one
+  copy rather than gaining a second.
+
 ## 0.4.0
 
 ### Minor Changes
