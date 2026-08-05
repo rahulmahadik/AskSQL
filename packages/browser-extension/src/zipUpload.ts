@@ -1,21 +1,14 @@
 /**
- * Expand an uploaded .zip into the data files inside it. Only recognized
- * formats are extracted - anything else (a README, a folder, an unrelated
- * file type) is silently skipped rather than failing the whole upload, since
- * a zip of "everything from this export" routinely has files AskSQL can't
- * use alongside the ones it can.
+ * Expand an uploaded .zip into the data files inside it. Only recognized formats
+ * are extracted; anything else is skipped rather than failing the whole upload.
  */
 import { listZipEntries, readZipEntryBytes, type ZipEntry } from './zip.js';
 
-// Must stay in step with ACCEPTED_UPLOAD_EXTENSIONS in fileConnections.ts, or a
-// file type the picker accepts would be silently dropped from inside a zip.
+// Must stay in step with ACCEPTED_UPLOAD_EXTENSIONS in fileConnections.ts.
 // `tsv` is read by the same read_csv_auto path as `csv` (DuckDB sniffs the delimiter).
 const SUPPORTED_EXTENSIONS = new Set(['csv', 'tsv', 'json', 'ndjson', 'parquet', 'xlsx', 'sql']);
 
-// A DuckDB-WASM instance shares the tab's memory, so an unbounded zip bomb
-// (a tiny compressed file claiming to inflate to gigabytes) can crash the
-// side panel. These defaults are generous for real data exports, not a bomb;
-// exposed as overridable limits so tests don't need to allocate real gigabytes.
+// Zip-bomb caps - a DuckDB-WASM instance shares the tab's memory. Overridable for tests.
 export interface ZipLimits {
   readonly maxEntries: number;
   readonly maxTotalUncompressedBytes: number;
@@ -63,21 +56,19 @@ export async function expandZipFile(zipFile: File, limits: ZipLimits = DEFAULT_Z
       skipped.push(entry.name);
       continue;
     }
-    // Checked against the *declared* sizes before touching the decompressor -
-    // a real zip bomb is a tiny compressedSize claiming a huge uncompressedSize.
+    // Checked against the *declared* sizes before touching the decompressor.
     if (entry.compressedSize > 0 && entry.uncompressedSize / entry.compressedSize > limits.maxCompressionRatio) {
       throw new Error(`"${entry.name}" has a suspiciously high compression ratio - refusing to extract it.`);
     }
     totalUncompressed += entry.uncompressedSize;
     if (totalUncompressed > limits.maxTotalUncompressedBytes) {
-      throw new Error(`This zip's contents exceed the ${limits.maxTotalUncompressedBytes / (1024 * 1024)} MB limit once extracted.`);
+      throw new Error(
+        `This zip's contents exceed the ${limits.maxTotalUncompressedBytes / (1024 * 1024)} MB limit once extracted.`,
+      );
     }
     const bytes = await readZipEntryBytes(buffer, entry);
     const basename = entry.name.split('/').pop()!;
-    // .slice() copies into a fresh, non-shared ArrayBuffer - readZipEntryBytes'
-    // "stored" (uncompressed) path returns a view into the whole archive
-    // buffer, not an isolated copy, so this also guards against a Blob
-    // implementation reading past the entry's own bytes.
+    // .slice() copies into a fresh ArrayBuffer; the "stored" path returns a view into the archive.
     files.push(new File([bytes.slice()], basename));
   }
   return { files, skipped };

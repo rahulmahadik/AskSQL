@@ -3,7 +3,9 @@ import { providerOrigin } from '../src/providerOrigin.js';
 
 describe('providerOrigin', () => {
   it('prefers an explicit baseURL override', () => {
-    expect(providerOrigin({ provider: 'ollama', baseURL: 'http://localhost:9999/v1' })).toBe('http://localhost:9999/v1');
+    expect(providerOrigin({ provider: 'ollama', baseURL: 'http://localhost:9999/v1' })).toBe(
+      'http://localhost:9999/v1',
+    );
   });
 
   it('falls back to the known default host for a cloud provider', () => {

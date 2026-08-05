@@ -96,6 +96,18 @@ describe('engine settings', () => {
     await setEngineSettings(custom);
     expect(await getEngineSettings()).toEqual(custom);
   });
+
+  it('refuses a stored row cap the guard would turn into LIMIT -1', async () => {
+    await chrome.storage.local.set({ 'asksql.engine': { maxRows: -1 } });
+    expect((await getEngineSettings()).maxRows).toBe(DEFAULT_ENGINE_SETTINGS.maxRows);
+  });
+
+  it('bounds a stored value that is out of range or not a number at all', async () => {
+    await chrome.storage.local.set({ 'asksql.engine': { maxRows: 999_999, maxSchemaTokens: 'lots' } });
+    const settings = await getEngineSettings();
+    expect(settings.maxRows).toBe(10_000);
+    expect(settings.maxSchemaTokens).toBe(DEFAULT_ENGINE_SETTINGS.maxSchemaTokens);
+  });
 });
 
 describe('connections', () => {

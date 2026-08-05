@@ -23,7 +23,9 @@ describe('background', () => {
     await Promise.resolve();
 
     expect(mock.setPanelBehaviorCalls).toEqual([{ openPanelOnActionClick: true }]);
-    expect(mock.contextMenuCreateCalls).toEqual([{ id: MENU_ID, title: 'Ask AskSQL about selection', contexts: ['selection'] }]);
+    expect(mock.contextMenuCreateCalls).toEqual([
+      { id: MENU_ID, title: 'Ask AskSQL about selection', contexts: ['selection'] },
+    ]);
   });
 
   it('clicking the menu with a real selection opens the side panel and hands off the question', async () => {
@@ -64,7 +66,9 @@ describe('background', () => {
     await import('../src/background.js');
     mock.fireOnInstalled();
 
-    expect(consoleError).toHaveBeenCalledWith(expect.stringContaining('contextMenus.create'), { message: 'duplicate id' });
+    expect(consoleError).toHaveBeenCalledWith(expect.stringContaining('contextMenus.create'), {
+      message: 'duplicate id',
+    });
   });
 
   it('logs when sidePanel.open rejects', async () => {

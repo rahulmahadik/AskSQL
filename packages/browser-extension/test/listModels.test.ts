@@ -74,7 +74,9 @@ describe('fetchProviderModels', () => {
   });
 
   it('lists openai-compatible models from the /models endpoint, filtering out embedding models', async () => {
-    globalThis.fetch = vi.fn(async () => jsonResponse(200, { data: [{ id: 'gpt-5' }, { id: 'text-embedding-3' }] })) as typeof fetch;
+    globalThis.fetch = vi.fn(async () =>
+      jsonResponse(200, { data: [{ id: 'gpt-5' }, { id: 'text-embedding-3' }] }),
+    ) as typeof fetch;
     expect(await fetchProviderModels('openai', undefined, 'sk-test')).toEqual(['gpt-5']);
   });
 
@@ -110,13 +112,23 @@ describe('fetchProviderModels', () => {
   });
 
   it('reports a clear error for a 200 response whose body is not valid JSON (ollama) instead of silently reporting no models', async () => {
-    globalThis.fetch = vi.fn(async () => ({ ok: true, status: 200, json: async () => Promise.reject(new Error('bad json')) })) as unknown as typeof fetch;
+    globalThis.fetch = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => Promise.reject(new Error('bad json')),
+    })) as unknown as typeof fetch;
     await expect(fetchProviderModels('ollama', undefined, undefined)).rejects.toThrow(/model list AskSQL understands/);
   });
 
   it('reports a clear error for a 200 response whose body is not valid JSON (openai-compatible) instead of silently reporting no models', async () => {
-    globalThis.fetch = vi.fn(async () => ({ ok: true, status: 200, json: async () => Promise.reject(new Error('bad json')) })) as unknown as typeof fetch;
-    await expect(fetchProviderModels('openai-compatible', 'https://my-gateway/v1', undefined)).rejects.toThrow(/model list AskSQL understands/);
+    globalThis.fetch = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => Promise.reject(new Error('bad json')),
+    })) as unknown as typeof fetch;
+    await expect(fetchProviderModels('openai-compatible', 'https://my-gateway/v1', undefined)).rejects.toThrow(
+      /model list AskSQL understands/,
+    );
   });
 
   it('ModelListError carries the HTTP status alongside the message', async () => {

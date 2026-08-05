@@ -223,10 +223,41 @@
             "google",
             "groq",
             "nvidia",
+            "azure",
             "openai-compatible"
           ],
           "markdownDescription": "AI provider. `ollama` runs fully local and needs no API key; `groq` and `nvidia` offer free tiers. Run **AskSQL: Select AI Provider** to set the provider, key, and model together.",
           "scope": "machine"
+        },
+        "asksql.resourceName": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "markdownDescription": "Classic Azure OpenAI resource subdomain, from `https://<resourceName>.openai.azure.com`. Used only when `#asksql.provider#` is `azure` and no `#asksql.baseURL#` is set. For Azure AI Foundry endpoints, leave this empty and set `#asksql.baseURL#` instead. With `azure`, `#asksql.model#` is your **deployment name**, not the base model name."
+        },
+        "asksql.customInstructions": {
+          "type": "string",
+          "default": "",
+          "editPresentation": "multilineText",
+          "markdownDescription": "Extra instructions appended to the system prompt, for house rules the model cannot infer from the schema (\"amounts are in cents\", \"prefer the `v_` views\"). Additive: the built-in read-only rules always still apply.",
+          "scope": "window"
+        },
+        "asksql.glossary": {
+          "type": "object",
+          "default": {},
+          "additionalProperties": {
+            "type": "string"
+          },
+          "markdownDescription": "Business terms the schema does not define, as `term: definition`. Use it when a word means something specific here (`\"big order\": \"an order whose total_cents is over 100000\"`) or when a column stores a unit its name only hints at (`\"revenue in dollars\": \"sum of orders.total_cents divided by 100\"`). Definitions are given to the model with the schema.",
+          "scope": "window"
+        },
+        "asksql.maxSchemaTokens": {
+          "type": "number",
+          "default": 6000,
+          "minimum": 1000,
+          "maximum": 60000,
+          "description": "Approximate token budget for the schema section of the prompt. Raise it on a large schema so more tables survive pruning; lower it to cut cost and latency.",
+          "scope": "window"
         },
         "asksql.model": {
           "type": "string",
@@ -446,6 +477,7 @@
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^4.0.14",
+    "@ai-sdk/azure": "^4.0.13",
     "@ai-sdk/google": "^4.0.14",
     "@ai-sdk/groq": "^4.0.10",
     "@ai-sdk/openai": "^4.0.13",

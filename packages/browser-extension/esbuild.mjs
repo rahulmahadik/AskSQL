@@ -37,12 +37,7 @@ function copyStatic() {
   const duckdbDist = path.join(here, 'node_modules/@duckdb/duckdb-wasm/dist');
   const duckdbOut = path.join(dist, 'duckdb-wasm');
   mkdirSync(duckdbOut, { recursive: true });
-  const assets = [
-    'duckdb-mvp.wasm',
-    'duckdb-browser-mvp.worker.js',
-    'duckdb-eh.wasm',
-    'duckdb-browser-eh.worker.js',
-  ];
+  const assets = ['duckdb-mvp.wasm', 'duckdb-browser-mvp.worker.js', 'duckdb-eh.wasm', 'duckdb-browser-eh.worker.js'];
   for (const asset of assets) {
     const src = path.join(duckdbDist, asset);
     if (!existsSync(src)) {

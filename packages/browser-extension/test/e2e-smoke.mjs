@@ -69,14 +69,18 @@ async function createFileConnection(browser, extensionId, name, files) {
   const addBtn = await findButton(page, 'Add connection');
   await addBtn.click();
   await page.waitForFunction(
-    (n) => [...document.querySelectorAll('.asksql-ext-status')].some((el) => (el.textContent ?? '').includes(`Added "${n}"`)),
+    (n) =>
+      [...document.querySelectorAll('.asksql-ext-status')].some((el) =>
+        (el.textContent ?? '').includes(`Added "${n}"`),
+      ),
     { timeout: 60_000 },
     name,
   );
   const status = await page.evaluate(
     (n) =>
-      [...document.querySelectorAll('.asksql-ext-status')].map((el) => el.textContent ?? '').find((t) => t.includes(`Added "${n}"`)) ??
-      '',
+      [...document.querySelectorAll('.asksql-ext-status')]
+        .map((el) => el.textContent ?? '')
+        .find((t) => t.includes(`Added "${n}"`)) ?? '',
     name,
   );
   await page.close();
@@ -164,7 +168,9 @@ async function startFakeSidecar() {
 
 async function findExtensionId(browser) {
   for (let i = 0; i < 20; i++) {
-    const sw = browser.targets().find((t) => t.type() === 'service_worker' && t.url().startsWith('chrome-extension://'));
+    const sw = browser
+      .targets()
+      .find((t) => t.type() === 'service_worker' && t.url().startsWith('chrome-extension://'));
     if (sw) return new URL(sw.url()).host;
     await new Promise((r) => setTimeout(r, 250));
   }
@@ -201,7 +207,9 @@ function startStrictOriginProvider() {
       );
     });
   });
-  return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve({ server, port: server.address().port, seen })));
+  return new Promise((resolve) =>
+    server.listen(0, '127.0.0.1', () => resolve({ server, port: server.address().port, seen })),
+  );
 }
 
 /** Regression: Chrome attaches Origin to the chat-completions POST even with host permission (GETs are unaffected), so a strict provider 403s it. permissions.request() cannot be driven headlessly, so this loads a dist/ copy whose manifest grants localhost up front; the shipped code path then runs unmodified. */
@@ -252,7 +260,10 @@ async function runOriginStripSection() {
     await page.waitForSelector('#baseURL', { timeout: 10_000 });
 
     const savedLabel = await page.$$eval('button', (b) => b.map((x) => x.textContent));
-    assert(savedLabel.includes('Saved'), `Settings: a freshly loaded page shows no unsaved changes (buttons: ${JSON.stringify(savedLabel)})`);
+    assert(
+      savedLabel.includes('Saved'),
+      `Settings: a freshly loaded page shows no unsaved changes (buttons: ${JSON.stringify(savedLabel)})`,
+    );
 
     const testBtn = await findButton(page, 'Test provider');
     await testBtn.click();
@@ -306,7 +317,10 @@ async function main() {
 
     await section('Data file connection', async () => {
       const status = await createFileConnection(browser, extensionId, 'Sales', [csvFixture]);
-      assert(status.includes('1 table(s)'), `Data files: Settings builds a named connection from an upload (got: ${status})`);
+      assert(
+        status.includes('1 table(s)'),
+        `Data files: Settings builds a named connection from an upload (got: ${status})`,
+      );
 
       const page = await openSidePanelAndConnect(browser, extensionId, 'Sales', 'SELECT COUNT(*) AS n FROM sales');
       const pageErrors = [];
@@ -324,7 +338,10 @@ async function main() {
         await page.evaluate(() => Boolean(document.querySelector('.asksql-table'))),
         `Data files: a question round-trips through the real guard+engine to a result table (sql: ${sql})${errorText ? ` (error: ${errorText})` : ''}`,
       );
-      assert(pageErrors.length === 0, `Data files: no uncaught page errors${pageErrors.length ? ` (${pageErrors.join('; ')})` : ''}`);
+      assert(
+        pageErrors.length === 0,
+        `Data files: no uncaught page errors${pageErrors.length ? ` (${pageErrors.join('; ')})` : ''}`,
+      );
       await page.close();
     });
 
@@ -379,7 +396,9 @@ async function main() {
         assert(direct.status === 200, 'Sidecar: the fake server itself answers /connections (sanity check)');
 
         const optionsPage = await browser.newPage();
-        await optionsPage.goto(`chrome-extension://${extensionId}/options/index.html`, { waitUntil: 'domcontentloaded' });
+        await optionsPage.goto(`chrome-extension://${extensionId}/options/index.html`, {
+          waitUntil: 'domcontentloaded',
+        });
         await optionsPage.waitForSelector('#connType', { timeout: 10_000 });
         await optionsPage.select('#connType', 'server');
         await optionsPage.type('#connName', 'Local test sidecar');
@@ -387,7 +406,10 @@ async function main() {
         const addBtn = await findButton(optionsPage, 'Add connection');
         await addBtn.click();
         await optionsPage.waitForFunction(
-          () => [...document.querySelectorAll('.asksql-ext-status')].some((el) => (el.textContent ?? '').includes('Connection added')),
+          () =>
+            [...document.querySelectorAll('.asksql-ext-status')].some((el) =>
+              (el.textContent ?? '').includes('Connection added'),
+            ),
           { timeout: 10_000 },
         );
         assert(
@@ -397,7 +419,9 @@ async function main() {
         await optionsPage.close();
 
         const sidePanel = await browser.newPage();
-        await sidePanel.goto(`chrome-extension://${extensionId}/sidepanel/index.html`, { waitUntil: 'domcontentloaded' });
+        await sidePanel.goto(`chrome-extension://${extensionId}/sidepanel/index.html`, {
+          waitUntil: 'domcontentloaded',
+        });
         await sidePanel.waitForSelector('#connection', { timeout: 15_000 });
 
         const labels = await sidePanel.evaluate(() =>

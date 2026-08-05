@@ -46,9 +46,8 @@ export async function openFileConnector(connection: FileConnection): Promise<Duc
 }
 
 /**
- * A `.sql` dump is executed by registerFile() and creates whatever tables its
- * own CREATE TABLE statements name, so it is already durable and must not go
- * through the materialize-then-drop-view path (the "view" is a real table).
+ * A `.sql` dump creates its own tables when executed, so it is already durable
+ * and skips the materialize-then-drop-view path.
  */
 async function registerAndMaterialize(
   connector: DuckDbWasmConnector,
@@ -65,11 +64,22 @@ async function registerAndMaterialize(
   await connector.execute(`DROP VIEW ${quoteIdent(scratch)}`);
 }
 
+/** Pick a table name no earlier file in this upload has taken. */
+function uniqueTableName(base: string, claimed: ReadonlySet<string>): string {
+  if (!claimed.has(base)) return base;
+  for (let i = 2; i < 10_000; i++) {
+    const candidate = `${base}_${i}`.slice(0, 63);
+    if (!claimed.has(candidate)) return candidate;
+  }
+  return `${base}_${claimed.size}`;
+}
+
+/** Loads every file into its own table, returning the `original -> renamed` pairs a collision forced. */
 async function loadFiles(
   connector: DuckDbWasmConnector,
   files: readonly File[],
   onStatus: (s: string) => void,
-): Promise<void> {
+): Promise<string[]> {
   if (files.some(isXlsxFile)) {
     try {
       await connector.execute(`SET custom_extension_repository = '${XLSX_EXTENSION_REPOSITORY}';`);
@@ -79,18 +89,34 @@ async function loadFiles(
       );
     }
   }
+  const claimed = new Set<string>();
+  const renamed: string[] = [];
+  const claim = (base: string): string => {
+    const table = uniqueTableName(base, claimed);
+    claimed.add(table);
+    if (table !== base) renamed.push(`${base} -> ${table}`);
+    return table;
+  };
+
   for (const file of files) {
     onStatus(`Loading ${file.name}...`);
     const baseTable = sanitizeTableName(file.name);
+    if (isSqlDumpFile(file)) {
+      await registerAndMaterialize(connector, baseTable, file);
+      // A dump names its own tables; claim them so a later file cannot replace one.
+      for (const t of (await connector.introspect()).tables) claimed.add(t.name);
+      continue;
+    }
     const sheets = isXlsxFile(file) ? await listXlsxSheets(file) : [];
     if (sheets.length <= 1) {
-      await registerAndMaterialize(connector, baseTable, file);
+      await registerAndMaterialize(connector, claim(baseTable), file);
       continue;
     }
     for (const sheet of sheets) {
-      await registerAndMaterialize(connector, sanitizeTableName(`${baseTable}_${sheet}`), file, sheet);
+      await registerAndMaterialize(connector, claim(sanitizeTableName(`${baseTable}_${sheet}`)), file, sheet);
     }
   }
+  return renamed;
 }
 
 /** Expands any .zip in the selection into the data files it holds, reporting what was left out. */
@@ -113,12 +139,13 @@ export interface CreatedFileConnection {
   readonly connection: FileConnection;
   readonly connections: FileConnection[];
   readonly skipped: readonly string[];
+  /** `original -> renamed` for every file whose table name collided with an earlier one. */
+  readonly renamed: readonly string[];
 }
 
 /**
- * Builds a new connection from the selected files. The database is left on
- * disk and closed - the side panel opens it later, exactly as it would a
- * connection created in an earlier browser session.
+ * Builds a new connection from the selected files, leaving the database on disk
+ * and closed for the side panel to open later.
  */
 export async function createFileConnection(
   name: string,
@@ -138,12 +165,12 @@ export async function createFileConnection(
   const connector = new DuckDbWasmConnector({ id, name: trimmed, bundles: BUNDLES, persistPath: databasePath(id) });
   await connector.connect();
   try {
-    await loadFiles(connector, files, onStatus);
+    const renamed = await loadFiles(connector, files, onStatus);
     const catalog = await connector.introspect();
     const connection: FileConnection = { id, name: trimmed, tables: catalog.tables.map((t) => t.name) };
     const connections = [...(await getFileConnections()), connection];
     await setFileConnections(connections);
-    return { connection, connections, skipped };
+    return { connection, connections, skipped, renamed };
   } catch (err) {
     // Never leave a half-built database behind that no connection points at.
     await removePersistedDatabase(id).catch(() => {});

@@ -8,6 +8,8 @@ import { assertBaseUrl, type ProviderName } from '@asksql/core';
 import { HttpTransport } from '@asksql/react';
 import {
   addConnection,
+  boundedInt,
+  ENGINE_LIMITS,
   getConnections,
   getEngineSettings,
   getProviderSettings,
@@ -58,9 +60,7 @@ const PROVIDERS: ProviderName[] = [
   'openai-compatible',
 ];
 
-// azure has no fixed host (each customer has their own resource) and
-// openai-compatible is a generic passthrough - both fail fast in
-// @asksql/core if left empty. Every other provider has a real default host.
+// azure has no fixed host and openai-compatible is a generic passthrough; the rest have defaults.
 const BASE_URL_PLACEHOLDER: Readonly<Record<ProviderName, string>> = {
   ollama: 'http://localhost:11434/v1',
   groq: '',
@@ -98,7 +98,8 @@ function ProviderSection({
     setModelsStatus('');
   }, [provider.provider, provider.baseURL]);
 
-  const needsKey = provider.provider !== 'ollama' && provider.provider !== 'openai-compatible';
+  // Ollama is the one provider that never authenticates; an openai-compatible gateway usually does.
+  const needsKey = provider.provider !== 'ollama';
   const canListModels = Boolean(listableBaseUrl(provider.provider, provider.baseURL));
   const baseUrlRequired = provider.provider === 'azure' || provider.provider === 'openai-compatible';
 
@@ -114,8 +115,7 @@ function ProviderSection({
     }
   };
 
-  // Edits stay local until Save, so typing a model name is not a stream of
-  // writes (and a half-typed one never becomes the active setting).
+  // Edits stay local until Save, so a half-typed model name never becomes the active setting.
   const edit = (next: ProviderSettings) => {
     onChange(next);
     setSaved(false);
@@ -165,8 +165,8 @@ function ProviderSection({
       <h2>AI provider</h2>
       {!warningAcknowledged && needsKey && (
         <div className="asksql-ext-warning">
-          API keys are stored in this browser profile's local storage, which is not encrypted at rest (there is no
-          OS keychain available to a browser extension). Only enter a key you're comfortable with that tradeoff.
+          API keys are stored in this browser profile's local storage, which is not encrypted at rest (there is no OS
+          keychain available to a browser extension). Only enter a key you're comfortable with that tradeoff.
         </div>
       )}
       <div className="asksql-ext-field">
@@ -174,7 +174,8 @@ function ProviderSection({
         <select
           id="provider"
           value={provider.provider}
-          onChange={(e) => edit({ ...provider, provider: e.target.value as ProviderName })}
+          // Key and endpoint belong to the provider they were entered for, so they do not carry over.
+          onChange={(e) => edit({ provider: e.target.value as ProviderName, model: provider.model })}
         >
           {PROVIDERS.map((p) => (
             <option key={p} value={p}>
@@ -283,10 +284,12 @@ function EngineSection({
         <input
           id="maxRows"
           type="number"
-          min={1}
-          max={10000}
+          min={ENGINE_LIMITS.maxRows.min}
+          max={ENGINE_LIMITS.maxRows.max}
           value={engine.maxRows}
-          onChange={(e) => edit({ ...engine, maxRows: Number(e.target.value) || engine.maxRows })}
+          onChange={(e) =>
+            edit({ ...engine, maxRows: boundedInt(e.target.value, ENGINE_LIMITS.maxRows, engine.maxRows) })
+          }
         />
       </div>
       <label className="asksql-ext-checkbox">
@@ -321,14 +324,19 @@ function EngineSection({
         <input
           id="maxSchemaTokens"
           type="number"
-          min={1000}
-          max={60000}
+          min={ENGINE_LIMITS.maxSchemaTokens.min}
+          max={ENGINE_LIMITS.maxSchemaTokens.max}
           value={engine.maxSchemaTokens}
-          onChange={(e) => edit({ ...engine, maxSchemaTokens: Number(e.target.value) || engine.maxSchemaTokens })}
+          onChange={(e) =>
+            edit({
+              ...engine,
+              maxSchemaTokens: boundedInt(e.target.value, ENGINE_LIMITS.maxSchemaTokens, engine.maxSchemaTokens),
+            })
+          }
         />
         <p className="asksql-ext-status">
-          Applies to data file connections. A sidecar builds its own prompts, so it uses the budget configured
-          on the server.
+          Applies to data file connections. A sidecar builds its own prompts, so it uses the budget configured on the
+          server.
         </p>
       </div>
       <div className="asksql-ext-field">
@@ -341,15 +349,15 @@ function EngineSection({
           onChange={(e) => edit({ ...engine, customInstructions: e.target.value })}
         />
         <p className="asksql-ext-status">
-          <strong>Added to</strong> the built-in rules, not a replacement for them. Read-only is enforced by a SQL
-          guard after generation, so nothing written here can allow a write. Applies to data file connections -
-          a sidecar builds its own prompts, so instructions for it go in the server's configuration.
+          <strong>Added to</strong> the built-in rules, not a replacement for them. Read-only is enforced by a SQL guard
+          after generation, so nothing written here can allow a write. Applies to data file connections - a sidecar
+          builds its own prompts, so instructions for it go in the server's configuration.
         </p>
       </div>
       <p className="asksql-ext-status">
         Sampling real column values to help the model match casing/spelling isn't available in this extension: it's a
-        per-connector setting configured only on a running @asksql/server sidecar, not something this options page
-        can control.
+        per-connector setting configured only on a running @asksql/server sidecar, not something this options page can
+        control.
       </p>
       <button className="asksql-ext-btn" disabled={saved} onClick={() => void save()}>
         {saved ? 'Saved' : 'Save'}
@@ -374,10 +382,9 @@ interface ConnectionRow {
 function ServerSetup({ baseUrl, provider }: { baseUrl: string; provider: ProviderSettings }): JSX.Element {
   const [state, setState] = useState<ServerState>({ kind: 'idle' });
   const [copied, setCopied] = useState(false);
-  const command = serveCommand(provider.provider, provider.model);
+  const command = serveCommand(provider);
 
-  // Keystrokes in the URL field fire overlapping probes; only the newest may
-  // win, or a slow "unreachable" for an old URL overwrites a fresh "running".
+  // Keystrokes in the URL field fire overlapping probes; only the newest may win.
   const probeSeq = useRef(0);
   const probe = async () => {
     const seq = ++probeSeq.current;
@@ -391,9 +398,7 @@ function ServerSetup({ baseUrl, provider }: { baseUrl: string; provider: Provide
     // Re-probe when the target changes, so the badge never describes a stale URL.
   }, [baseUrl]);
 
-  // On a fresh install no host permission is granted, so the silent mount-probe
-  // reads as "not running" even when a server IS up. The button click is a user
-  // gesture, which is allowed to raise the permission prompt - request, then probe.
+  // Only a user gesture may raise the permission prompt, so the click requests access then probes.
   const check = async () => {
     try {
       await ensureOriginAccess(baseUrl.trim());
@@ -430,11 +435,17 @@ function ServerSetup({ baseUrl, provider }: { baseUrl: string; provider: Provide
           : "A browser extension can't open a database socket, so a small server on your machine makes the connection - for cloud databases too. Run this in a terminal and leave it open:"}
       </p>
       <pre className="asksql-ext-command">{command}</pre>
+      {!provider.model.trim() && (
+        <p className="asksql-ext-status">Pick a model above first - the command carries a placeholder until you do.</p>
+      )}
       {state.kind !== 'running' && (
         <p className="asksql-ext-status">
-          Needs <a href="https://nodejs.org" target="_blank" rel="noreferrer">Node.js</a> 20 or newer. Prefer
-          installing it once? <code>{installCommand()}</code> (or the pnpm/yarn equivalent), then run{' '}
-          <code>asksql serve …</code> directly.
+          Needs{' '}
+          <a href="https://nodejs.org" target="_blank" rel="noreferrer">
+            Node.js
+          </a>{' '}
+          20 or newer. Prefer installing it once? <code>{installCommand()}</code> (or the pnpm/yarn equivalent), then
+          run <code>asksql serve …</code> directly.
         </p>
       )}
       <div className="asksql-ext-actions">
@@ -447,8 +458,8 @@ function ServerSetup({ baseUrl, provider }: { baseUrl: string; provider: Provide
       </div>
       {state.kind !== 'running' && (
         <p className="asksql-ext-status">
-          The model above is used for data file connections. A database connection uses the model the server was
-          started with - that's why it appears in the command.
+          The model above is used for data file connections. A database connection uses the model the server was started
+          with - that's why it appears in the command.
         </p>
       )}
     </div>
@@ -547,10 +558,12 @@ function ConnectionsSection({ provider }: { provider: ProviderSettings }): JSX.E
   };
 
   const addFiles = async () => {
-    const { connection, connections, skipped } = await createFileConnection(name, files, setStatus);
+    const { connection, connections, skipped, renamed } = await createFileConnection(name, files, setStatus);
     setFileConnections(connections);
-    const skippedNote = skipped.length > 0 ? ` Skipped ${skipped.length} unsupported file(s): ${skipped.join(', ')}.` : '';
-    setStatus(`Added "${connection.name}" with ${connection.tables.length} table(s).${skippedNote}`);
+    const skippedNote =
+      skipped.length > 0 ? ` Skipped ${skipped.length} unsupported file(s): ${skipped.join(', ')}.` : '';
+    const renamedNote = renamed.length > 0 ? ` Renamed to keep names unique: ${renamed.join(', ')}.` : '';
+    setStatus(`Added "${connection.name}" with ${connection.tables.length} table(s).${skippedNote}${renamedNote}`);
   };
 
   const addServer = async () => {
@@ -558,7 +571,12 @@ function ConnectionsSection({ provider }: { provider: ProviderSettings }): JSX.E
     const trimmedAuth = authHeader.trim();
     assertBaseUrl(trimmedUrl, Boolean(trimmedAuth));
     setServers(
-      await addConnection({ id: newId(), name: name.trim(), baseUrl: trimmedUrl, authHeader: trimmedAuth || undefined }),
+      await addConnection({
+        id: newId(),
+        name: name.trim(),
+        baseUrl: trimmedUrl,
+        authHeader: trimmedAuth || undefined,
+      }),
     );
     setBaseUrl('');
     setAuthHeader('');
@@ -569,7 +587,12 @@ function ConnectionsSection({ provider }: { provider: ProviderSettings }): JSX.E
     if (!(await ensureOriginAccess(baseUrl.trim()))) {
       throw new Error(permissionDeniedMessage(baseUrl.trim()));
     }
-    const created = await createRemoteDatabaseConnection(baseUrl.trim(), authHeader.trim() || undefined, name.trim(), db);
+    const created = await createRemoteDatabaseConnection(
+      baseUrl.trim(),
+      authHeader.trim() || undefined,
+      name.trim(),
+      db,
+    );
     setServers(
       await addConnection({
         id: newId(),
@@ -678,7 +701,8 @@ function ConnectionsSection({ provider }: { provider: ProviderSettings }): JSX.E
       const described = found.map((c) => `${c.name} (${c.engine}${c.database ? ` · ${c.database}` : ''})`);
       setDatabases((prev) => ({
         ...prev,
-        [connection.id]: described.length > 0 ? `databases: ${described.join(', ')}` : `AskSQL server - ${connection.baseUrl}`,
+        [connection.id]:
+          described.length > 0 ? `databases: ${described.join(', ')}` : `AskSQL server - ${connection.baseUrl}`,
       }));
       setStatus(
         described.length > 0
@@ -798,23 +822,43 @@ function ConnectionsSection({ provider }: { provider: ProviderSettings }): JSX.E
             <>
               <div className="asksql-ext-field">
                 <label htmlFor="dbHost">Host</label>
-                <input id="dbHost" type="text" value={db.host} onChange={(e) => setDb({ ...db, host: e.target.value })} />
+                <input
+                  id="dbHost"
+                  type="text"
+                  value={db.host}
+                  onChange={(e) => setDb({ ...db, host: e.target.value })}
+                />
               </div>
               <div className="asksql-ext-field">
                 <label htmlFor="dbPort">Port</label>
-                <input id="dbPort" type="number" value={db.port} onChange={(e) => setDb({ ...db, port: e.target.value })} />
+                <input
+                  id="dbPort"
+                  type="number"
+                  value={db.port}
+                  onChange={(e) => setDb({ ...db, port: e.target.value })}
+                />
               </div>
             </>
           )}
           <div className="asksql-ext-field">
             <label htmlFor="dbName">{ENGINE_PROFILES[db.engine].databaseLabel}</label>
-            <input id="dbName" type="text" value={db.database} onChange={(e) => setDb({ ...db, database: e.target.value })} />
+            <input
+              id="dbName"
+              type="text"
+              value={db.database}
+              onChange={(e) => setDb({ ...db, database: e.target.value })}
+            />
           </div>
           {!ENGINE_PROFILES[db.engine].usesFilePath && (
             <>
               <div className="asksql-ext-field">
                 <label htmlFor="dbUser">User</label>
-                <input id="dbUser" type="text" value={db.user} onChange={(e) => setDb({ ...db, user: e.target.value })} />
+                <input
+                  id="dbUser"
+                  type="text"
+                  value={db.user}
+                  onChange={(e) => setDb({ ...db, user: e.target.value })}
+                />
               </div>
               <div className="asksql-ext-field">
                 <label htmlFor="dbPassword">Password</label>
@@ -917,7 +961,11 @@ function DiagnosticsSection(): JSX.Element {
         userAgent: navigator.userAgent,
         provider: { provider: provider.provider, model: provider.model, hasApiKey: Boolean(provider.apiKey) },
         engine,
-        connections: connections.map((c) => ({ name: c.name, baseUrl: c.baseUrl, hasAuthHeader: Boolean(c.authHeader) })),
+        connections: connections.map((c) => ({
+          name: c.name,
+          baseUrl: c.baseUrl,
+          hasAuthHeader: Boolean(c.authHeader),
+        })),
       };
       setReport(JSON.stringify(sanitized, null, 2));
       setStatus('');
@@ -973,9 +1021,8 @@ function ResetSection({ onSettingsReset }: { onSettingsReset: () => void }): JSX
             </button>
           </div>
           <p className="asksql-ext-status">
-            "Reset settings" puts the AI provider and engine options back to their defaults and keeps every
-            connection. "Reset everything" also removes all connections, their stored data, and granted site
-            permissions.
+            "Reset settings" puts the AI provider and engine options back to their defaults and keeps every connection.
+            "Reset everything" also removes all connections, their stored data, and granted site permissions.
           </p>
         </>
       )}
@@ -995,8 +1042,8 @@ function ResetSection({ onSettingsReset }: { onSettingsReset: () => void }): JSX
       {confirming === 'all' && (
         <>
           <p>
-            This clears every setting and connection, deletes the data behind every data file
-            connection, and revokes every granted site permission. This can't be undone.
+            This clears every setting and connection, deletes the data behind every data file connection, and revokes
+            every granted site permission. This can't be undone.
           </p>
           <div className="asksql-ext-actions">
             <button className="asksql-ext-btn" onClick={() => void run('all')}>

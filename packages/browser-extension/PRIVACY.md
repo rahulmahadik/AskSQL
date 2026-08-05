@@ -1,6 +1,6 @@
-# AskSQL Browser Extension — Privacy Policy
+# AskSQL Browser Extension: Privacy Policy
 
-Last updated: 2026-08-01.
+Last updated: 2026-08-05.
 
 ## What this extension does
 
@@ -18,12 +18,12 @@ anywhere except:
 - **The AI provider you configure** (Ollama, Groq, OpenAI, Anthropic, Google,
   Azure, NVIDIA, or an OpenAI-compatible endpoint you specify) receives your
   question and your database **schema** (table/column names and types) so it
-  can write SQL. **It never receives your row data or query results** — only
+  can write SQL. **It never receives your row data or query results** - only
   schema and the question you typed. This is enforced in the engine, not left
   to configuration: cell values are stripped from the schema before any prompt
   is built unless a host explicitly opts in, and this extension does not.
 - **The sidecar server you configure**, if you use one, receives your
-  question and, when you run a query, the query and its results — because
+  question and, when you run a query, the query and its results, because
   that's the server you told the extension to talk to. AskSQL doesn't operate
   or have access to this server; you run it.
 
@@ -39,7 +39,7 @@ any third party.
 ## What's stored, and where
 
 Everything below lives only in this browser's local extension storage
-(`chrome.storage.local`/`chrome.storage.session`) — never on any AskSQL server,
+(`chrome.storage.local`/`chrome.storage.session`) - never on any AskSQL server,
 because none exists.
 
 | Data | Where | Retention |
@@ -51,6 +51,7 @@ because none exists.
 | Data file connection name and table names | `chrome.storage.local` | Until you remove that connection or reset |
 | The file data itself | An OPFS-backed database in this browser profile, one per data file connection | Until you **Remove** that connection, or **Reset everything** |
 | A page-selection question (ask-about-selection) | `chrome.storage.session` | Consumed immediately, or discarded after 30 seconds unconsumed; cleared on browser exit regardless |
+| Which connection you used last, and whether you have dismissed the first-run notice | `chrome.storage.local` | Until you reset |
 
 **There is no OS-level keychain available to a browser extension.** API keys
 and sidecar auth headers are stored as plain text in the browser profile's own
@@ -72,7 +73,7 @@ make the extension unusable with a local model unless you reconfigured that
 server yourself.
 
 AskSQL therefore removes the `Origin` header from requests to **the one AI
-provider endpoint you have configured** — nothing else. It is never applied to
+provider endpoint you have configured** - nothing else. It is never applied to
 a sidecar server, to any website you visit, or to any other address.
 It removes a header; it never adds, forges, or forwards anything. The rule only
 applies to an origin after you have granted AskSQL permission to reach it, and
@@ -91,15 +92,15 @@ it is removed when you use **Reset everything**.
 
 ## Permissions
 
-- `sidePanel`, `storage`, `contextMenus` — the extension's own UI and its
+- `sidePanel`, `storage`, `contextMenus` - the extension's own UI and its
   local settings storage; the context menu is for "Ask AskSQL about
   selection."
-- Optional host permissions (`http://*/*`, `https://*/*`) — requested
+- Optional host permissions (`http://*/*`, `https://*/*`) - requested
   per-site, only when you configure an AI provider or sidecar at that
   address. Never granted upfront for every site; you can revoke any of them
   at any time via Reset or the browser's own extension permissions UI.
   Granting this is what lets AskSQL reach a provider or server at all.
-- `declarativeNetRequestWithHostAccess` — used for one thing only: removing
+- `declarativeNetRequestWithHostAccess` - used for one thing only: removing
   the `Origin` header from requests to your configured AI provider, as
   described above. It cannot read request or response bodies, and it never
   blocks or redirects anything.

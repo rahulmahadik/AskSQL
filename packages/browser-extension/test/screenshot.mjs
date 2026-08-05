@@ -65,7 +65,8 @@ await options.close();
 // --- Side panel: connect, ask, result; then the schema tree ---
 const panel = await browser.newPage();
 await panel.evaluateOnNewDocument(() => {
-  window.__asksqlModel = async () => '```sql\nSELECT region, SUM(amount) AS total_amount FROM sales GROUP BY region ORDER BY total_amount DESC\n```';
+  window.__asksqlModel = async () =>
+    '```sql\nSELECT region, SUM(amount) AS total_amount FROM sales GROUP BY region ORDER BY total_amount DESC\n```';
 });
 await panel.goto(`chrome-extension://${extensionId}/sidepanel/index.html`, { waitUntil: 'domcontentloaded' });
 await panel.waitForSelector('#connection', { timeout: 20_000 });

@@ -13,6 +13,7 @@ export interface ChromeMock {
   /** background.ts registers these at module load; tests fire them directly instead of driving a real browser event. */
   fireOnInstalled: () => void;
   fireContextMenuClick: (info: { menuItemId: string; selectionText?: string }, tab?: { id?: number }) => void;
+  fireStorageChanged: (changes: Record<string, { newValue?: unknown }>, area: string) => void;
   contextMenuCreateCalls: { id?: string; title?: string; contexts?: string[] }[];
   sidePanelOpenCalls: { tabId?: number }[];
   setPanelBehaviorCalls: { openPanelOnActionClick?: boolean }[];
@@ -75,7 +76,11 @@ export function installChromeMock(): ChromeMock {
   const grantedOrigins = new Set<string>();
   const opfsFiles = new Set<string>();
   const onInstalledListeners: (() => void)[] = [];
-  const contextMenuClickListeners: ((info: { menuItemId: string; selectionText?: string }, tab?: { id?: number }) => void)[] = [];
+  const contextMenuClickListeners: ((
+    info: { menuItemId: string; selectionText?: string },
+    tab?: { id?: number },
+  ) => void)[] = [];
+  const storageChangedListeners: ((changes: Record<string, { newValue?: unknown }>, area: string) => void)[] = [];
   const contextMenuCreateCalls: { id?: string; title?: string; contexts?: string[] }[] = [];
   const sidePanelOpenCalls: { tabId?: number }[] = [];
   const setPanelBehaviorCalls: { openPanelOnActionClick?: boolean }[] = [];
@@ -98,6 +103,13 @@ export function installChromeMock(): ChromeMock {
     storage: {
       local: makeArea(local),
       session: makeArea(session, () => failNext.storageSessionSet),
+      onChanged: {
+        addListener: vi.fn((cb: (typeof storageChangedListeners)[number]) => storageChangedListeners.push(cb)),
+        removeListener: vi.fn((cb: (typeof storageChangedListeners)[number]) => {
+          const at = storageChangedListeners.indexOf(cb);
+          if (at >= 0) storageChangedListeners.splice(at, 1);
+        }),
+      },
     },
     permissions: {
       contains: vi.fn(async ({ origins }: { origins?: string[] }) =>
@@ -114,24 +126,24 @@ export function installChromeMock(): ChromeMock {
       getAll: vi.fn(async () => ({ origins: [...grantedOrigins], permissions: [] })),
     },
     contextMenus: {
-      create: vi.fn(
-        (props: { id?: string; title?: string; contexts?: string[] }, callback?: () => void) => {
-          contextMenuCreateCalls.push(props);
-          (globalThis as { chrome: { runtime: { lastError?: { message: string } } } }).chrome.runtime.lastError = failNext
-            .contextMenusCreate
-            ? { message: 'duplicate id' }
-            : undefined;
-          callback?.();
-        },
-      ),
-      onClicked: { addListener: vi.fn((cb: (typeof contextMenuClickListeners)[number]) => contextMenuClickListeners.push(cb)) },
+      create: vi.fn((props: { id?: string; title?: string; contexts?: string[] }, callback?: () => void) => {
+        contextMenuCreateCalls.push(props);
+        (globalThis as { chrome: { runtime: { lastError?: { message: string } } } }).chrome.runtime.lastError =
+          failNext.contextMenusCreate ? { message: 'duplicate id' } : undefined;
+        callback?.();
+      }),
+      onClicked: {
+        addListener: vi.fn((cb: (typeof contextMenuClickListeners)[number]) => contextMenuClickListeners.push(cb)),
+      },
     },
     declarativeNetRequest: {
-      updateDynamicRules: vi.fn(async ({ removeRuleIds, addRules }: { removeRuleIds?: number[]; addRules?: { id: number }[] }) => {
-        if (failNext.updateDynamicRules) throw new Error('blocked by enterprise policy');
-        for (const id of removeRuleIds ?? []) dynamicRules.delete(id);
-        for (const rule of addRules ?? []) dynamicRules.set(rule.id, rule);
-      }),
+      updateDynamicRules: vi.fn(
+        async ({ removeRuleIds, addRules }: { removeRuleIds?: number[]; addRules?: { id: number }[] }) => {
+          if (failNext.updateDynamicRules) throw new Error('blocked by enterprise policy');
+          for (const id of removeRuleIds ?? []) dynamicRules.delete(id);
+          for (const rule of addRules ?? []) dynamicRules.set(rule.id, rule);
+        },
+      ),
     },
     sidePanel: {
       open: vi.fn(async (opts: { tabId?: number }) => {
@@ -144,6 +156,7 @@ export function installChromeMock(): ChromeMock {
       }),
     },
     runtime: {
+      id: 'test-id',
       getManifest: vi.fn(() => ({ version: '0.1.0' })),
       getURL: vi.fn((path: string) => `chrome-extension://test-id/${path}`),
       openOptionsPage: vi.fn(),
@@ -159,6 +172,7 @@ export function installChromeMock(): ChromeMock {
     opfsFiles,
     fireOnInstalled: () => onInstalledListeners.forEach((cb) => cb()),
     fireContextMenuClick: (info, tab) => contextMenuClickListeners.forEach((cb) => cb(info, tab)),
+    fireStorageChanged: (changes, area) => storageChangedListeners.forEach((cb) => cb(changes, area)),
     contextMenuCreateCalls,
     sidePanelOpenCalls,
     setPanelBehaviorCalls,

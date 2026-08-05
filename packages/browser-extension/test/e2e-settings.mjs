@@ -72,7 +72,9 @@ async function askAndSettle(p, question, doneSelector) {
 try {
   let extensionId = null;
   for (let i = 0; i < 40 && !extensionId; i++) {
-    const sw = browser.targets().find((t) => t.type() === 'service_worker' && t.url().startsWith('chrome-extension://'));
+    const sw = browser
+      .targets()
+      .find((t) => t.type() === 'service_worker' && t.url().startsWith('chrome-extension://'));
     if (sw) extensionId = new URL(sw.url()).host;
     else await new Promise((r) => setTimeout(r, 250));
   }
@@ -96,12 +98,12 @@ try {
   await section('requireApproval', async () => {
     const p = await openPanel(extensionId, { requireApproval: true }, plainModel);
     try {
-    await askAndSettle(p, 'How many rows?', '.asksql-sqlcode');
-    ok(!(await p.$('.asksql-table')), 'requireApproval=true: the query does NOT auto-run');
-    ok((await buttons(p)).includes('Run query'), 'a Run query button gates execution');
-    await click(p, 'Run query');
-    await p.waitForFunction(() => document.querySelector('.asksql-table'), { timeout: 30_000 });
-    ok(true, 'clicking Run query executes and shows the result');
+      await askAndSettle(p, 'How many rows?', '.asksql-sqlcode');
+      ok(!(await p.$('.asksql-table')), 'requireApproval=true: the query does NOT auto-run');
+      ok((await buttons(p)).includes('Run query'), 'a Run query button gates execution');
+      await click(p, 'Run query');
+      await p.waitForFunction(() => document.querySelector('.asksql-table'), { timeout: 30_000 });
+      ok(true, 'clicking Run query executes and shows the result');
     } finally {
       await p.close();
     }
@@ -151,18 +153,17 @@ try {
     let systems;
     try {
       systems = await p.evaluate(() => window.__captured);
-    ok(
-      systems.some((s) => s.includes('Additional instructions') && s.includes('friendly_names')),
-      'custom instructions reach the system prompt under "Additional instructions"',
-    );
-    ok(
-      systems.some((s) => /read-only|SELECT/i.test(s)),
-      'the built-in read-only rules are still present (custom text is additive)',
-    );
+      ok(
+        systems.some((s) => s.includes('Additional instructions') && s.includes('friendly_names')),
+        'custom instructions reach the system prompt under "Additional instructions"',
+      );
+      ok(
+        systems.some((s) => /read-only|SELECT/i.test(s)),
+        'the built-in read-only rules are still present (custom text is additive)',
+      );
     } finally {
       await p.close();
     }
-
   });
 
   await section('answerSchemaQuestions', async () => {
@@ -176,14 +177,14 @@ try {
     };
     const p = await openPanel(extensionId, { requireApproval: false, answerSchemaQuestions: true }, twoPhase);
     try {
-    await (await p.$(ta)).type('What tables are there?');
-    await p.keyboard.press('Enter');
-    await p.waitForFunction(() => document.querySelector('.asksql-explain, .asksql-error'), { timeout: 60_000 });
-    const explain = await p.evaluate(() => document.querySelector('.asksql-explain')?.textContent ?? null);
-    ok(
-      Boolean(explain && explain.includes('sales')),
-      `schema question answered in prose instead of erroring (got: ${explain ?? (await p.evaluate(() => document.querySelector('.asksql-error')?.textContent))})`,
-    );
+      await (await p.$(ta)).type('What tables are there?');
+      await p.keyboard.press('Enter');
+      await p.waitForFunction(() => document.querySelector('.asksql-explain, .asksql-error'), { timeout: 60_000 });
+      const explain = await p.evaluate(() => document.querySelector('.asksql-explain')?.textContent ?? null);
+      ok(
+        Boolean(explain && explain.includes('sales')),
+        `schema question answered in prose instead of erroring (got: ${explain ?? (await p.evaluate(() => document.querySelector('.asksql-error')?.textContent))})`,
+      );
     } finally {
       await p.close();
     }

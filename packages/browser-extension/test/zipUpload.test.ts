@@ -96,9 +96,7 @@ describe('expandZipFile', () => {
   const tightLimits: ZipLimits = { maxEntries: 3, maxTotalUncompressedBytes: 1000, maxCompressionRatio: 5 };
 
   it('rejects a zip with more entries than the configured limit', async () => {
-    const file = zipFile(
-      Array.from({ length: 4 }, (_, i) => ({ name: `f${i}.csv`, content: 'x' })),
-    );
+    const file = zipFile(Array.from({ length: 4 }, (_, i) => ({ name: `f${i}.csv`, content: 'x' })));
     await expect(expandZipFile(file, tightLimits)).rejects.toThrow(/entries, over the 3 limit/);
   });
 

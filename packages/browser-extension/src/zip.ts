@@ -1,9 +1,7 @@
 /**
  * Minimal ZIP reader (Central Directory + per-entry inflate), no dependency.
- * Backs both xlsxSheets.ts (reading one entry out of an .xlsx) and zip-upload
- * support (extracting every supported data file out of an uploaded .zip).
- * `DecompressionStream('deflate-raw')` is a standard Web API, well within the
- * manifest's minimum_chrome_version 116 floor.
+ * Backs xlsxSheets.ts and zip-upload support. `DecompressionStream('deflate-raw')`
+ * is a standard Web API within the manifest's minimum_chrome_version 116 floor.
  */
 
 const EOCD_SIGNATURE = 0x06054b50;
@@ -19,8 +17,7 @@ export interface ZipEntry {
 }
 
 function findEndOfCentralDirectory(view: DataView): number {
-  // The EOCD record is a fixed 22 bytes plus an optional comment, so it must
-  // start within the last 65 557 bytes of the file - scan backward from there.
+  // The EOCD record starts within the last 65 557 bytes of the file; scan backward from there.
   const maxCommentLength = 65_535;
   const searchStart = Math.max(0, view.byteLength - 22 - maxCommentLength);
   for (let i = view.byteLength - 22; i >= searchStart; i--) {
@@ -50,7 +47,13 @@ export function listZipEntries(buffer: ArrayBuffer): ZipEntry[] {
     const commentLength = view.getUint16(offset + 32, true);
     const localHeaderOffset = view.getUint32(offset + 42, true);
     const nameBytes = new Uint8Array(buffer, offset + 46, nameLength);
-    entries.push({ name: decoder.decode(nameBytes), compressionMethod, compressedSize, uncompressedSize, localHeaderOffset });
+    entries.push({
+      name: decoder.decode(nameBytes),
+      compressionMethod,
+      compressedSize,
+      uncompressedSize,
+      localHeaderOffset,
+    });
     offset += 46 + nameLength + extraLength + commentLength;
   }
   return entries;
@@ -72,14 +75,12 @@ export async function readZipEntryBytes(buffer: ArrayBuffer, entry: ZipEntry): P
   if (entry.compressionMethod !== 8) {
     throw new Error(`Unsupported ZIP compression method (${entry.compressionMethod}) for "${entry.name}".`);
   }
-  // jsdom (the test environment) has no Blob.prototype.stream, so this feeds
-  // the writer directly instead of going through a Blob.
+  // jsdom has no Blob.prototype.stream, so this feeds the writer directly.
   const ds = new DecompressionStream('deflate-raw');
   const writer = ds.writable.getWriter();
   void writer.write(compressed).then(() => writer.close());
   const out = new Uint8Array(await new Response(ds.readable).arrayBuffer());
-  // The bomb guard upstream trusts DECLARED sizes; an archive that lies (tiny
-  // declared, huge actual) would sail past it, so the actual output is checked.
+  // The upstream bomb guard trusts DECLARED sizes, so the actual output size is checked here.
   if (out.byteLength !== entry.uncompressedSize) {
     throw new Error(
       `"${entry.name}" decompressed to ${out.byteLength} bytes but declared ${entry.uncompressedSize} - refusing an archive that misdeclares its sizes.`,

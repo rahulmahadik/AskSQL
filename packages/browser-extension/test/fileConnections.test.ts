@@ -27,7 +27,15 @@ const { instances, FakeConnector } = vi.hoisted(() => {
       this.closed = true;
     }
 
-    async registerFile({ table, filename, sheet }: { table: string; filename: string; sheet?: string }): Promise<string> {
+    async registerFile({
+      table,
+      filename,
+      sheet,
+    }: {
+      table: string;
+      filename: string;
+      sheet?: string;
+    }): Promise<string> {
       this.registered.push({ table, filename, sheet });
       // A .sql dump creates its own tables; anything else becomes a scratch view.
       if (/\.sql$/i.test(filename)) this.tables.push('from_dump');
@@ -209,13 +217,37 @@ describe('fileConnections', () => {
     expect(skipped).toEqual(['README.md']);
   });
 
+  it('keeps both files whose names sanitize to the same table, and says what it renamed', async () => {
+    const zip = buildTestZip([
+      { name: '2024/sales.csv', content: 'a,b\n1,2\n' },
+      { name: '2025/sales.csv', content: 'a,b\n3,4\n' },
+    ]);
+    const { connection, renamed } = await createFileConnection('Bundle', [new File([zip], 'bundle.zip')]);
+
+    expect(connection.tables).toEqual(['sales', 'sales_2']);
+    expect(renamed).toEqual(['sales -> sales_2']);
+  });
+
+  it('leaves non-colliding uploads alone', async () => {
+    const { renamed } = await createFileConnection('Q1', [csv('sales.csv'), csv('regions.csv')]);
+    expect(renamed).toEqual([]);
+  });
+
+  it('does not let a later file replace a table a .sql dump created', async () => {
+    const dump = new File(['CREATE TABLE from_dump(x INT);'], 'dump.sql');
+    const { connection } = await createFileConnection('Mixed', [dump, csv('from_dump.csv')]);
+    expect(connection.tables).toEqual(['from_dump', 'from_dump_2']);
+  });
+
   it('refuses an unnamed connection', async () => {
     await expect(createFileConnection('   ', [csv()])).rejects.toThrow('name');
   });
 
   it('refuses a selection with no usable data file, rather than creating an empty connection', async () => {
     const zip = buildTestZip([{ name: 'README.md', content: '# notes' }]);
-    await expect(createFileConnection('Empty', [new File([zip], 'bundle.zip')])).rejects.toThrow('No usable data files');
+    await expect(createFileConnection('Empty', [new File([zip], 'bundle.zip')])).rejects.toThrow(
+      'No usable data files',
+    );
     expect(await getFileConnections()).toEqual([]);
   });
 

@@ -1,23 +1,15 @@
 /**
- * One log channel for the whole extension.
- *
- * Users get a plain-language sentence they can act on; the driver's actual
- * message (host, port, stack, provider response) goes here instead. Raw error
- * text in a notification is both unreadable and a leak risk - a connection
- * error can carry a host and user name, and a provider error can echo request
- * details.
- *
- * `{ log: true }` gives a real LogOutputChannel, so VS Code owns the levels and
- * the user can raise verbosity from the Output panel without a setting.
+ * One log channel for the whole extension. Users get a plain-language sentence they
+ * can act on; the driver's actual message (host, port, stack, provider response)
+ * goes here, where it is neither unreadable nor a leak risk. `{ log: true }` gives a
+ * real LogOutputChannel, so the user can raise verbosity from the Output panel.
  */
 
 import * as vscode from 'vscode';
 
 let channel: vscode.LogOutputChannel | undefined;
 
-// The output channel's buffer is not readable through any API, so a small ring of
-// recent lines is kept here for the diagnostics command. Lines are length-capped
-// because a driver/provider error can echo attacker-influenceable fragments.
+// The output channel's buffer is unreadable through any API, so a length-capped ring is kept for diagnostics.
 const RING_SIZE = 200;
 const MAX_LINE_CHARS = 300;
 const ring: string[] = [];

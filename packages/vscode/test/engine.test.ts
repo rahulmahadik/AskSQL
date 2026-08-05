@@ -530,4 +530,4 @@ describe('refresh vs connector lifetime', () => {
     expect((await mgr.catalogFor('m')).tables.length).toBeGreaterThan(0);
     expect(mgr.failureFor('m')).toBeUndefined();
   });
-})
+});

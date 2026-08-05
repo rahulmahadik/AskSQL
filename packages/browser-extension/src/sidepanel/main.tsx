@@ -25,9 +25,7 @@ import { ensureProviderOriginAccess } from '../providerAccess.js';
 import { reportError } from '../errorReporting.js';
 import { PENDING_QUESTION_KEY, PENDING_QUESTION_MAX_AGE_MS, type PendingQuestion } from '../constants.js';
 
-// Same escape hatch examples/browser-duckdb uses: an automated test injects a
-// CustomModel here, so the smoke suite never needs a real API key or a network
-// call to an LLM provider.
+// Escape hatch shared with examples/browser-duckdb: a test injects a CustomModel here.
 declare global {
   interface Window {
     __asksqlModel?: ModelLike;
@@ -40,9 +38,7 @@ type Choice =
 
 const choiceId = (c: Choice): string => c.connection.id;
 
-async function connectProviderModel(
-  provider: Awaited<ReturnType<typeof getProviderSettings>>,
-): Promise<ModelLike> {
+async function connectProviderModel(provider: Awaited<ReturnType<typeof getProviderSettings>>): Promise<ModelLike> {
   if (window.__asksqlModel) return window.__asksqlModel;
   const origin = providerOrigin(provider);
   if (origin && !(await ensureProviderOriginAccess(origin))) {
@@ -97,20 +93,22 @@ function ConnectionPicker({
   selected,
   onSelect,
   onConnect,
+  connecting,
   status,
 }: {
   choices: readonly Choice[];
   selected: string;
   onSelect: (id: string) => void;
   onConnect: () => void;
+  connecting: boolean;
   status: string;
 }): JSX.Element {
   if (choices.length === 0) {
     return (
       <div className="asksql-ext-setup">
         <p>
-          No connections yet. Open Settings to add one - either a set of data files (CSV, Excel, Parquet, a .sql dump
-          or a .zip of them) analyzed entirely in your browser, or an AskSQL server for a real database.
+          No connections yet. Open Settings to add one - either a set of data files (CSV, Excel, Parquet, a .sql dump or
+          a .zip of them) analyzed entirely in your browser, or an AskSQL server for a real database.
         </p>
         <button className="asksql-ext-btn" onClick={() => chrome.runtime.openOptionsPage()}>
           Open Settings
@@ -131,8 +129,8 @@ function ConnectionPicker({
           ))}
         </select>
       </div>
-      <button className="asksql-ext-btn" onClick={onConnect}>
-        Connect
+      <button className="asksql-ext-btn" onClick={onConnect} disabled={connecting}>
+        {connecting ? 'Connecting...' : 'Connect'}
       </button>
       <button className="asksql-ext-btn" onClick={() => chrome.runtime.openOptionsPage()}>
         Settings
@@ -159,8 +157,11 @@ function App(): JSX.Element {
   const [sqlDisplayPlacement, setSqlDisplayPlacement] = useState<'before' | 'after'>('after');
   const [answerSchemaQuestions, setAnswerSchemaQuestions] = useState(false);
   const [pendingQuestion, setPendingQuestion] = useState<string | undefined>(undefined);
+  const [connecting, setConnecting] = useState(false);
   const openConnector = useRef<DuckDbWasmConnector | null>(null);
   const dismissTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  // Guards re-entry synchronously; the state above only drives the disabled attribute.
+  const connectInFlight = useRef(false);
 
   const loadChoices = async () => {
     const [files, sidecars, last] = await Promise.all([getFileConnections(), getConnections(), getLastConnectionId()]);
@@ -201,8 +202,7 @@ function App(): JSX.Element {
       if (got[PENDING_QUESTION_KEY]) void chrome.storage.session.remove(PENDING_QUESTION_KEY);
     });
 
-    // Live, not just at mount: an already-open panel (the common case, since
-    // triggering the menu opens it) must also pick up a fresh selection.
+    // Live, not just at mount: an already-open panel must also pick up a fresh selection.
     const onSessionChanged = (changes: Record<string, chrome.storage.StorageChange>, area: string) => {
       if (area !== 'session') return;
       const change = changes[PENDING_QUESTION_KEY];
@@ -234,12 +234,12 @@ function App(): JSX.Element {
 
   const connect = async (id: string) => {
     const choice = choices?.find((c) => choiceId(c) === id);
-    if (!choice) return;
+    if (!choice || connectInFlight.current) return;
+    connectInFlight.current = true;
+    setConnecting(true);
     setStatus(`Connecting to ${choice.connection.name}...`);
     try {
-      // Build the new transport BEFORE closing the old connector: if this
-      // throws (permission denied, server down), the current chat must keep
-      // working instead of sitting on a closed database.
+      // Build the new transport BEFORE closing the old connector, so a failure leaves the chat working.
       let next: { transport: Transport; connector: DuckDbWasmConnector | null };
       if (choice.kind === 'file') {
         const built = await buildFileTransport(choice.connection);
@@ -247,10 +247,10 @@ function App(): JSX.Element {
       } else {
         next = { transport: await buildSidecarTransport(choice.connection), connector: null };
       }
-      // Only now retire the previous database. Two DuckDB handles on one OPFS
-      // file conflict, but a file connection never targets the same file as
-      // another connection, so the brief overlap is safe.
-      await openConnector.current?.close().catch((err: unknown) => console.warn('AskSQL: closing the previous connection failed', err));
+      // Only now retire the previous database; two DuckDB handles on one OPFS file conflict.
+      await openConnector.current
+        ?.close()
+        .catch((err: unknown) => console.warn('AskSQL: closing the previous connection failed', err));
       openConnector.current = next.connector;
       setTransport(next.transport);
       setActiveId(id);
@@ -258,13 +258,15 @@ function App(): JSX.Element {
       setStatus('');
       await setLastConnectionId(id);
       showReady(`Connected to ${choice.connection.name}.`);
-      // Best-effort: the chat works without it, so a schema read that fails
-      // must not block the connection the user just made.
+      // Best-effort: a failed schema read must not block the connection.
       void (choice.kind === 'file' ? buildFileCatalog(choice.connection) : loadSidecarCatalog(choice.connection))
         .then(setCatalog)
         .catch((err: unknown) => console.warn('AskSQL: could not read the schema for the tables list', err));
     } catch (err) {
       setStatus(reportError(`Connect to ${choice.connection.name}`, err));
+    } finally {
+      connectInFlight.current = false;
+      setConnecting(false);
     }
   };
 
@@ -282,8 +284,7 @@ function App(): JSX.Element {
     return transport.schema(connection.remoteConnectionId, refresh);
   };
 
-  /** Re-read the schema of the open connection: a table added elsewhere is otherwise invisible
-   *  until the connection is torn down and remade. */
+  /** Re-read the schema of the open connection, picking up a table added elsewhere. */
   const refreshCatalog = async () => {
     const choice = choices?.find((c) => choiceId(c) === activeId);
     if (!choice || refreshing) return;
@@ -318,12 +319,15 @@ function App(): JSX.Element {
 
   useEffect(() => {
     if (!activeId || choices === null || choices.some((c) => choiceId(c) === activeId)) return;
-    // Removed in Settings while it was open: drop the dead transport rather
-    // than leave the header showing a connection that no longer exists.
+    // Removed in Settings while it was open: drop the dead transport.
     void disconnect().then(() => setStatus('That connection was removed in Settings.'));
   }, [choices, activeId]);
 
   if (choices === null) return <div className="asksql-ext-root">Loading...</div>;
+
+  // The id the server knows this database by, shared by the chat and the schema pane.
+  const active = choices.find((c) => choiceId(c) === activeId);
+  const remoteConnectionId = active?.kind === 'sidecar' ? active.connection.remoteConnectionId : undefined;
 
   if (!transport) {
     return (
@@ -336,6 +340,7 @@ function App(): JSX.Element {
           selected={selected}
           onSelect={setSelected}
           onConnect={() => void connect(selected)}
+          connecting={connecting}
           status={status}
         />
       </div>
@@ -349,7 +354,7 @@ function App(): JSX.Element {
           aria-label="Connection"
           value={activeId}
           onChange={(e) => void connect(e.target.value)}
-          disabled={choices.length < 2}
+          disabled={choices.length < 2 || connecting}
         >
           {choices.map((c) => (
             <option key={choiceId(c)} value={choiceId(c)}>
@@ -373,7 +378,11 @@ function App(): JSX.Element {
         >
           {showTables ? 'Hide schema' : 'Schema'}
         </button>
-        <button className="asksql-ext-btn" title="Add or manage connections" onClick={() => chrome.runtime.openOptionsPage()}>
+        <button
+          className="asksql-ext-btn"
+          title="Add or manage connections"
+          onClick={() => chrome.runtime.openOptionsPage()}
+        >
           Settings
         </button>
         <button className="asksql-ext-btn" onClick={() => void disconnect()}>
@@ -404,13 +413,14 @@ function App(): JSX.Element {
       )}
       {status && <p className="asksql-ext-status">{status}</p>}
       <AskSqlChat
-        // Remounts on a connection switch so one database's transcript and
-        // follow-up context never carry into questions asked of another.
+        // Remounts on a connection switch so one database's transcript never carries into another.
         key={activeId}
         transport={transport}
+        connectionId={remoteConnectionId}
+        // A server entry that names no database still offers its own picker.
+        showConnectionPicker={!remoteConnectionId}
         requireApproval={requireApproval}
-        // Sent with every query, so the row cap applies to a sidecar connection too and not
-        // only to the in-browser engine, which reads it from its own policy.
+        // Sent with every query, so the row cap applies to a sidecar connection too.
         maxRows={maxRows}
         sqlDisplayPlacement={sqlDisplayPlacement}
         answerSchemaQuestions={answerSchemaQuestions}
