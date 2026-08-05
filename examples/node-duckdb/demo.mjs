@@ -22,7 +22,11 @@ async function pickModel() {
     return resolveModel({ provider: 'groq', model: 'llama-3.3-70b-versatile', apiKey: process.env.GROQ_API_KEY });
   }
   console.log('· model: local Ollama qwen2.5-coder:7b');
-  return resolveModel({ provider: 'ollama', model: process.env.OLLAMA_MODEL ?? 'qwen2.5-coder:7b', baseURL: 'http://localhost:11434/v1' });
+  return resolveModel({
+    provider: 'ollama',
+    model: process.env.OLLAMA_MODEL ?? 'qwen2.5-coder:7b',
+    baseURL: 'http://localhost:11434/v1',
+  });
 }
 
 async function main() {
@@ -32,7 +36,12 @@ async function main() {
     files: [{ table: 'sales', path: join(dir, 'sales.csv'), format: 'csv' }],
   });
   const model = await pickModel();
-  const engine = createAskSql({ connectors: [connector], model, policy: { maxRows: 100 }, llm: { timeoutMs: 120_000 } });
+  const engine = createAskSql({
+    connectors: [connector],
+    model,
+    policy: { maxRows: 100 },
+    llm: { timeoutMs: 120_000 },
+  });
 
   const questions = [
     'Which region has the highest total sales amount?',

@@ -32,7 +32,9 @@ untrusted input. High-value targets:
   data-modifying CTE, `SELECT INTO`/`INTO OUTFILE`, locking clause, or a
   denylisted dangerous function pass as an allowed read-only query.
 - **Arbitrary file / URL reads** via DuckDB replacement scans or file-reading
-  functions (`read_csv`, `parquet_*`, etc.) in a relation position.
+  functions (`read_csv`, `parquet_*`, etc.) in a relation position, or via a
+  client-supplied SQLite/DuckDB path reaching the server sidecar past
+  `allowFileEngines` / `allowedFileRoots`.
 - **SSRF** through any outbound request to a user-influenced URL.
 - **Credential exposure** - a token, password, or connection string leaking into
   an API response, log line, or error message.
@@ -54,12 +56,16 @@ not depend on the guard's lexer agreeing with the server's parser:
 |---|---|
 | Postgres | `BEGIN READ ONLY`, plus the **extended query protocol** - one statement per message, so multi-statement text is rejected by the server |
 | MySQL | `START TRANSACTION READ ONLY`; `mysql2` defaults `multipleStatements` to false |
-| SQLite | the handle is opened read-only; `prepare()` compiles a single statement |
+| SQLite | the handle is opened read-only, then `PRAGMA query_only` is set **and read back**; `prepare()` compiles a single statement |
 | DuckDB | a **prepared statement** - exactly one statement, rejected otherwise |
 
 DuckDB is the one engine with **no read-only session** (`readOnlySession: false`),
 because it must create views over the files you load. Its prepared statement is
-therefore load-bearing, not a nicety.
+therefore load-bearing, not a nicety. The Node connector narrows this where it can:
+a plain database file (a `path` with no `files` registered) is opened with
+`access_mode=READ_ONLY`, the mode is read back before the handle is used, and a
+missing file is not created. Registering `files` needs `CREATE VIEW`, so that
+configuration and the browser build stay read-write.
 
 Report guard bypasses regardless. These backstops are a second line, not the
 boundary - and a bypass that only a backstop catches is still a bug.
@@ -71,7 +77,7 @@ graph. The alerts below come from dependencies, not from AskSQL's own code. Each
 is checkable with the command shown.
 
 **AskSQL's own code has no `eval`, no shell access, no filesystem access, and no
-network calls of its own, in any of the nine packages.**
+network calls of its own, in any of the eleven packages.**
 
 ### "Uses eval" / "Obfuscated code"
 

@@ -52,7 +52,8 @@ function App() {
         files: [{ table, data: file, filename: file.name }],
       });
       await connector.connect();
-      const model = window.__asksqlModel ?? (await resolveModel({ provider: 'groq', model: 'llama-3.3-70b-versatile', apiKey }));
+      const model =
+        window.__asksqlModel ?? (await resolveModel({ provider: 'groq', model: 'llama-3.3-70b-versatile', apiKey }));
       const engine = createAskSql({ connectors: [connector], model, policy: { maxRows: 200 } });
       setTransport(new LocalTransport(engine));
       setStatus(`Ready - ask about "${table}". Nothing left your browser.`);
@@ -85,7 +86,11 @@ function App() {
       </div>
       <div style={{ flex: 1, minHeight: 0 }}>
         {transport ? (
-          <AskSqlChat transport={transport} showConnectionPicker={false} suggestions={['How many rows are there?', 'Show the first few rows']} />
+          <AskSqlChat
+            transport={transport}
+            showConnectionPicker={false}
+            suggestions={['How many rows are there?', 'Show the first few rows']}
+          />
         ) : (
           <div style={{ padding: 40, color: '#6b7280' }}>Upload a CSV / JSON / Parquet / SQL file to begin.</div>
         )}
