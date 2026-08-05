@@ -75,7 +75,9 @@ describe('a cancelled request cancels the work behind it', () => {
     const controller = new AbortController();
     const srv = server(connector, async () => 'unused');
 
-    const response = await srv.handle(request('/execute', { connectionId: 'db', sql: 'SELECT id FROM orders' }, controller.signal));
+    const response = await srv.handle(
+      request('/execute', { connectionId: 'db', sql: 'SELECT id FROM orders' }, controller.signal),
+    );
 
     expect(response.status).toBe(200);
     expect(connector.seen).toBeDefined();
@@ -99,7 +101,9 @@ describe('a cancelled request cancels the work behind it', () => {
     };
     const srv = server(connector, model);
 
-    const response = await srv.handle(request('/chat', { connectionId: 'db', question: 'how many orders' }, controller.signal));
+    const response = await srv.handle(
+      request('/chat', { connectionId: 'db', question: 'how many orders' }, controller.signal),
+    );
     if ('stream' in response) for await (const ev of response.stream) void ev;
 
     expect(modelSignal).toBeDefined();

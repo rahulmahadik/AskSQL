@@ -23,14 +23,14 @@ connector packages, e.g. `@asksql/postgres pg`) then just
 
 Listens on `127.0.0.1:3000` and accepts database connections from the client at
 runtime, so the AskSQL browser extension can offer an engine/host/port/user/password
-form (PostgreSQL, MySQL, Oracle, MongoDB, SQLite, DuckDB). POST `/explainSchema` answers schema questions in prose on every engine, MongoDB
-included, with advisory add-a-column / index / performance suggestions as
-never-executed proposals. Point the extension at
+form (PostgreSQL, MySQL, Oracle, MongoDB, SQLite, DuckDB). Point the extension at
 `http://localhost:3000`.
 
 Runtime connections are what make that form possible, so the server stays on loopback
 unless you pass `--host` *and* `--allow-host <db-host>` naming which databases it may
-open. `asksql serve --help` lists every flag.
+open. On a loopback bind it also accepts SQLite/DuckDB file paths from the client and
+requires a loopback `Host` header; bind anywhere else and both of those switch off, so a
+client-supplied file path is refused. `asksql serve --help` lists every flag.
 
 Opening a database needs that engine's connector next to the server - with npx,
 chain packages (`npx --package=@asksql/server --package=@asksql/postgres --package=pg asksql serve ...`);
@@ -91,15 +91,27 @@ chat UI. Credentials and the model key stay on the server.
 | `auth` | yes | `(req) => { userId, allowedConnectionIds }`. No anonymous default. |
 | `audit` | no | Sink called for every executed query. |
 | `onError` | no | Best-effort hook for every error turned into a response (throwing from it is swallowed). |
-| `maxBodyBytes` | no | Request body cap. Default 64 KB. |
+| `maxBodyBytes` | no | Request body cap on the Express adapter. Default 64 KB. |
 | `suggestFixOnError` | no | Offer a corrected query on a DB error. Default `true`. |
+| `requireLoopbackHost` | no | Reject any request whose `Host` header is not loopback, with 403 `SERVER_AUTHZ`. Default off. `asksql serve` turns it on when it binds a loopback address. |
+| `dynamicConnections` | no | Runtime connection management. Off unless `{ enabled: true }`; see below. |
+
+`dynamicConnections` takes four fields:
+
+| Field | Notes |
+| --- | --- |
+| `enabled` | Must be `true`, or `POST /connections` and `DELETE /connections/:id` return 404. |
+| `allowedHosts` | Database hosts the server may open. Unset means any host, minus the link-local block below. Not consulted for file engines. |
+| `allowFileEngines` | Allow client-supplied SQLite/DuckDB **file paths**. Unset means no. |
+| `allowedFileRoots` | Directories a file path must resolve inside, symlinks resolved first. |
+
+A client-supplied file path is refused (`INVALID_INPUT`, 400) unless you set `allowFileEngines:
+true` **or** a non-empty `allowedFileRoots`. Setting only `allowFileEngines` allows any path the
+server process can read, so pair it with `allowedFileRoots` unless the server is single-user on
+loopback. `asksql serve` sets `allowFileEngines` only when it binds a loopback address.
 
 The wire response never includes internal error detail (hostnames, driver text); only a `code` and a
 safe `userMessage`. Use `onError` if you need the full error server-side.
-
-Full documentation: [https://github.com/rahulmahadik/AskSQL](https://github.com/rahulmahadik/AskSQL)
-
-API reference: [rahulmahadik.github.io/AskSQL](https://rahulmahadik.github.io/AskSQL/)
 
 ## HTTP endpoints
 
@@ -119,7 +131,13 @@ Every endpoint runs your auth hook first and checks the caller's connection scop
 - `POST /feedback` - marks a question/SQL pair good; stored per user as a few-shot example.
 - `GET /health` - liveness plus the connections this caller may reach.
 - `POST /connections` / `GET /connections` / `DELETE /connections/:id` - runtime
-  connection management (404 unless `dynamicConnections` is enabled).
+  connection management (404 unless `dynamicConnections` is enabled). Creating one needs the
+  wildcard scope: `auth` must return `allowedConnectionIds: ['*']` (`ANY_CONNECTION`), the same
+  authorization that lets a caller reach every connection. `DELETE` uses the ordinary per-id check.
+
+A dropped client connection aborts the work behind it: the request's `AbortSignal` is passed to
+`ask`, `execute`, `explain` and `explainSchema`, so Postgres and MySQL cancel the running query at
+the database rather than leaving it to finish unread.
 
 ## Safety notes
 
@@ -133,8 +151,14 @@ Every endpoint runs your auth hook first and checks the caller's connection scop
 - Database drivers are optional peers loaded on first use - install only the engines
   you need (`@asksql/postgres`, `@asksql/mysql`, `@asksql/oracle`, `@asksql/mongodb`,
   `@asksql/sqlite`, `@asksql/duckdb`).
-- On the Express adapter, POSTs must be `application/json` (else 415) - forcing a CORS preflight, so a
-  cross-site "simple request" can never reach `/execute`. The Express adapter takes
+- Every request other than `GET`/`HEAD`/`OPTIONS` must be `application/json` (else 415). This is
+  in the framework-agnostic handler, so every adapter gets it. The requirement forces a CORS
+  preflight, so a cross-site "simple request" can never reach `/execute`. The Express adapter takes
   `{ cors: ['https://app.example.com'] }` and keeps SSE alive behind proxies
   (heartbeats, anti-buffering headers).
+- The content-type gate and the `requireLoopbackHost` check both run **before** your `auth` hook,
+  so a rejected request never reaches it.
 
+Full documentation: [https://github.com/rahulmahadik/AskSQL](https://github.com/rahulmahadik/AskSQL)
+
+API reference: [rahulmahadik.github.io/AskSQL](https://rahulmahadik.github.io/AskSQL/)

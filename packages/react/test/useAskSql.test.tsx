@@ -6,7 +6,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
 import { useAskSql } from '../src/useAskSql.js';
-import type { AskParams, ChatEvent } from '../src/client.js';
+import type { AskParams, ChatEvent, Transport } from '../src/client.js';
 import { chatOf, deferred, makeTransport, resultOf } from './helpers.js';
 
 afterEach(cleanup);
@@ -48,10 +48,42 @@ describe('useAskSql', () => {
       await result.current.ask('how are the tables related?');
     });
     const turn = result.current.turns[0]!;
-    expect(explainSchema).toHaveBeenCalledWith('how are the tables related?', undefined);
+    // The prior turns travel with it, so a follow-up like "explain this query" knows which query.
+    expect(explainSchema).toHaveBeenCalledWith('how are the tables related?', undefined, [], expect.any(AbortSignal));
     expect(turn.phase).toBe('done');
     expect(turn.schemaAnswer?.answer).toContain('customer_id');
     expect(turn.error).toBeUndefined();
+  });
+
+  it('Stop reaches the schema fallback instead of answering after the user gave up', async () => {
+    const explainSchema = vi.fn(
+      (_q: string, _c?: string, _ctx?: readonly { question: string; sql: string }[], signal?: AbortSignal) =>
+        new Promise<never>((_, reject) => {
+          signal?.addEventListener('abort', () => {
+            const e = new Error('aborted');
+            e.name = 'AbortError';
+            reject(e);
+          });
+        }),
+    );
+    const transport = makeTransport({
+      chat: chatOf({ type: 'error', code: 'LLM_BAD_OUTPUT', userMessage: "couldn't build a query" }),
+      explainSchema: explainSchema as unknown as Transport['explainSchema'],
+    });
+    const { result } = renderHook(() => useAskSql({ transport, answerSchemaQuestions: true }));
+    let asking!: Promise<void>;
+    act(() => {
+      asking = result.current.ask('how are the tables related?');
+    });
+    await waitFor(() => expect(explainSchema).toHaveBeenCalled());
+    act(() => {
+      result.current.cancel();
+    });
+    await act(async () => {
+      await asking;
+    });
+    expect(result.current.turns[0]!.schemaAnswer).toBeUndefined();
+    expect(result.current.turns[0]!.phase).toBe('error');
   });
 
   it('does not fall back when answerSchemaQuestions is off', async () => {
@@ -127,6 +159,33 @@ describe('useAskSql', () => {
     });
     expect(result.current.turns[0]!.phase).toBe('sql_ready');
     expect(execute).not.toHaveBeenCalled();
+  });
+
+  it('editSql (approval mode) clears the suggested fix it just applied', async () => {
+    const transport = makeTransport({
+      chat: chatOf({ type: 'sql', sql: 'SELCT 1' }, { type: 'done' }),
+      execute: async () => {
+        throw { code: 'DB_QUERY_ERROR', userMessage: 'syntax error', suggestedSql: 'SELECT 1' };
+      },
+    });
+    const { result } = renderHook(() => useAskSql({ transport, requireApproval: true }));
+    await act(async () => {
+      await result.current.ask('q');
+    });
+    const id = result.current.turns[0]!.id;
+    await act(async () => {
+      await result.current.run(id);
+    });
+    expect(result.current.turns[0]!.suggestedSql).toBe('SELECT 1');
+
+    // Applying the correction: nothing runs yet, but the turn must be renderable and runnable.
+    act(() => {
+      result.current.editSql(id, 'SELECT 1');
+    });
+    const turn = result.current.turns[0]!;
+    expect(turn.sql).toBe('SELECT 1');
+    expect(turn.suggestedSql).toBeUndefined();
+    expect(turn.phase).toBe('sql_ready');
   });
 
   it('planFor fetches an EXPLAIN plan and stores its text', async () => {
@@ -210,6 +269,18 @@ describe('useAskSql', () => {
     });
     expect(result.current.turns[0]!.phase).toBe('error');
     expect(result.current.turns[0]!.error?.code).toBe('LLM_UNAVAILABLE');
+  });
+
+  it('a stream that ends without SQL or an error surfaces a retryable failure', async () => {
+    const transport = makeTransport({ chat: chatOf({ type: 'stage', stage: 'llm' }) });
+    const { result } = renderHook(() => useAskSql({ transport }));
+    await act(async () => {
+      await result.current.ask('q');
+    });
+    const turn = result.current.turns[0]!;
+    expect(turn.phase).toBe('error');
+    expect(turn.error?.retryable).toBe(true);
+    expect(result.current.busy).toBe(false);
   });
 
   it('a failed run surfaces the error and any suggested fix', async () => {
@@ -364,6 +435,61 @@ describe('useAskSql', () => {
     });
     expect(execute).not.toHaveBeenCalled();
     expect(result.current.turns[0]!.phase).toBe('stopped');
+  });
+
+  it('a stopped turn unwinding later never tears down the turn that replaced it', async () => {
+    const gate = deferred();
+    const execute = vi.fn(async () => resultOf());
+    let asked = 0;
+    const transport = makeTransport({
+      chat: async function* (params: AskParams): AsyncIterable<ChatEvent> {
+        yield { type: 'stage', stage: 'llm' };
+        // First stream ends quietly after the Stop; the second only ends when aborted.
+        if (++asked === 1) {
+          await gate.promise;
+          return;
+        }
+        yield { type: 'sql', sql: 'SELECT 1' };
+        await new Promise<void>((_, reject) => {
+          params.signal?.addEventListener('abort', () => {
+            const e = new Error('aborted');
+            e.name = 'AbortError';
+            reject(e);
+          });
+        });
+      },
+      execute,
+    });
+    const { result } = renderHook(() => useAskSql({ transport }));
+    let first!: Promise<void>;
+    let second!: Promise<void>;
+    act(() => {
+      first = result.current.ask('q1');
+    });
+    await waitFor(() => expect(result.current.busy).toBe(true));
+    act(() => {
+      result.current.cancel();
+    });
+    act(() => {
+      second = result.current.ask('q2');
+    });
+    await waitFor(() => expect(result.current.turns).toHaveLength(2));
+
+    gate.resolve();
+    await act(async () => {
+      await first;
+    });
+    // The second turn is still streaming, so its Stop button must still be there.
+    expect(result.current.busy).toBe(true);
+
+    act(() => {
+      result.current.cancel();
+    });
+    await act(async () => {
+      await second;
+    });
+    expect(result.current.turns[1]!.phase).toBe('stopped');
+    expect(execute).not.toHaveBeenCalled();
   });
 
   it('keeps busy across the auto-run so Stop stays available', async () => {

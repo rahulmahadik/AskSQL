@@ -1,16 +1,8 @@
 /**
- * @asksql/postgres - PostgreSQL connector.
- *
- * - Read-only session enforcement: every query runs inside a
- * `READ ONLY` transaction with a `SET LOCAL statement_timeout`, so even
- * if the guard were bypassed the database itself rejects writes.
- * - Cancellation: the backend PID is captured per query and a
- * fresh connection issues `pg_cancel_backend` on abort.
- * - Row cap enforced at the driver via a hard slice, independent of the
- * guard's LIMIT injection (defense in depth).
- *
- * `pg` is a peer dependency - imported lazily so installing this package
- * never pulls a driver a user doesn't want.
+ * @asksql/postgres - PostgreSQL connector. Every query runs inside a `READ ONLY` transaction
+ * with `SET LOCAL statement_timeout`; the backend PID is captured per query so a fresh
+ * connection can `pg_cancel_backend` on abort; the row cap is a hard slice at the driver,
+ * independent of the guard's LIMIT injection. `pg` is a lazily imported peer dependency.
  */
 
 import {
@@ -41,11 +33,7 @@ export interface PostgresConnectorConfig {
   readonly connectTimeoutMs?: number;
   /** Include pg_catalog / information_schema in the catalog. Default false. */
   readonly includeSystemSchemas?: boolean;
-  /**
-   * Opt-in: sample distinct values from short text columns that are NOT declared
-   * enums, so the model sees the real codes a `status VARCHAR` holds. This reads
-   * actual cell values (not just schema), so it is off unless the caller sets it.
-   */
+  /** Opt-in: sample distinct values from short non-enum text columns, so the model sees the real codes they hold. */
   readonly sampleColumnValues?: boolean;
 }
 
@@ -87,11 +75,8 @@ export class PostgresConnector implements Connector {
   private typeNameInflight: Promise<void> | null = null;
 
   constructor(private readonly config: PostgresConnectorConfig) {
-    // Catch a genuinely empty config up front (it would otherwise build a Pool of
-    // all-undefined options and fail much later at the first connect, as a
-    // confusing auth/unreachable error). But honour pg's libpq env vars: an
-    // env-driven config (DATABASE_URL / PGHOST / PGSERVICE / ...) legitimately
-    // passes neither a host nor a connection string here, so don't reject it.
+    // Catch a genuinely empty config up front, honouring pg's libpq env vars: an env-driven
+    // config (DATABASE_URL / PGHOST / PGSERVICE / ...) supplies neither host nor connection string.
     const env = typeof process !== 'undefined' ? process.env : undefined;
     const envConfigured = !!(
       env &&
@@ -108,7 +93,7 @@ export class PostgresConnector implements Connector {
     this.database = config.database || undefined;
   }
 
-  private async pg(): Promise<{ Pool: new (o: object) => PgPool }> {
+  private async pg(): Promise<{ Pool: new (o: object) => PgPool; types: PgTypes }> {
     try {
       const mod = (await import('pg')) as unknown as {
         default?: { Pool: new (o: object) => PgPool; types?: PgTypes };
@@ -117,8 +102,7 @@ export class PostgresConnector implements Connector {
       };
       const Pool = mod.Pool ?? mod.default?.Pool;
       if (!Pool) throw new Error('pg.Pool not found');
-      configureTypeParsers(mod.types ?? mod.default?.types);
-      return { Pool };
+      return { Pool, types: poolTypeParsers(mod.types ?? mod.default?.types) };
     } catch (err) {
       throw new AskSqlError('CONFIG_ERROR', {
         detail: `cannot import pg: ${err instanceof Error ? err.message : String(err)}`,
@@ -130,7 +114,7 @@ export class PostgresConnector implements Connector {
 
   async connect(): Promise<void> {
     if (this.pool) return;
-    const { Pool } = await this.pg();
+    const { Pool, types } = await this.pg();
     const opts: Record<string, unknown> = this.config.connectionString
       ? { connectionString: this.config.connectionString }
       : {
@@ -141,10 +125,11 @@ export class PostgresConnector implements Connector {
           database: this.config.database,
         };
     if (this.config.ssl !== undefined) opts['ssl'] = this.config.ssl;
+    // pg builds each client's TypeOverrides from this, so the parsers below reach only our pool.
+    opts['types'] = types;
     opts['max'] = this.config.max ?? 5;
     opts['application_name'] = 'asksql';
-    // pg defaults connectionTimeoutMillis to 0 (wait forever); bound it so a
-    // blackholed/half-open host fails instead of hanging connect().
+    // pg defaults connectionTimeoutMillis to 0 (wait forever); bound it so a half-open host fails.
     opts['connectionTimeoutMillis'] = this.config.connectTimeoutMs ?? 15_000;
     this.pool = new Pool(opts);
     // Fail fast + friendly on auth / unreachable.
@@ -183,9 +168,8 @@ export class PostgresConnector implements Connector {
     }
   }
 
-  // Warm the OID->typename cache once, on the checked-out client (a fresh pool connection would
-  // deadlock a small pool). Concurrent cold-starts share one in-flight query and the map is
-  // published atomically, so no caller reads an empty map and mis-types uuid/enum/money columns.
+  // Warm the OID->typename cache once, on the checked-out client: a fresh pool connection would
+  // deadlock a small pool. Concurrent cold starts share one in-flight query and publish atomically.
   private async warmTypeNames(client: Pick<PgClient, 'query'>): Promise<void> {
     if (this.typeNameCache) return;
     if (!this.typeNameInflight) {
@@ -239,11 +223,8 @@ export class PostgresConnector implements Connector {
       await client.query('BEGIN READ ONLY');
       await client.query(`SET LOCAL statement_timeout = ${Math.max(1, Math.floor(timeoutMs))}`);
 
-      // rowMode 'array' preserves positional duplicate column names.
-      // queryMode 'extended' is a security backstop: the extended protocol allows
-      // one statement per message, so multi-statement text is rejected server-side
-      // even if it slipped past the guard's lexer. Do not switch to simple query.
-      // Client-side deadline: statement_timeout is server-side and a wedged socket never delivers it; on expiry, pg_cancel_backend and reject.
+      // rowMode 'array' preserves positional duplicate column names; queryMode 'extended' puts
+      // the query on the extended protocol, which accepts only one statement per message.
       const runQuery = (async () => {
         try {
           return await client.query({ text: sql, rowMode: 'array', queryMode: 'extended' } as unknown as string);
@@ -252,6 +233,7 @@ export class PostgresConnector implements Connector {
           throw err;
         }
       })();
+      // Client-side deadline: a wedged socket never delivers the server's statement_timeout.
       const deadline = new Promise<never>((_, reject) => {
         timer = setTimeout(
           () => {
@@ -311,25 +293,25 @@ export class PostgresConnector implements Connector {
 }
 
 interface PgTypes {
-  setTypeParser(oid: number, parser: (value: string) => unknown): void;
+  getTypeParser(oid: number, format?: string): (value: string) => unknown;
 }
 
-let parsersConfigured = false;
+// date, timestamp (without time zone), time, timetz.
+const RAW_STRING_OIDS = new Set([1082, 1114, 1083, 1266]);
 
 /**
- * Return date / time-without-zone types as their raw string so a DATE never
- * shifts a day through a JS `Date` + `toISOString` round-trip.
- * `timestamptz` is left as the driver default (an absolute instant -> ISO-Z,
- * which is unambiguous). Idempotent; the parser table is process-global.
+ * Return date / time-without-zone types as their raw string, so a DATE never shifts a day through
+ * a JS `Date` round-trip; `timestamptz` keeps the driver default. Passed as the pool's `types`
+ * rather than written into pg's process-global registry, which the host application shares.
  */
-function configureTypeParsers(types: PgTypes | undefined): void {
-  if (parsersConfigured || !types) return;
+function poolTypeParsers(global: PgTypes | undefined): PgTypes {
   const identity = (v: string): string => v;
-  types.setTypeParser(1082, identity); // date
-  types.setTypeParser(1114, identity); // timestamp (without time zone)
-  types.setTypeParser(1083, identity); // time
-  types.setTypeParser(1266, identity); // timetz
-  parsersConfigured = true;
+  return {
+    getTypeParser(oid, format) {
+      if (format !== 'binary' && RAW_STRING_OIDS.has(oid)) return identity;
+      return global?.getTypeParser(oid, format) ?? identity;
+    },
+  };
 }
 
 function mapConnectError(err: unknown): AskSqlError {

@@ -3,7 +3,7 @@
 The Oracle Database connector for [AskSQL](https://github.com/rahulmahadik/AskSQL): data-dictionary
 introspection (tables, views, columns, primary keys, foreign keys, comments) and guarded read-only
 query execution. The driver (oracledb) is a peer dependency, so you install it yourself. It runs in
-pure-JS **Thin mode** — no Oracle Instant Client required.
+pure-JS **Thin mode**, so no Oracle Instant Client is required.
 
 ```bash
 npm i @asksql/core @asksql/oracle oracledb
@@ -26,6 +26,10 @@ const connector = new OracleConnector({
 // Or an Easy Connect / TNS connect string:
 // new OracleConnector({ id: 'main', name: 'Main DB', connectString: 'db.example.com:1521/ORCLPDB1', user: 'app', password: '...' });
 ```
+
+Row caps are applied to Oracle's own paging syntax: an existing `FETCH FIRST`/`FETCH NEXT ... ROWS
+ONLY` is lowered in place rather than wrapped in an inline view, and one is appended when the query
+has none.
 
 Pass the connector to `createAskSql` from `@asksql/core`.
 

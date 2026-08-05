@@ -1,6 +1,6 @@
 # @asksql/mysql
 
-The mysql connector for [AskSQL](https://github.com/rahulmahadik/AskSQL): introspection (tables, views, keys,
+The MySQL connector for [AskSQL](https://github.com/rahulmahadik/AskSQL): introspection (tables, views, keys,
 enums, indexes) and guarded read-only query execution. The driver (mysql2) is a
 peer dependency, so you install it yourself.
 
@@ -16,6 +16,9 @@ const connector = new MysqlConnector({
   uri: process.env.DATABASE_URL, database: 'shop',
 });
 ```
+
+The query timeout is applied as a `MAX_EXECUTION_TIME` optimizer hint on the statement itself, so
+it never outlives the query or changes the pooled session other statements reuse.
 
 Pass the connector to `createAskSql` from `@asksql/core`.
 

@@ -1,14 +1,8 @@
 /**
  * Browser (IIFE) entry - the build behind the `<script>` tag.
  *
- * esbuild bundles this (with React and react-dom included) into
- * `dist/asksql-widget.js`, so a plain HTML page can do:
- *
- *   <script src="https://unpkg.com/@asksql/widget"></script>
- *   <script>AskSQL.mount({ target: '#chat', serverUrl: '/asksql' })</script>
- *
- * The ESM entry (`src/index.ts`) stays the package's `main`/`module` for
- * bundler users; this file only adds the global.
+ * esbuild bundles this with React into `dist/asksql-widget.js` and it adds the
+ * `AskSQL` global; `src/index.ts` stays the ESM entry for bundler users.
  */
 
 import AskSQL from './index.js';

@@ -1,17 +1,24 @@
 /**
- * The MongoDB engine path: a non-SQL parallel to the SQL EnginePipeline.
- *
- * A question becomes a single read-only aggregation pipeline through the same
- * ask -> extract -> guard -> (repair) loop, then executes against a MongoConnector.
+ * The MongoDB engine path: a non-SQL parallel to the SQL EnginePipeline. A question becomes a
+ * single read-only aggregation pipeline through the same ask -> extract -> guard -> (repair) loop.
  * MongoDB has no read-only session, so guardPipeline is re-run on every execute.
  */
 
 import { AskSqlError } from '../errors.js';
 import { callModel } from '../llm.js';
 import { pruneCatalog } from '../catalog.js';
-import { closestTableName } from '../schema-match.js';
 import {
+  closestTableName,
+  isDatabaseOverviewQuestion,
+  isSchemaAdviceQuestion,
+  isSchemaProposalQuestion,
+  isWriteRequest,
+} from '../schema-match.js';
+import {
+  capabilityAnswer,
+  isCapabilityQuestion,
   isDegenerateAnswer,
+  isPromptInjection,
   isOffTopic,
   isProseRefusal,
   looksDatabaseRelated,
@@ -52,16 +59,11 @@ import {
 
 const MAX_REPAIRS = 2;
 const CATALOG_TTL_MS = 300_000;
-// A catalog carrying warnings (per-collection sample failures) is partial; cache it
-// briefly so a transient failure heals on the next ask instead of persisting 5 minutes.
+// A catalog carrying warnings (per-collection sample failures) is partial and cached only briefly.
 const WARNED_CATALOG_TTL_MS = 30_000;
 const MAX_QUESTION_LENGTH = 10_000;
 
-/**
- * A MongoDB data source. Unlike the SQL Connector, results are produced from a
- * (collection, pipeline) pair rather than a SQL string; introspection is
- * sampling-based and lives in the connector.
- */
+/** A MongoDB data source: results come from a (collection, pipeline) pair, and introspection is sampling-based. */
 export interface MongoConnector {
   readonly id: string;
   readonly name: string;
@@ -81,6 +83,8 @@ export interface MongoAskConfig {
   readonly pruner?: PrunerSettings;
   readonly glossary?: readonly GlossaryEntry[];
   readonly customInstructions?: string;
+  /** Send sampled field values to the model. Off by default: only the schema leaves the machine. */
+  readonly allowDataInPrompt?: boolean;
   readonly onEvent?: (event: EngineEvent) => void;
 }
 
@@ -106,16 +110,15 @@ export interface MongoAskEngine {
   execute(pipelineJson: string, collection: string, opts?: ExecuteOptions): Promise<ResultSet>;
   explain(pipelineJson: string, opts?: { signal?: AbortSignal }): Promise<string>;
   /** Prose answer about the database itself, for a question no pipeline can answer. Mirrors the SQL engine's method. */
-  explainSchema(question: string, opts?: { signal?: AbortSignal }): Promise<SchemaAnswer>;
+  explainSchema(
+    question: string,
+    opts?: { signal?: AbortSignal; context?: readonly MongoContextTurn[] },
+  ): Promise<SchemaAnswer>;
   catalog(): Promise<SchemaCatalog>;
   invalidateCatalog(): void;
 }
 
-/**
- * A question asking to add/change/remove data or collections: the answer is a proposal, so new
- * names are expected. Word-for-word the SQL path's list - a divergence classified the same
- * request differently depending on which engine the user happened to be connected to.
- */
+/** A question asking to add/change/remove data or collections; word-for-word the SQL path's list. */
 const MONGO_SCHEMA_CHANGE_RE = SCHEMA_CHANGE_RE;
 
 /** A write command offered in an answer: the document counterpart of PROPOSED_WRITE_RE. */
@@ -159,9 +162,8 @@ function rewriteJoinTargets(node: unknown, resolve: (n: string) => string | null
 }
 
 /**
- * Resolve every $lookup/$graphLookup/$unionWith target in a guarded pipeline against
- * the catalog and rewrite it to real casing. A hallucinated or wrong-cased target
- * silently returns empty joins, so an unresolved name is reported for the caller to reject.
+ * Resolve every $lookup/$graphLookup/$unionWith target against the catalog and rewrite it to real
+ * casing; an unresolved name is reported, since a wrong-cased target silently joins nothing.
  */
 function resolveJoinTargets(
   verdict: MongoGuardVerdict,
@@ -176,31 +178,76 @@ function resolveJoinTargets(
   return { pipelineJson: JSON.stringify(rewritten), unresolved };
 }
 
+/** Stages that only slice a result; a pipeline made solely of these answers nothing. */
+const PASSTHROUGH_STAGES: ReadonlySet<string> = new Set(['$limit', '$skip', '$sort', '$sample']);
+
+/** The model saying in prose that it cannot answer while still emitting a pipeline. */
+const CANNOT_ANSWER_RE =
+  /\b(?:impossible to answer|impossible to determine|cannot be answered|can(?:no|')t be answered|not possible to answer|unable to answer|no way to answer|(?:does not|doesn't|do not|don't) (?:contain|have) (?:any |the )?(?:information|data|fields?|columns?)[^.?!]{0,30}(?:needed|required|necessary) to answer|(?:cannot|can(?:no|')t) (?:be )?(?:determine|determined|answer)[^.?!]{0,40}\bfrom (?:this|the) schema)\b/i;
+
+/** True when a pipeline selects, groups and computes nothing - it just hands back arbitrary documents. */
+function isNoOpPipeline(pipelineJson: string): boolean {
+  let stages: unknown;
+  try {
+    stages = JSON.parse(pipelineJson);
+  } catch {
+    return false; // unparsable is the guard's problem, not this check's
+  }
+  if (!Array.isArray(stages)) return false;
+  // `[]` selects nothing; the guard auto-limits it into 1000 arbitrary documents.
+  if (stages.length === 0) return true;
+  return stages.every((stage) => {
+    if (typeof stage !== 'object' || stage === null) return false;
+    const keys = Object.keys(stage as Record<string, unknown>);
+    return keys.length > 0 && keys.every((k) => PASSTHROUGH_STAGES.has(k));
+  });
+}
+
 export function createMongoAskSql(config: MongoAskConfig): MongoAskEngine {
   const policy: MongoGuardPolicy = { ...DEFAULT_MONGO_GUARD_POLICY, ...config.policy };
 
   let cached: { catalog: SchemaCatalog; at: number; ttl: number } | null = null;
   let inflight: Promise<SchemaCatalog> | null = null;
+  // Bumped by invalidateCatalog so an introspect already running cannot write a stale result.
+  let generation = 0;
+
+  /**
+   * Drops sampled field values unless the user opted in. Applied at the single exit from
+   * `catalog`, so no caller can leak values by forgetting to strip them.
+   */
+  const withoutSampledData = (cat: SchemaCatalog): SchemaCatalog => {
+    if (config.allowDataInPrompt === true) return cat;
+    if (!cat.tables.some((t) => t.columns.some((c) => c.sampledValues && c.sampledValues.length > 0))) return cat;
+    return {
+      ...cat,
+      tables: cat.tables.map((t) => ({
+        ...t,
+        columns: t.columns.map(({ sampledValues: _dropped, ...rest }) => rest),
+      })),
+    };
+  };
 
   const catalog = async (): Promise<SchemaCatalog> => {
-    if (cached && Date.now() - cached.at < cached.ttl) return cached.catalog;
-    if (inflight) return inflight;
+    if (cached && Date.now() - cached.at < cached.ttl) return withoutSampledData(cached.catalog);
+    if (inflight) return inflight.then(withoutSampledData);
+    const startedAt = generation;
     inflight = (async () => {
       await config.connector.connect();
       const cat = await config.connector.introspect();
-      // No readable collections plus warnings is a permission/network failure
-      // masquerading as an empty database; surface it and never cache it.
+      // No readable collections plus warnings is a permission/network failure, not an empty database.
       const allEmpty = cat.tables.length === 0 || cat.tables.every((t) => t.columns.length === 0);
       if (allEmpty && cat.warnings.length > 0) {
         throw new AskSqlError('DB_QUERY_ERROR', {
-          userMessage: "Could not read this database's collections. Check the connection's permissions, then try again.",
+          userMessage:
+            "Could not read this database's collections. Check the connection's permissions, then try again.",
           detail: `introspection returned no readable collections with warnings: ${cat.warnings.join('; ').slice(0, 500)}`,
           retryable: true,
         });
       }
       const ttl = cat.warnings.length > 0 ? WARNED_CATALOG_TTL_MS : CATALOG_TTL_MS;
-      cached = { catalog: cat, at: Date.now(), ttl };
-      return cat;
+      // Only the newest read may cache: an invalidate during this introspect starts a new one.
+      if (startedAt === generation) cached = { catalog: cat, at: Date.now(), ttl };
+      return withoutSampledData(cat);
     })().finally(() => {
       inflight = null;
     });
@@ -220,6 +267,38 @@ export function createMongoAskSql(config: MongoAskConfig): MongoAskEngine {
       });
     }
 
+    // Same routing the SQL engine does, write checked first; answered from the prose path.
+    if (isCapabilityQuestion(q)) {
+      throw new AskSqlError('LLM_BAD_OUTPUT', {
+        userMessage: 'That is a question about AskSQL itself rather than the data.',
+        detail: 'capability question routed to the prose path',
+        retryable: false,
+      });
+    }
+    // Declined before any model call: a small model can be argued into answering these.
+    if (isPromptInjection(q)) {
+      throw new AskSqlError('LLM_REFUSAL', {
+        userMessage: 'I only answer questions about the data in this database.',
+        detail: 'prompt-injection attempt declined',
+        retryable: false,
+      });
+    }
+    if (isWriteRequest(q)) {
+      throw new AskSqlError('LLM_BAD_OUTPUT', {
+        userMessage:
+          'That asks for a statement that changes data. AskSQL is read-only, so it is written out for you to run yourself.',
+        detail: 'write request routed to the proposal path',
+        retryable: false,
+      });
+    }
+    if (isSchemaAdviceQuestion(q) || isDatabaseOverviewQuestion(q)) {
+      throw new AskSqlError('LLM_BAD_OUTPUT', {
+        userMessage: 'That asks about the schema itself rather than the data in it, so there is no query to run.',
+        detail: 'schema-advice question routed to the prose path',
+        retryable: false,
+      });
+    }
+
     emit({ type: 'stage', stage: 'catalog' });
     const fullCatalog = await catalog();
     emit({ type: 'stage', stage: 'prune' });
@@ -235,6 +314,8 @@ export function createMongoAskSql(config: MongoAskConfig): MongoAskEngine {
       context: opts.context,
     });
     let lastPipeline = '';
+    // Same as the SQL engine: a model that says nothing on every attempt is unreachable.
+    let everyReplyEmpty = true;
     let contextShrunk = false;
     let triedFuzzyRepair = false;
 
@@ -271,6 +352,8 @@ export function createMongoAskSql(config: MongoAskConfig): MongoAskEngine {
         throw err;
       }
 
+      if (text.trim().length > 0) everyReplyEmpty = false;
+
       emit({ type: 'stage', stage: 'extract' });
       const extraction = extractPipeline(text);
       if (!extraction) {
@@ -295,7 +378,16 @@ export function createMongoAskSql(config: MongoAskConfig): MongoAskEngine {
           });
         }
         if (attempt >= MAX_REPAIRS) {
+          if (everyReplyEmpty) {
+            throw new AskSqlError('LLM_UNAVAILABLE', {
+              userMessage:
+                'The AI model returned an empty response. Check the model name is right and that your account can use it.',
+              detail: `model returned nothing on all ${attempt + 1} attempts`,
+            });
+          }
           throw new AskSqlError(looksLikeRefusal(text) ? 'LLM_REFUSAL' : 'LLM_BAD_OUTPUT', {
+            // The default message says "SQL", which is the wrong word on a MongoDB connection.
+            userMessage: "Couldn't produce a valid aggregation pipeline for this question. Try rephrasing it.",
             detail: `no pipeline extracted after ${attempt + 1} attempts; raw preview: ${text.slice(0, 200)}`,
           });
         }
@@ -308,6 +400,25 @@ export function createMongoAskSql(config: MongoAskConfig): MongoAskEngine {
         continue;
       }
       lastPipeline = extraction.pipelineJson;
+
+      // The document counterpart of the SQL path's literal-answer check.
+      if (isNoOpPipeline(extraction.pipelineJson) && CANNOT_ANSWER_RE.test(text)) {
+        if (attempt >= MAX_REPAIRS) {
+          throw new AskSqlError('LLM_BAD_OUTPUT', {
+            userMessage: "That question doesn't seem to match any collection in this database.",
+            detail: 'pipeline selects nothing (no $match/$group/$project stage)',
+            retryable: false,
+          });
+        }
+        userPrompt = buildMongoRepairUser({
+          question: q,
+          failedPipeline: extraction.pipelineJson,
+          failure:
+            'That pipeline has no stage that answers the question. Use $match/$group/$project, or reply with IMPOSSIBLE and one sentence saying why.',
+          schemaText: pruned.schemaText,
+        });
+        continue;
+      }
 
       emit({ type: 'stage', stage: 'guard' });
       const verdict = guard(extraction.pipelineJson);
@@ -346,8 +457,7 @@ export function createMongoAskSql(config: MongoAskConfig): MongoAskEngine {
         continue;
       }
 
-      // Join-target floor: a hallucinated/wrong-cased $lookup `from` silently joins
-      // nothing. Resolve every referenced collection and rewrite it to real casing.
+      // Join-target floor: a hallucinated or wrong-cased $lookup `from` silently joins nothing.
       const joins = resolveJoinTargets(verdict, fullCatalog);
       if (joins.unresolved.length > 0) {
         if (attempt >= MAX_REPAIRS) {
@@ -384,8 +494,7 @@ export function createMongoAskSql(config: MongoAskConfig): MongoAskEngine {
   };
 
   const execute = async (pipelineJson: string, collection: string, opts: ExecuteOptions = {}): Promise<ResultSet> => {
-    // Re-guard every time: the pipeline may have been edited, and Mongo has no
-    // read-only session, so the guard is the sole safety floor.
+    // Re-guard every time: the pipeline may have been edited, and Mongo has no read-only session.
     const verdict = guard(pipelineJson);
     if (!verdict.allowed) {
       throw new AskSqlError('GUARD_BLOCKED', {
@@ -433,7 +542,10 @@ export function createMongoAskSql(config: MongoAskConfig): MongoAskEngine {
     return result.text.trim();
   };
 
-  const explainSchema = async (question: string, opts: { signal?: AbortSignal } = {}): Promise<SchemaAnswer> => {
+  const explainSchema = async (
+    question: string,
+    opts: { signal?: AbortSignal; context?: readonly MongoContextTurn[] } = {},
+  ): Promise<SchemaAnswer> => {
     const q = (question ?? '').trim();
     if (!q) throw new AskSqlError('INVALID_INPUT');
     // Same cap as every other entry point: this one is reachable from the public server route.
@@ -443,33 +555,45 @@ export function createMongoAskSql(config: MongoAskConfig): MongoAskEngine {
         detail: `question length ${q.length}`,
       });
     }
+    // Answered in code: a model could get "can you delete my data" wrong in the direction that matters.
+    if (isPromptInjection(q)) return offTopicAnswer('MongoDB');
+    if (isCapabilityQuestion(q)) return capabilityAnswer('MongoDB');
     const full = await catalog();
     if (full.tables.length === 0) {
-      return { answer: 'This connection has no collections the current user can read.', tables: [], grounded: true, unknownReferences: [], isSchemaChange: false };
+      return {
+        answer: 'This connection has no collections the current user can read.',
+        tables: [],
+        grounded: true,
+        unknownReferences: [],
+        isSchemaChange: false,
+      };
     }
-    const isSchemaChange = MONGO_SCHEMA_CHANGE_RE.test(q);
+    // Same rule as the SQL engine: advice proposes names, an overview does not.
+    const isSchemaChange = MONGO_SCHEMA_CHANGE_RE.test(q) || isSchemaProposalQuestion(q);
     const pruned = pruneCatalog(full, q, config.pruner);
     let answer = (
       await callModel({
         model: config.model,
         system: buildMongoSchemaAnswerSystem(isSchemaChange),
-        prompt: buildMongoSchemaAnswerUser(q, pruned.schemaText),
+        prompt: buildMongoSchemaAnswerUser(q, pruned.schemaText, opts.context),
         signal: opts.signal,
         settings: config.llm,
       })
     ).text.trim();
-    // Same three signals as the SQL path: database words, a change request, or - the one that
-    // does not depend on phrasing - naming a collection or field that really exists here.
+    // Same signals as the SQL path: database words, a change request, a real collection name, or a follow-up.
     const questionIsAboutThisDatabase =
-      looksDatabaseRelated(q) || isSchemaChange || mentionsCatalogName(q, full);
+      looksDatabaseRelated(q) ||
+      isSchemaChange ||
+      mentionsCatalogName(q, full) ||
+      (Array.isArray(opts.context) &&
+        opts.context.some((t) => typeof t?.pipelineJson === 'string' && t.pipelineJson.trim().length > 0));
     if (isOffTopic(answer) || (isDegenerateAnswer(answer) && !MONGO_WRITE_COMMAND_RE.test(answer))) {
       // Challenge the refusal once when the question is plainly about data; accept it otherwise.
       if (!questionIsAboutThisDatabase) return offTopicAnswer('MongoDB');
       answer = (
         await callModel({
           model: config.model,
-          // No sentinel in this system prompt: the question is already known to be
-          // about data, so the model has no refusal to repeat.
+          // No sentinel in this system prompt: the question is already known to be about data.
           system: buildMongoSchemaAnswerSystem(isSchemaChange, false),
           prompt: buildMongoSchemaAnswerScopeRepairUser(q, pruned.schemaText),
           signal: opts.signal,
@@ -496,25 +620,30 @@ export function createMongoAskSql(config: MongoAskConfig): MongoAskEngine {
     }
     // Strip before grounding, for the same reason as the SQL path.
     answer = stripSentinel(answer);
-    // Same deterministic guarantee as the SQL path: a proposed write always says who runs it.
+    // A proposed write always says who runs it; a write in the QUESTION counts too.
     const withNote =
-      MONGO_WRITE_COMMAND_RE.test(answer) &&
-      !/read-only/i.test(answer)
+      (MONGO_WRITE_COMMAND_RE.test(answer) || MONGO_WRITE_COMMAND_RE.test(q)) && !/read-only/i.test(answer)
         ? `${answer}\n\n*Proposal only - AskSQL is read-only and never executes commands; run it yourself if you want it applied.*`
         : answer;
-    // Same grounding floor as the SQL path, against the FULL catalog so a collection dropped
-    // by pruning is not mistaken for an invention. Claiming grounded:true unconditionally hid
-    // exactly the hallucinations this value is meant to warn about.
-    // Computed unconditionally, like the SQL path: for a change request these are the PROPOSED
-    // names, which the UI shows as proposals rather than errors. Zeroing them here meant MongoDB
-    // users never saw that list at all.
+    // Grounded against the FULL catalog, so a pruned-away collection is not read as an invention.
+    // For a change request these are proposed names, not errors.
     const unknownReferences = unknownReferencesInProse(withNote, full, { documentStyle: true });
+    // The pipeline a prose answer suggested, so a follow-up can refer to it. Read-only only, and
+    // only when it names collections and fields that exist.
+    const proposed = extractPipeline(withNote)?.pipelineJson?.trim();
+    const proposedSql =
+      proposed &&
+      guard(proposed).allowed &&
+      unknownReferencesInProse(proposed, full, { documentStyle: true }).length === 0
+        ? proposed
+        : undefined;
     return {
       answer: withNote,
       tables: pruned.catalog.tables.map((t) => t.name),
       grounded: unknownReferences.length === 0,
       unknownReferences,
       isSchemaChange,
+      ...(proposedSql ? { proposedSql } : {}),
     };
   };
 
@@ -525,6 +654,9 @@ export function createMongoAskSql(config: MongoAskConfig): MongoAskEngine {
     explainSchema,
     catalog,
     invalidateCatalog: () => {
+      // Bump the generation too: an introspect already running must not write its result back.
+      generation += 1;
+      inflight = null;
       cached = null;
     },
   };

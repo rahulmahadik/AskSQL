@@ -100,7 +100,9 @@ describe('formatCatalogForPrompt', () => {
     expect(text).toContain('lifecycle');
     expect(text).toContain('region_kind');
     expect(text).toContain('total_revenue'); // STABLE routine is callable
-    expect(text).not.toContain('do_write'); // VOLATILE routine is not offered
+    // Listed under STORED PROCEDURES so a DBA question can be answered, never as callable.
+    expect(text).toContain('STORED PROCEDURES');
+    expect(text.split('CALLABLE READ-ONLY FUNCTIONS')[1] ?? '').not.toContain('do_write'); // VOLATILE routine is not offered
   });
 });
 

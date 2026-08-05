@@ -223,7 +223,7 @@ describe('read-only assertion', () => {
 
   beforeAll(() => {
     const seed = new DatabaseSync(file);
-    seed.exec("CREATE TABLE t (id INTEGER PRIMARY KEY); INSERT INTO t VALUES (1)");
+    seed.exec('CREATE TABLE t (id INTEGER PRIMARY KEY); INSERT INTO t VALUES (1)');
     seed.close();
   });
   afterAll(() => rmSync(file, { force: true }));
@@ -256,7 +256,11 @@ describe('read-only assertion', () => {
   });
 
   it('accepts a genuinely read-only caller handle', async () => {
-    const conn = new SqliteConnector({ id: 'r', name: 'R', database: new DatabaseSync(file, { readOnly: true }) as never });
+    const conn = new SqliteConnector({
+      id: 'r',
+      name: 'R',
+      database: new DatabaseSync(file, { readOnly: true }) as never,
+    });
     await expect(conn.connect()).resolves.toBeUndefined();
     expect((await conn.execute('SELECT count(*) FROM t')).rows.flat().map(String)).toEqual(['1']);
     await conn.close();

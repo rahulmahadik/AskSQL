@@ -136,13 +136,9 @@ export const ASKSQL_CSS = `
 const injectedInto = new WeakSet<Document | ShadowRoot>();
 
 /**
- * Inject the stylesheet once per target root. Pass a `ShadowRoot` to style
- * shadow-DOM content (the styles land inside the shadow tree, not the host
- * `<head>`); omit it to style the main document. Tracked per root, so a second
- * document/shadow root still gets styled. SSR-safe: a no-op when `document` is
- * absent. Pass a `nonce` for strict-CSP pages (`style-src 'self' 'nonce-...'`)
- * so the injected `<style>` is whitelisted; alternatively skip injection
- * entirely and ship {@link ASKSQL_CSS} in your own stylesheet.
+ * Inject the stylesheet once per target root: pass a `ShadowRoot` to style
+ * shadow-DOM content, or omit it for the main document. A no-op without
+ * `document`. Pass a `nonce` for strict-CSP pages, or ship {@link ASKSQL_CSS}.
  */
 export function ensureStyles(target?: Document | ShadowRoot, nonce?: string): void {
   const root = target ?? (typeof document !== 'undefined' ? document : undefined);

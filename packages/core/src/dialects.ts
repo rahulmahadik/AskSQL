@@ -32,11 +32,7 @@ export const MYSQL_DIALECT: DialectInfo = Object.freeze({
 
 export const SQLITE_DIALECT: DialectInfo = Object.freeze({
   engine: 'sqlite',
-  // node-sql-parser's 'Sqlite' grammar is outdated and rejects valid modern SQLite
-  // (RIGHT/FULL JOIN, window functions, INTERSECT/EXCEPT, FILTER, all 3.25-3.39).
-  // SQLite SELECT syntax is standard-SQL-compatible, so parse under 'Postgresql';
-  // the sqlite-specific safety (PRAGMA allowlist, denylist, recursive wedge) keys
-  // on `engine`, not the grammar, so it is unaffected.
+  // node-sql-parser's 'Sqlite' grammar rejects valid modern SQLite, so SQLite parses under 'Postgresql'.
   grammar: 'Postgresql',
   quoteChar: '"',
   promptLabel: 'SQLite',
@@ -49,13 +45,11 @@ export const SQLITE_DIALECT: DialectInfo = Object.freeze({
 
 export const ORACLE_DIALECT: DialectInfo = Object.freeze({
   engine: 'oracle',
-  // node-sql-parser has no Oracle grammar; Postgresql is the closest superset that
-  // parses Oracle read SELECTs (function calls, "quoted" identifiers, ROWNUM).
+  // node-sql-parser has no Oracle grammar; Postgresql parses Oracle read SELECTs.
   grammar: 'Postgresql',
   quoteChar: '"',
   promptLabel: 'Oracle',
-  // The connector caps rows via the driver, not a SQL clause (the guard's parser
-  // cannot validate FETCH FIRST); the model must not write its own row limit.
+  // The connector caps rows via the driver; the model must not write its own row limit.
   limitStyle: 'fetch',
   promptNotes: Object.freeze([
     'Do not add a row limit clause (no FETCH FIRST, no ROWNUM, no LIMIT). Order the results and the system returns the top rows.',
@@ -77,3 +71,16 @@ export const DUCKDB_DIALECT: DialectInfo = Object.freeze({
     'Uploaded files are already registered as tables - query them by table name, never by file path.',
   ]),
 });
+
+const BY_ENGINE: Readonly<Record<string, DialectInfo>> = Object.freeze({
+  postgres: POSTGRES_DIALECT,
+  mysql: MYSQL_DIALECT,
+  sqlite: SQLITE_DIALECT,
+  oracle: ORACLE_DIALECT,
+  duckdb: DUCKDB_DIALECT,
+});
+
+/** The built-in descriptor for an engine, or undefined for one supplied by a third-party connector. */
+export function dialectFor(engine: string): DialectInfo | undefined {
+  return BY_ENGINE[engine];
+}

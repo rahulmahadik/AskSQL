@@ -79,7 +79,7 @@ const req = (method: string, path: string, body?: unknown, query: Record<string,
   method,
   path,
   query,
-  headers: {},
+  headers: { 'content-type': 'application/json' },
   json: async () => body ?? {},
 });
 
@@ -195,7 +195,7 @@ describe('readBody', () => {
       method: 'POST',
       path: '/execute',
       query: {},
-      headers: {},
+      headers: { 'content-type': 'application/json' },
       json: async () => {
         throw new SyntaxError('Unexpected token');
       },
@@ -212,7 +212,7 @@ describe('readBody', () => {
       method: 'POST',
       path: '/execute',
       query: {},
-      headers: {},
+      headers: { 'content-type': 'application/json' },
       json: async () => {
         throw new AskSqlError('INVALID_INPUT', { userMessage: 'The request body is too large.' });
       },

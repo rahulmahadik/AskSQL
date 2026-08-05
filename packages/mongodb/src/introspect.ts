@@ -1,12 +1,8 @@
 /**
- * Sampling-based schema inference for MongoDB.
- *
- * MongoDB has no declared schema, so the "catalog" is inferred by sampling up
- * to {@link SAMPLE_SIZE} documents per collection and walking their dotted field
- * paths. Per path we record the BSON type(s), how often the field is present
- * (document-count, not occurrence-count), and a bounded set of example values.
- * A field whose distinct-value count exceeds a cap has its examples suppressed
- * so a high-cardinality field is never misreported as a small enum.
+ * Sampling-based schema inference for MongoDB, which has no declared schema: the catalog comes
+ * from sampling up to {@link SAMPLE_SIZE} documents per collection and walking their dotted field
+ * paths. Each path records its BSON type(s), the share of documents holding it, and a bounded set
+ * of example values, suppressed once the distinct count passes {@link MAX_EXAMPLES}.
  */
 
 import type { ColumnInfo, SchemaCatalog, TableInfo } from '@asksql/core';

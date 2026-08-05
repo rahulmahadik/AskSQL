@@ -1,10 +1,8 @@
 /**
- * The AskSQL security boundary: deterministic, AST-based, fail-closed.
- * Unparseable input is blocked. Allowlist: a single SELECT (CTEs verified
- * recursively), EXPLAIN of a guarded SELECT, and read-only PRAGMA/SHOW per
- * dialect. Per-dialect dangerous-function denylist that policy may only
- * tighten. Auto-LIMIT injection/lowering happens here so every caller gets
- * the same capped SQL.
+ * The AskSQL security boundary: deterministic, AST-based, fail-closed. Unparseable input is
+ * blocked. Allowlist: a single SELECT (CTEs verified recursively), EXPLAIN of a guarded SELECT,
+ * and read-only PRAGMA/SHOW per dialect. Per-dialect dangerous-function denylist that policy may
+ * only tighten, plus auto-LIMIT injection/lowering.
  */
 
 import pkg from 'node-sql-parser';
@@ -21,8 +19,7 @@ export const DEFAULT_GUARD_POLICY: GuardPolicy = Object.freeze({
   denyFunctions: Object.freeze([]) as readonly string[],
   allowFileFunctions: false,
   maxSqlLength: 100_000,
-  // Generic walk-depth (objects + arrays), not statement nesting: long AND
-  // chains legitimately reach ~200. 400 still blocks pathological nesting.
+  // Generic walk-depth (objects + arrays), not statement nesting: long AND chains reach ~200.
   maxDepth: 400,
 });
 
@@ -196,9 +193,7 @@ const PG_DENY_FUNCTIONS = [
   'pgstattuple',
   'pgstatindex',
   'pgstatginindex',
-  // Functions that take SQL (or a whole table/schema/database) as a STRING and
-  // execute it. The AST walk cannot see inside a string literal, so without these
-  // `query_to_xml('SELECT pg_sleep(60)', ...)` bypasses every other denied entry.
+  // Functions that execute SQL passed as a STRING: the AST walk cannot see inside a string literal.
   'query_to_xml',
   'query_to_xmlschema',
   'query_to_xml_and_xmlschema',
@@ -213,8 +208,7 @@ const PG_DENY_FUNCTIONS = [
   'database_to_xml',
   'database_to_xmlschema',
   'database_to_xml_and_xmlschema',
-  // Sequence mutations: read-only on Postgres/MySQL/SQLite via their read-only
-  // session, but DuckDB relies solely on the guard, so deny them universally.
+  // Sequence mutations: DuckDB has no read-only session, so they are denied universally.
   'nextval',
   'setval',
 ];
@@ -251,10 +245,7 @@ const SQLITE_DENY_FUNCTIONS = [
 
 const DUCKDB_DENY_ALWAYS = [
   'getenv',
-  // Scanner-extension functions run arbitrary SQL against, or attach, a foreign
-  // database (Postgres/MySQL/SQLite) - a write channel through a SELECT. DuckDB
-  // autoloads these extensions on first use, and it has no read-only session, so
-  // the guard is the only defence.
+  // Scanner-extension functions run SQL against, or attach, a foreign database - a write channel through a SELECT.
   'postgres_execute',
   'mysql_execute',
   'sqlite_execute',
@@ -276,9 +267,7 @@ const DUCKDB_DENY_ALWAYS = [
   // Secret store disclosure.
   'duckdb_secrets',
   'which_secret',
-  // httpfs / community extensions make outbound network requests from a SELECT:
-  // http_get is SSRF (can reach the cloud instance-metadata endpoint), http_post/put
-  // are an exfiltration write channel. read_gsheet / fsdir read external data / dirs.
+  // httpfs extensions make outbound requests from a SELECT: SSRF via http_get, exfiltration via http_post/put.
   'http_get',
   'http_post',
   'http_put',
@@ -287,9 +276,7 @@ const DUCKDB_DENY_ALWAYS = [
   'http_patch',
   'read_gsheet',
   'fsdir',
-  // query()/query_table() execute a SQL string in the same connection - the AST
-  // walk cannot see inside the string, so this is the string-exec class (like
-  // Postgres query_to_xml). A wrapped read_csv reads any file.
+  // query()/query_table() execute a SQL string in the same connection; a wrapped read_csv reads any file.
   'query',
   'query_table',
   // Secret/credential loaders and session mutators.
@@ -297,32 +284,21 @@ const DUCKDB_DENY_ALWAYS = [
   'set_current_schema',
 ];
 
-/**
- * DuckDB function-name suffixes that are always a foreign-DB/scanner escape,
- * whatever the extension prefix. Denylisting names alone cannot keep up with
- * DuckDB's open extension surface, so any `<x>_execute` / `<x>_query` / `<x>_scan`
- * / `<x>_attach` is refused on the duckdb dialect.
- */
+/** DuckDB suffixes that are always a foreign-DB/scanner escape: `_execute`, `_query`, `_scan`, `_attach`. */
 const DUCKDB_DENY_SUFFIXES = ['_execute', '_query', '_scan', '_attach'];
 
 /** Postgres file/dir disclosure families - every member is admin-only, never a read-only analytics call. */
 const PG_DENY_PREFIXES = ['pg_ls_', 'pg_read_'];
 
-/**
- * DuckDB function-name prefixes that are always a file/data reader (read_csv,
- * read_parquet, read_avro, read_arrow, scan_arrow_ipc, ...). Registered files are
- * queried by their VIEW name, never through a read_/scan_ call, so denying the
- * whole prefix closes the arbitrary-file-read class against any current or future
- * reader extension rather than chasing individual names.
- */
+/** DuckDB prefixes that are always a file/data reader (read_csv, read_parquet, scan_arrow_ipc, ...). */
+/** Oracle's row-limiting clause in every legal spelling; node-sql-parser reads none of them. */
+const ORACLE_FETCH_TAIL =
+  /\s+(?:OFFSET\s+\d+\s+ROWS?\s+)?FETCH\s+(?:FIRST|NEXT)\s+(?:(\d+)\s+)?(PERCENT\s+)?ROWS?\s+(?:ONLY|WITH\s+TIES)\s*$/i;
+
 const DUCKDB_DENY_PREFIXES = ['read_', 'scan_'];
 
-/**
- * Denied only on the DuckDB dialect (not universal): current_setting reads back a
- * setting value and is a legitimate read on Postgres, but on DuckDB it discloses
- * cloud credentials configured via SET; prompt/open_prompt (flockmtl) make outbound
- * LLM/HTTP calls.
- */
+/** Denied only on DuckDB: current_setting discloses cloud credentials; prompt/open_prompt call out over HTTP. */
+/** Settings and credential disclosure; denied regardless of allowFileFunctions, which is about files. */
 const DUCKDB_ONLY_DENY = ['current_setting', 'duckdb_settings', 'prompt', 'open_prompt'];
 
 /** File-reading table functions - denied unless policy.allowFileFunctions. */
@@ -346,8 +322,7 @@ const DUCKDB_FILE_FUNCTIONS = [
   'st_readosm',
   'st_readshp',
   'st_read_meta',
-  // Parquet metadata readers also take a file path and disclose file contents
-  // (per-row-group min/max statistics) + probe the filesystem.
+  // Parquet metadata readers take a file path and disclose file contents and filesystem layout.
   'parquet_metadata',
   'parquet_schema',
   'parquet_file_metadata',
@@ -356,17 +331,10 @@ const DUCKDB_FILE_FUNCTIONS = [
   'read_ndjson_objects',
 ];
 
-// Bare SSRF constructors: build a URL type from a string and fetch it inside a
-// SELECT. Never a legitimate analytics call, so denied on every dialect.
+// Bare SSRF constructors: build a URL type from a string and fetch it inside a SELECT.
 const ORACLE_DENY_FUNCTIONS = ['httpuritype', 'dburitype', 'xdburitype'];
 
-/**
- * Oracle package prefixes that expose the filesystem, network, scheduler, or a
- * SQL-string executor. Matched against the schema-qualified name (e.g.
- * `sys.utl_http.request` ends with `utl_http.request`), so any package member
- * is refused, not just a hand-listed set. dbms_lob/dbms_metadata read server
- * state a read-only analytics query never needs.
- */
+/** Oracle packages exposing the filesystem, network, scheduler or a SQL-string executor; matched qualified. */
 const ORACLE_DENY_PREFIXES = [
   'utl_file.',
   'utl_http.',
@@ -393,13 +361,7 @@ const ORACLE_DENY_PREFIXES = [
 /** Oracle sequence pseudo-columns: `seq.nextval` mutates the sequence, so it is not read-only. Parsed as a column, not a function. */
 const ORACLE_SEQUENCE_PSEUDO_COLUMNS = new Set(['nextval', 'currval']);
 
-/**
- * Defense in depth: block every known-dangerous function on every dialect,
- * not only its native one. A name like `pg_read_file` or `load_file` is
- * never a legitimate user UDF, so denying it cross-dialect costs nothing and
- * closes the "dangerous in dialect A, allowed in dialect B" gap a fuzz pass
- * surfaces. Engine-specific extras (DuckDB file readers) layer on top.
- */
+/** Every known-dangerous function is denied on every dialect, closing the "dangerous in A, allowed in B" gap. */
 const UNIVERSAL_DENY: readonly string[] = [
   ...PG_DENY_FUNCTIONS,
   ...MYSQL_DENY_FUNCTIONS,
@@ -419,12 +381,7 @@ const ENGINE_DENY: Record<string, readonly string[]> = {
 /** Prefix analogue of UNIVERSAL_DENY: never real user functions, so denied on every dialect. DuckDB's read_/scan_ stay DuckDB-only (below). */
 const UNIVERSAL_DENY_PREFIXES: readonly string[] = [...PG_DENY_PREFIXES, ...ORACLE_DENY_PREFIXES];
 
-/**
- * Precomputed lowercase deny-sets for the DEFAULT policy (no host-added deny
- * functions, file functions denied) per engine. The base lists are already
- * lowercase literals, so this avoids rebuilding a Set and re-lowercasing
- * ~50 entries on every guard call (guardSql runs 1-3× per ask).
- */
+/** Precomputed lowercase deny-sets, per engine, for the DEFAULT policy. */
 const DEFAULT_DENY_SETS: Record<string, ReadonlySet<string>> = Object.fromEntries(
   ['postgres', 'mysql', 'sqlite', 'duckdb', 'oracle'].map((engine) => [
     engine,
@@ -452,11 +409,10 @@ const SQLITE_PRAGMA_READ_ALLOWLIST = new Set([
 const MYSQL_SHOW_ALLOW =
   /^\s*show\s+(full\s+)?(tables|databases|schemas|columns|fields|index|indexes|keys|create\s+table|create\s+view|table\s+status|triggers|events|open\s+tables|status|variables|character\s+set|collation|engines|warnings|errors)\b/i;
 
-/**
- * True if the SQL contains a MySQL executable comment opener (`/*!`) outside a
- * string literal. String literals are skipped so a legitimate `WHERE x = '/*!'`
- * is not a false positive.
- */
+/** A subquery or function call in a SHOW's WHERE/LIKE tail; the fast path cannot vet either. */
+const SHOW_TAIL_EXECUTES = /\(\s*select\b|\b[a-z_][a-z0-9_]*\s*\(/i;
+
+/** True if the SQL contains a MySQL executable comment opener (`/*!`) outside a string literal. */
 function hasMysqlExecutableComment(sql: string): boolean {
   let i = 0;
   const n = sql.length;
@@ -475,14 +431,12 @@ function hasMysqlExecutableComment(sql: string): boolean {
       }
       continue;
     }
-    // Skip line comments: a `/*!` inside `-- ...` or `# ...` is not executed by
-    // MySQL, so it must not trip the gate (over-block of a legit SELECT).
+    // Skip line comments: a `/*!` inside `-- ...` or `# ...` is not executed by MySQL.
     if ((c === '-' && sql[i + 1] === '-') || c === '#') {
       while (i < n && sql[i] !== '\n' && sql[i] !== '\r') i++;
       continue;
     }
-    // Skip ordinary block comments so a `/*!` nested after a plain `/* ... */` is
-    // still found by the outer scan (we only bail on the executable opener itself).
+    // Skip ordinary block comments so a `/*!` nested after a plain one is still found.
     if (c === '/' && sql[i + 1] === '*' && sql[i + 2] === '!') return true;
     i++;
   }
@@ -490,12 +444,8 @@ function hasMysqlExecutableComment(sql: string): boolean {
 }
 
 /**
- * True for a SQLite recursive CTE that a caller forces to full materialization
- * (an aggregate, DISTINCT or GROUP BY) with no LIMIT to bound it. `node:sqlite`
- * runs synchronously on the extension-host thread, so such a query - e.g.
- * `WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM r) SELECT count(*) FROM r`
- * - never returns and freezes the whole window (Stop is inert). A plain
- * `SELECT ... FROM r` streams lazily and is bounded by the auto-LIMIT, so it is safe.
+ * True for a SQLite recursive CTE forced to full materialization (an aggregate, DISTINCT or GROUP
+ * BY) with no LIMIT: `node:sqlite` runs synchronously, so such a query never returns.
  */
 function sqliteRecursiveWedge(strippedInner: string): boolean {
   if (!/\bwith\s+recursive\b/iu.test(strippedInner)) return false;
@@ -544,11 +494,7 @@ function columnNameOf(node: Record<string, unknown>): string | null {
   return null;
 }
 
-/**
- * True when a relation name is a filesystem path, URL, or bare data-file name -
- * anything DuckDB's replacement scan would read as a file. Registered file
- * views are named without an extension, so they are unaffected.
- */
+/** True when a relation name is a path, URL or bare data-file name that DuckDB would read as a file. */
 function looksLikeFileOrUrl(name: string): boolean {
   return (
     /[/\\]/.test(name) || // path separators (POSIX or Windows)
@@ -571,8 +517,7 @@ function functionNameOf(node: Record<string, unknown>): string | null {
         .map((p) => (p && typeof p === 'object' ? String((p as Record<string, unknown>)['value'] ?? '') : String(p)))
         .filter(Boolean);
       if (parts.length > 0) {
-        // Prepend the package/schema qualifier (e.g. UTL_HTTP.REQUEST) so Oracle
-        // package prefixes match; the unqualified last segment is checked separately.
+        // Prepend the package/schema qualifier (e.g. UTL_HTTP.REQUEST) so Oracle package prefixes match.
         const schema = obj['schema'];
         const schemaName =
           schema && typeof schema === 'object' ? String((schema as Record<string, unknown>)['value'] ?? '') : '';
@@ -584,11 +529,7 @@ function functionNameOf(node: Record<string, unknown>): string | null {
   return null;
 }
 
-/**
- * Generic deep walk. Robust across grammar shape differences: any nested
- * object with a write-family `type` is a violation wherever it hides
- * (CTE body, subquery, set-op branch, lateral join, scalar expression).
- */
+/** Generic deep walk: any nested object with a write-family `type` is a violation wherever it hides. */
 function walk(value: unknown, ctx: WalkContext, depth: number): void {
   if (ctx.violation) return;
   if (depth > ctx.maxDepth) {
@@ -631,10 +572,7 @@ function walk(value: unknown, ctx: WalkContext, depth: number): void {
     }
   }
 
-  // A relation named like a file path or URL: DuckDB's replacement scan reads
-  // it as a file with no function node for the denylist to catch. Legitimate
-  // table names never look like paths or URLs, so blocking these closes the
-  // file-read/SSRF surface on every dialect.
+  // A relation named like a file path or URL: DuckDB's replacement scan reads it as a file.
   const tableRef = node['table'];
   if (typeof tableRef === 'string' && looksLikeFileOrUrl(tableRef)) {
     ctx.violation = {
@@ -644,8 +582,7 @@ function walk(value: unknown, ctx: WalkContext, depth: number): void {
     return;
   }
 
-  // Oracle `seq.nextval` parses as a column, not a function, so the denylist never
-  // sees it; advancing a sequence is a write, so it is blocked on the Oracle dialect.
+  // Oracle `seq.nextval` parses as a column, not a function, so the denylist never sees it.
   if (type === 'column_ref' && ctx.engine === 'oracle') {
     const col = columnNameOf(node);
     if (col && ORACLE_SEQUENCE_PSEUDO_COLUMNS.has(col)) {
@@ -661,8 +598,7 @@ function walk(value: unknown, ctx: WalkContext, depth: number): void {
     const name = functionNameOf(node);
     if (name) {
       const last = name.includes('.') ? name.slice(name.lastIndexOf('.') + 1) : name;
-      // Oracle package prefixes (utl_http.) match the schema-qualified name; the
-      // others (pg_ls_, read_) are bare and match the unqualified last segment.
+      // Oracle package prefixes match the schema-qualified name; the others match the last segment.
       if (
         ctx.denySet.has(name) ||
         ctx.denySet.has(last) ||
@@ -697,11 +633,25 @@ interface LimitNode {
 
 type LimitStatus = { kind: 'none' } | { kind: 'ok' } | { kind: 'nonliteral' } | { kind: 'high'; lower: () => void };
 
+/** Inspect (without mutating) the row limit on the effective final SELECT; `high` carries a `lower` mutator. */
 /**
- * Inspect (without mutating) the row limit on the effective final SELECT.
- * A `high` result carries a `lower` that mutates the AST so the caller
- * can sqlify a lowered copy - used only for the rare too-high case.
+ * Replace the count in the last LIMIT clause, leaving every other character alone. Returns null
+ * when the clause cannot be located textually, in which case the caller keeps the original.
  */
+function lowerLimitInText(sql: string, maxRows: number): string | null {
+  const stripped = stripCommentsAndStrings(sql);
+  // The final LIMIT is the one that binds the result set; earlier ones sit inside subqueries.
+  const re = /\blimit\s+(\d+)\s*(,\s*(\d+))?/gi;
+  let last: RegExpExecArray | null = null;
+  for (let m = re.exec(stripped); m; m = re.exec(stripped)) last = m;
+  if (!last) return null;
+  // `LIMIT offset, count` puts the count second; `LIMIT n [OFFSET m]` puts it first.
+  const countText = last[3] ?? last[1]!;
+  const countStart = last.index + last[0].lastIndexOf(countText);
+  if (Number(countText) <= maxRows) return null;
+  return sql.slice(0, countStart) + String(maxRows) + sql.slice(countStart + countText.length);
+}
+
 function inspectLimit(ast: Record<string, unknown>, maxRows: number): LimitStatus {
   let target = ast;
   while (target['_next'] && typeof target['_next'] === 'object') {
@@ -711,8 +661,7 @@ function inspectLimit(ast: Record<string, unknown>, maxRows: number): LimitStatu
   if (!existing || !Array.isArray(existing.value) || existing.value.length === 0) {
     return { kind: 'none' };
   }
-  // Bare `OFFSET n` (no LIMIT) is a single value with seperator 'offset'; n is the offset, not a
-  // row count. Treat as no limit so auto-LIMIT injects, and never lower it (that corrupts pagination).
+  // Bare `OFFSET n` is a single value with seperator 'offset': it counts as no limit and is never lowered.
   if (existing.seperator === 'offset' && existing.value.length === 1) {
     return { kind: 'none' };
   }
@@ -739,13 +688,23 @@ export interface GuardInput {
   readonly policy?: Partial<GuardPolicy>;
 }
 
+/** Nothing a caller asks for may exceed this; a row cap is a memory bound, not a preference. */
+const MAX_ROW_CAP = 100_000;
+
 export function resolveGuardPolicy(partial?: Partial<GuardPolicy>): GuardPolicy {
-  const merged: GuardPolicy = {
+  const merged: { -readonly [K in keyof GuardPolicy]: GuardPolicy[K] } = {
     ...DEFAULT_GUARD_POLICY,
     ...partial,
     mode: 'read-only',
     denyFunctions: [...DEFAULT_GUARD_POLICY.denyFunctions, ...(partial?.denyFunctions ?? [])],
   };
+  // maxRows reaches here straight from an HTTP client, so it is clamped rather than trusted:
+  // a NaN or a billion would otherwise become the row cap.
+  const requested = merged.maxRows;
+  merged.maxRows =
+    Number.isFinite(requested) && requested >= 1
+      ? Math.min(Math.floor(requested), MAX_ROW_CAP)
+      : DEFAULT_GUARD_POLICY.maxRows;
   if ((partial as { mode?: string } | undefined)?.mode && partial?.mode !== 'read-only') {
     throw new AskSqlError('CONFIG_ERROR', {
       detail: `GuardPolicy.mode '${String(partial?.mode)}' is not supported - the read-only floor is immovable in v1.`,
@@ -755,10 +714,7 @@ export function resolveGuardPolicy(partial?: Partial<GuardPolicy>): GuardPolicy 
   return merged;
 }
 
-/**
- * Validate (and possibly rewrite) one SQL statement. Never throws for
- * disallowed SQL - returns a verdict; throws only on misconfiguration.
- */
+/** Validate (and possibly rewrite) one SQL statement; returns a verdict, throws only on misconfiguration. */
 export function guardSql(input: GuardInput): GuardVerdict {
   const policy = resolveGuardPolicy(input.policy);
   const { dialect } = input;
@@ -772,25 +728,18 @@ export function guardSql(input: GuardInput): GuardVerdict {
     return blocked(original, 'too_long', 'The statement is too long to verify safely.');
   }
 
-  // MySQL executes the body of `/*! ... */` and `/*!NNNNN ... */` comments, but
-  // the stripper (and node-sql-parser) treat them as ordinary comments and delete
-  // the code, so INTO OUTFILE, load_file, sleep, FOR UPDATE and multi-statements
-  // hidden inside one reach the server unseen. Fail closed: these are never in a
-  // legitimate read-only SELECT.
+  // MySQL executes the body of `/*! ... */` comments, but the stripper and parser delete it unseen.
   if (dialect.engine === 'mysql' && hasMysqlExecutableComment(trimmed)) {
     return blocked(original, 'mysql_executable_comment', 'MySQL executable comments (/*! ... */) are not allowed.');
   }
 
-  const stripped = stripCommentsAndStrings(trimmed);
+  const stripped = stripCommentsAndStrings(trimmed, dialect.engine);
   if (hasMultipleStatements(stripped)) {
     return blocked(original, 'multi_statement', 'Only a single statement is allowed.');
   }
   const strippedTrim = stripped.trim().replace(/;\s*$/u, '');
-  // Strip trailing `;`, whitespace and comments: a trailing comment after a `;`
-  // (`SELECT 1; --`) hides the `;` from a naive end-anchored replace, and the
-  // later textual auto-LIMIT append would then land after the `;` as a dangling
-  // fragment while the row cap is silently commented/severed off.
-  const body = trimTrailingNoise(trimmed);
+  // Strip trailing `;`, whitespace and comments so the appended auto-LIMIT binds to the statement.
+  const body = trimTrailingNoise(trimmed, dialect.engine);
 
   // ---- Dialect-specific allowlisted read commands (checked pre-parser) ----
   if (dialect.engine === 'sqlite' && /^\s*pragma\b/iu.test(strippedTrim)) {
@@ -808,6 +757,15 @@ export function guardSql(input: GuardInput): GuardVerdict {
   }
 
   if (dialect.engine === 'mysql' && /^\s*(show|desc|describe)\b/iu.test(strippedTrim)) {
+    // A SHOW may carry a WHERE/LIKE tail, and an expression there runs like any other. Only the
+    // shapes the parser cannot help with are allowed, and only without a subquery or function call.
+    if (SHOW_TAIL_EXECUTES.test(strippedTrim)) {
+      return blocked(
+        original,
+        'show_expression',
+        'A SHOW command may not carry a subquery or function call. Use a plain SHOW, or a SELECT against information_schema.',
+      );
+    }
     if (MYSQL_SHOW_ALLOW.test(strippedTrim)) {
       return { allowed: true, sql: body, warnings: [], autoLimited: false, loweredLimit: false };
     }
@@ -819,13 +777,27 @@ export function guardSql(input: GuardInput): GuardVerdict {
 
   // ---- EXPLAIN wrapper: guard the inner statement, keep the prefix ----
   let inner = body;
-  // Valid Oracle syntax the parser cannot read: strip a trailing clause,
-  // validate the rest, re-apply it as a parseable ROWNUM wrap at the end.
+  // Valid Oracle syntax the parser cannot read: strip the trailing clause, validate, re-apply it.
+  let fetchTailText: string | null = null;
   let strippedFetchLimit: number | null = null;
   if (dialect.limitStyle === 'fetch') {
-    const fetchTail = /\s+FETCH\s+FIRST\s+(\d+)\s+ROWS?\s+ONLY\s*$/i.exec(inner);
+    // This dialect has no LIMIT. Refusing it here sends the query back to be rewritten, instead of
+    // letting the database reject it (ORA-03049) after the repair loop has already finished.
+    const strayLimit = /\blimit\s+(?:\d+|:\w+|\?)\s*(?:offset\s+\d+\s*)?;?\s*$/iu.exec(
+      stripCommentsAndStrings(inner, dialect.engine),
+    );
+    if (strayLimit) {
+      return blocked(
+        original,
+        'limit_unsupported',
+        `${dialect.promptLabel} has no LIMIT clause. Remove it and order the results instead; the row cap is applied when the query runs.`,
+      );
+    }
+    const fetchTail = ORACLE_FETCH_TAIL.exec(inner);
     if (fetchTail) {
-      strippedFetchLimit = Number(fetchTail[1]);
+      fetchTailText = fetchTail[0];
+      // `FETCH FIRST ROW ONLY` and a PERCENT clause carry no row count to lower.
+      strippedFetchLimit = fetchTail[1] && !fetchTail[2] ? Number(fetchTail[1]) : null;
       inner = inner.slice(0, fetchTail.index);
     }
   }
@@ -834,14 +806,12 @@ export function guardSql(input: GuardInput): GuardVerdict {
   if (explainMatch) {
     explainPrefix = body.slice(0, explainMatch[0].length);
     inner = body.slice(explainMatch[0].length);
-    // EXPLAIN ANALYZE executes its target, but the inner statement is verified
-    // as a guarded SELECT below via the normal path, so no special handling.
+    // EXPLAIN ANALYZE executes its target; the inner statement is verified as a guarded SELECT below.
   }
 
   // ---- Lexical read-only floor (belt for shapes the AST may not expose) ----
-  const strippedInner = stripCommentsAndStrings(inner);
-  // MySQL's `LOCK IN SHARE MODE` is the older spelling of `FOR SHARE` and takes
-  // the same row locks, so it must be blocked alongside FOR UPDATE/SHARE.
+  const strippedInner = stripCommentsAndStrings(inner, dialect.engine);
+  // MySQL's `LOCK IN SHARE MODE` takes the same row locks as `FOR SHARE`.
   if (
     /\bfor\s+(update|share|no\s+key\s+update|key\s+share)\b/iu.test(strippedInner) ||
     /\block\s+in\s+share\s+mode\b/iu.test(strippedInner)
@@ -851,6 +821,14 @@ export function guardSql(input: GuardInput): GuardVerdict {
   if (/\binto\s+(outfile|dumpfile)\b/iu.test(strippedInner)) {
     return blocked(original, 'into_outfile', 'Writing query output to files is not allowed.');
   }
+  // Models write `col` out of MySQL habit whatever the dialect, and the Postgresql grammar accepts it.
+  if (dialect.quoteChar !== '`' && strippedInner.includes('`')) {
+    return blocked(
+      original,
+      'backtick_identifier',
+      `Backtick-quoted identifiers are MySQL-only. ${dialect.promptLabel} quotes identifiers with ${dialect.quoteChar}: write ${dialect.quoteChar}Order Status${dialect.quoteChar}, not \`Order Status\`.`,
+    );
+  }
   if (dialect.engine === 'sqlite' && sqliteRecursiveWedge(strippedInner)) {
     return blocked(
       original,
@@ -859,9 +837,7 @@ export function guardSql(input: GuardInput): GuardVerdict {
     );
   }
 
-  // ---- Parse once (fail-closed). `parse` yields the AST and the table
-  // list together, so the engine's hallucination check can reuse the list
-  // instead of re-parsing the same SQL. ----
+  // ---- Parse once (fail-closed): `parse` yields the AST and the table list together. ----
   let ast: unknown;
   let tableList: string[] = [];
   try {
@@ -869,14 +845,11 @@ export function guardSql(input: GuardInput): GuardVerdict {
     ast = parsed.ast;
     tableList = Array.isArray(parsed.tableList) ? parsed.tableList : [];
   } catch {
-    // Fail closed on anything the validator cannot parse. The reason is actionable
-    // so the repair loop can recover: some valid vendor syntax (e.g. Postgres
-    // SUBSTRING(x FROM 'pat')) is not understood by the parser, and rewriting it in
-    // plain standard SQL both parses and runs.
+    // Fail closed on anything the validator cannot parse; the reason is actionable so the repair loop can recover.
     return blocked(
       original,
       'parse_failed',
-      "The safety validator could not parse this query. Rewrite it using plain standard SQL - avoid vendor-specific forms like SUBSTRING(x FROM 'pattern'); use regexp_replace/split_part or standard function-call syntax instead.",
+      'The safety validator could not parse this query. Quote any identifier that is not a plain word - a column named Order Status must be written "Order Status", not bare. Otherwise rewrite it using plain standard SQL: avoid vendor-specific forms like SUBSTRING(x FROM \'pattern\') and use regexp_replace/split_part or standard function-call syntax instead.',
     );
   }
 
@@ -895,23 +868,21 @@ export function guardSql(input: GuardInput): GuardVerdict {
   }
 
   // ---- Deep walk: CTE bodies, subqueries, set-ops, expressions ----
-  // Reuse the precomputed default set unless the host added deny functions or
-  // opted into file functions (the only cases that change the set).
+  // Reuse the precomputed default set unless the host added deny functions or allowed file functions.
   const denySet: ReadonlySet<string> =
     policy.denyFunctions.length === 0 && !policy.allowFileFunctions
       ? (DEFAULT_DENY_SETS[dialect.engine] ?? new Set<string>())
       : new Set<string>(
           [
             ...(ENGINE_DENY[dialect.engine] ?? []),
-            ...(dialect.engine === 'duckdb' && !policy.allowFileFunctions
-              ? [...DUCKDB_FILE_FUNCTIONS, ...DUCKDB_ONLY_DENY]
+            ...(dialect.engine === 'duckdb'
+              ? [...DUCKDB_ONLY_DENY, ...(policy.allowFileFunctions ? [] : DUCKDB_FILE_FUNCTIONS)]
               : []),
             ...policy.denyFunctions,
           ].map((f) => f.toLowerCase()),
         );
   const denySuffixes = dialect.engine === 'duckdb' ? DUCKDB_DENY_SUFFIXES : [];
-  // read_/scan_ is the file-reader class, so it follows the same allowFileFunctions
-  // policy as DUCKDB_FILE_FUNCTIONS (a browser sandbox may permit file reads).
+  // read_/scan_ follows the same allowFileFunctions policy as DUCKDB_FILE_FUNCTIONS.
   const denyPrefixes =
     dialect.engine === 'duckdb' && !policy.allowFileFunctions
       ? [...UNIVERSAL_DENY_PREFIXES, ...DUCKDB_DENY_PREFIXES]
@@ -929,32 +900,30 @@ export function guardSql(input: GuardInput): GuardVerdict {
   let finalSql = body;
   if (!explainPrefix) {
     const status = inspectLimit(root, policy.maxRows);
-    if (strippedFetchLimit !== null) {
-      // ORDER BY runs inside the subquery, so ROWNUM keeps the model's top-N.
-      const capped = Math.min(strippedFetchLimit, policy.maxRows);
-      finalSql = `SELECT * FROM (\n${inner}\n) WHERE ROWNUM <= ${capped}`;
-      if (capped < strippedFetchLimit) loweredLimit = true;
+    if (fetchTailText !== null) {
+      // The count is lowered inside the original clause. Wrapping in an inline view instead would
+      // make duplicate output column names an ORA-00918, though they are legal at top level.
+      if (strippedFetchLimit !== null && strippedFetchLimit > policy.maxRows) {
+        finalSql = inner + fetchTailText.replace(String(strippedFetchLimit), String(policy.maxRows));
+        loweredLimit = true;
+      } else {
+        finalSql = inner + fetchTailText;
+      }
     } else if (status.kind === 'none' && dialect.limitStyle === 'fetch') {
-      // Oracle has no LIMIT, and node-sql-parser cannot validate FETCH FIRST, so
-      // appending either would break. The connector's driver-level maxRows caps the
-      // fetch after any ORDER BY (a correct top-N), so no SQL-level limit is injected.
+      // Oracle has no LIMIT and node-sql-parser cannot validate FETCH FIRST; the driver caps rows instead.
     } else if (status.kind === 'none') {
-      // Textual append preserves the model's exact formatting (the "show
-      // query" surface stays faithful) - the guard already proved this is a
-      // single SELECT and `body` is trimmed of trailing `;`/comments, so the
-      // appended LIMIT binds to the final SELECT (incl. set-ops). The own-line
-      // placement is defence-in-depth against any trailing line comment.
+      // Textual append preserves the model's exact formatting; the LIMIT binds to the final SELECT, on its own line.
       finalSql = `${body}\nLIMIT ${policy.maxRows}`;
       autoLimited = true;
     } else if (status.kind === 'high') {
-      // Rewriting an existing numeric LIMIT safely requires re-serialization.
-      status.lower();
-      try {
-        finalSql = parser.sqlify(root as never, { database: dialect.grammar });
+      // The number is edited in the original text. Re-serializing the AST quotes every identifier,
+      // which changes what `Orders` and `AS Total` mean on a case-folding engine.
+      const edited = lowerLimitInText(body, policy.maxRows);
+      if (edited) {
+        finalSql = edited;
         loweredLimit = true;
-      } catch {
+      } else {
         // Keep original; the connector-level maxRows slice is the backstop.
-        finalSql = body;
         warnings.push('The row limit is higher than allowed; it is enforced at execution time.');
       }
     } else if (status.kind === 'nonliteral') {

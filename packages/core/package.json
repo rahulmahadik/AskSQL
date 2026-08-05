@@ -24,7 +24,8 @@
   },
   "dependencies": {
     "ai": "^7.0.26",
-    "node-sql-parser": "^5.4.0"
+    "node-sql-parser": "^5.4.0",
+    "zod": "^3.25.76 || ^4.1.8"
   },
   "peerDependencies": {
     "@ai-sdk/anthropic": "^4",

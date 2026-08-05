@@ -38,7 +38,7 @@ async function pickModel() {
     if (r.ok)
       return resolveModel({
         provider: 'ollama',
-        model: process.env['ASKSQL_OLLAMA_MODEL'] ?? 'qwen2.5-coder:14b',
+        model: process.env['ASKSQL_OLLAMA_MODEL'] ?? 'qwen2.5-coder:7b',
         baseURL: 'http://localhost:11434/v1',
       });
   } catch {

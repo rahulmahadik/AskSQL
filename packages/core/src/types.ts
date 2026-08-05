@@ -1,10 +1,8 @@
 /**
  * Public type contracts for AskSQL.
  *
- * Everything here is semver-stable API: connectors, catalogs, results,
- * guard policy, engine configuration. Database drivers never appear in
- * this package - connectors implement {@link Connector} in their own
- * adapter packages (`@asksql/postgres`, `@asksql/mysql`, ...).
+ * Everything here is semver-stable API: connectors, catalogs, results, guard policy, engine
+ * configuration. Connectors implement {@link Connector} in their own adapter packages.
  */
 
 import type { LanguageModel } from 'ai';
@@ -19,11 +17,7 @@ export type EngineKind = 'postgres' | 'mysql' | 'sqlite' | 'duckdb' | 'oracle' |
 /** Grammar names understood by the AST guard (node-sql-parser). */
 export type GuardGrammar = 'Postgresql' | 'MySQL' | 'Sqlite';
 
-/**
- * Everything the prompt builder and guard need to know about a SQL dialect.
- * No engine-specific `if`s exist in core - behavior differences flow
- * exclusively through this object.
- */
+/** Everything the prompt builder and guard need about a SQL dialect; core has no engine-specific `if`s. */
 export interface DialectInfo {
   readonly engine: EngineKind;
   /** Grammar used by the AST guard. DuckDB parses under 'Postgresql'. */
@@ -62,21 +56,11 @@ export interface ColumnInfo {
   readonly comment?: string | null;
   /** Populated for enum-typed columns so WHERE literals use real values. */
   readonly enumValues?: readonly string[];
-  /**
-   * Distinct values observed in a low-cardinality text column that is not a
-   * declared enum (e.g. a `status VARCHAR` that only ever holds a handful of
-   * codes). Unlike enumValues these are data, not schema, so a connector only
-   * fills them when value sampling is explicitly enabled.
-   */
+  /** Distinct values observed in a low-cardinality text column that is not a declared enum: data, not schema. */
   readonly sampledValues?: readonly string[];
 }
 
-/**
- * A sampled text column is only useful (and only safe to surface) when it holds
- * a small, fixed set of short codes. Connectors attach `sampledValues` only when
- * the distinct count is at or below this cap; the catalog renders at most this
- * many either way.
- */
+/** Cap on distinct sampled values; connectors attach `sampledValues` only at or below it. */
 export const VALUE_SAMPLE_MAX_DISTINCT = 24;
 
 export interface ForeignKeyInfo {
@@ -114,10 +98,7 @@ export interface RoutineInfo {
   readonly args: string;
   readonly returns?: string | null;
   readonly language?: string | null;
-  /**
-   * Only 'immutable' / 'stable' routines are callable in generated SQL; 'volatile' /
-   * 'unknown' are listed for the schema browser but excluded from the callable set.
-   */
+  /** Only 'immutable' / 'stable' routines are callable in generated SQL. */
   readonly volatility: 'immutable' | 'stable' | 'volatile' | 'unknown';
   readonly securityDefiner?: boolean;
   readonly source?: string | null;
@@ -183,11 +164,7 @@ export interface ResultColumn {
   readonly kind: ColumnKind;
 }
 
-/**
- * JSON-safe cell values. Numeric fidelity rule: BIGINT / DECIMAL /
- * NUMERIC travel as strings; JS `number` never touches them. Binary values
- * are size + hex preview only.
- */
+/** JSON-safe cell values: BIGINT / DECIMAL / NUMERIC travel as strings, binary is size + hex preview. */
 export type CellValue =
   string | number | boolean | null | { readonly __binary: { readonly bytes: number; readonly hexPreview: string } };
 
@@ -237,10 +214,7 @@ export interface GuardPolicy {
   readonly maxRows: number;
   /** Extra function names to deny on top of the per-dialect denylist. */
   readonly denyFunctions: readonly string[];
-  /**
-   * Whether file-reading table functions (read_csv, read_parquet, ...) are
-   * allowed. True only for browser-sandboxed DuckDB; server mode denies.
-   */
+  /** Whether file-reading table functions are allowed; true only for browser-sandboxed DuckDB. */
   readonly allowFileFunctions: boolean;
   readonly maxSqlLength: number;
   readonly maxDepth: number;
@@ -257,11 +231,7 @@ export interface GuardVerdict {
   readonly warnings: readonly string[];
   readonly autoLimited: boolean;
   readonly loweredLimit: boolean;
-  /**
-   * Base relations referenced by the (allowed) statement, in node-sql-parser
-   * `type::schema::table` form - computed during the guard's single parse so
-   * callers can validate against the catalog without re-parsing.
-   */
+  /** Base relations referenced by the allowed statement, in node-sql-parser `type::schema::table` form. */
   readonly tables?: readonly string[];
 }
 
@@ -310,9 +280,8 @@ export interface FewShotExample {
 }
 
 /**
- * Stores question->SQL pairs a user approved (👍), retrieved as few-shots for new questions.
- * `userId` scopes storage/retrieval per user so a shared connection never leaks one user's
- * approved SQL into another's prompt; undefined userId (local mode) is its own bucket.
+ * Stores question->SQL pairs a user approved, retrieved as few-shots for new questions.
+ * `userId` scopes storage and retrieval per user; undefined userId (local mode) is its own bucket.
  */
 export interface FewShotStore {
   add(connectionId: string, example: FewShotExample, userId?: string): Promise<void>;
@@ -330,11 +299,7 @@ export interface CustomModelRequest {
   readonly signal?: AbortSignal;
 }
 
-/**
- * Escape hatch for custom gateways and tests: any async function that maps
- * a prompt to text (or a stream of text chunks). The public path is an AI
- * SDK {@link LanguageModel}.
- */
+/** Escape hatch for custom gateways and tests: an async function mapping a prompt to text or a text stream. */
 export type CustomModel = (req: CustomModelRequest) => Promise<string | AsyncIterable<string>>;
 
 export type ModelLike = LanguageModel | CustomModel;
@@ -356,20 +321,15 @@ export interface LlmSettings {
   /** Deterministic seed where the provider supports it. */
   readonly seed?: number;
   readonly stopSequences?: readonly string[];
-  /**
-   * Provider-specific options passed straight through to the AI SDK
-   * (`providerOptions`), e.g. reasoning effort / thinking budget. Escape hatch
-   * for knobs the typed fields don't cover.
-   */
+  /** Provider-specific options passed straight through to the AI SDK (`providerOptions`). */
   readonly providerOptions?: Record<string, Record<string, unknown>>;
 }
 
 /** Host overrides for the generated prompts. */
 export interface PromptSettings {
   /**
-   * Replace the entire system prompt. Receives the resolved dialect label and
-   * the row cap. Return your own instructions - you own correctness/safety
-   * guidance if you override this (the AST guard still enforces read-only).
+   * Replace the entire system prompt; receives the resolved dialect label and the row cap.
+   * You own correctness guidance if you override this (the AST guard still enforces read-only).
    */
   readonly system?: (ctx: { dialectLabel: string; maxRows: number }) => string;
   /** Extra instructions appended to the default system prompt (common case). */
@@ -416,10 +376,7 @@ export interface AskSqlConfig {
   readonly glossary?: readonly GlossaryEntry[];
   /** Few-shot store for the approve-to-learn feedback loop. */
   readonly fewShots?: FewShotStore;
-  /**
-   * Schema-only prompting is the default. Opting in allows sampled
-   * cell values in repair prompts. Never enable for regulated data.
-   */
+  /** Schema-only prompting is the default; opting in allows sampled cell values. Never enable for regulated data. */
   readonly allowDataInPrompt?: boolean;
   readonly onEvent?: (event: EngineEvent) => void;
 }

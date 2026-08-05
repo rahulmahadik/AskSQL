@@ -1,17 +1,8 @@
 /**
- * @asksql/oracle - Oracle Database connector.
- *
- * - Read-only session enforcement: every query runs inside a
- *   `SET TRANSACTION READ ONLY` transaction (autoCommit off), so even if the
- *   guard were bypassed the database itself rejects writes for that statement.
- * - Row cap enforced at the driver (`maxRows`) AND with a hard slice
- *   afterwards (defense in depth), independent of the guard's row limiting.
- * - Numeric fidelity: NUMBER is fetched as a string so BIGINT/DECIMAL never
- *   round-trip through a JS number; CLOB as string, BLOB as Buffer.
- *
- * `oracledb` is a peer dependency, imported lazily so installing this package
- * never pulls a driver a user doesn't want. It is used in pure-JS Thin mode -
- * `initOracleClient` is never called, so no Oracle Instant Client is required.
+ * @asksql/oracle - Oracle Database connector. Every query runs inside a `SET TRANSACTION
+ * READ ONLY` transaction with autoCommit off; the row cap is both the driver's `maxRows`
+ * and a hard slice; NUMBER and CLOB are fetched as strings, BLOB as a Buffer. `oracledb` is a
+ * lazily imported peer, run in pure-JS Thin mode - no Oracle Instant Client is required.
  */
 
 import {
@@ -30,9 +21,8 @@ export interface OracleConnectorConfig {
   readonly id: string;
   readonly name: string;
   /**
-   * Easy Connect / TNS connect string, e.g. `host:1521/service` or a full
-   * descriptor. Used verbatim when the discrete host/port/database fields are
-   * not supplied.
+   * Easy Connect / TNS connect string, e.g. `host:1521/service` or a full descriptor.
+   * Used verbatim when the discrete host/port/database fields are not supplied.
    */
   readonly connectString?: string;
   readonly host?: string;
@@ -42,18 +32,14 @@ export interface OracleConnectorConfig {
   readonly password?: string;
   /** Service name, used as the connect-string service when host is given. */
   readonly database?: string;
-  /**
-   * Opt-in placeholder for parity with other connectors. Value sampling is not
-   * implemented for Oracle in this version; setting it has no effect.
-   */
+  /** Placeholder for parity with the other connectors; Oracle value sampling is not implemented, so this has no effect. */
   readonly sampleColumnValues?: boolean;
   /** Per-call timeout (ms) for the schema read. Defaults to 60s. */
   readonly introspectTimeoutMs?: number;
 }
 
-// Minimal structural views over the parts of the `oracledb` API this connector
-// uses. The dynamic import is cast through `unknown` to these, so the package
-// typechecks against its own contract rather than the driver's ambient types.
+// Structural views over the parts of the `oracledb` API this connector uses; the dynamic
+// import is cast through `unknown` to these rather than the driver's ambient types.
 interface OracleModule {
   readonly OUT_FORMAT_ARRAY: number;
   readonly OUT_FORMAT_OBJECT: number;
@@ -138,8 +124,8 @@ export class OracleConnector implements Connector {
       const mod = (await import('oracledb')) as unknown as { default?: OracleModule } & Partial<OracleModule>;
       const oracledb = (mod.default ?? mod) as OracleModule;
       if (!oracledb || typeof oracledb.createPool !== 'function') throw new Error('oracledb.createPool not found');
-      // Thin mode (v6 default); never initOracleClient. Type coercion is per-execute via
-      // fetchTypeHandler, not the process-global fetchAs*, so a host app's oracledb is untouched.
+      // Thin mode (the v6 default); never initOracleClient, and coerce types per-execute
+      // via fetchTypeHandler rather than the process-global fetchAs*.
       this.driver = oracledb;
       return oracledb;
     } catch (err) {
@@ -239,11 +225,9 @@ export class OracleConnector implements Connector {
         opts.signal.addEventListener('abort', onAbort, { once: true });
       }
 
-      // Per-query read-only enforcement: Oracle's read-only transaction covers
-      // only itself, so open one, run the SELECT, then commit (autoCommit off).
+      // An Oracle read-only transaction covers only itself, so open one per query and commit it.
       await conn.execute('SET TRANSACTION READ ONLY', {}, { autoCommit: false });
-      // Fetch one extra row past the cap so truncation is detectable; the driver
-      // maxRows is the primary bound and the slice below is the backstop.
+      // One row past the cap, so truncation is detectable.
       const res = await conn.execute(
         sql,
         {},
@@ -251,8 +235,7 @@ export class OracleConnector implements Connector {
           outFormat: oracledb.OUT_FORMAT_ARRAY,
           maxRows: maxRows + 1,
           autoCommit: false,
-          // Per-execute fetch coercion (numeric fidelity), scoped to this call so
-          // the process-global oracledb defaults stay untouched for the host app.
+          // Fetch coercion scoped to this call, leaving the process-global oracledb defaults alone.
           fetchTypeHandler: (meta: OracleFetchMeta) => {
             switch (meta?.dbTypeName) {
               case 'NUMBER':
@@ -321,9 +304,7 @@ function mapQueryError(err: unknown): AskSqlError {
   if (num === 3136 || num === 1013 || /DPI-1067|call timeout|NJS-024|timeout/i.test(msg)) {
     return new AskSqlError('DB_TIMEOUT', { detail: msg, cause: err });
   }
-  // Write rejected by the read-only transaction.
-  // ORA-01456 (may not perform INSERT/DELETE/UPDATE inside READ ONLY),
-  // ORA-01552, ORA-16000 (opened for read-only access).
+  // Write rejected by the read-only transaction: ORA-01456, ORA-01552, ORA-16000.
   if (num === 1456 || num === 1552 || num === 16000 || /read[- ]only|may not perform/i.test(msg)) {
     return new AskSqlError('GUARD_BLOCKED', {
       userMessage: 'Blocked for safety: the database rejected a write in read-only mode.',

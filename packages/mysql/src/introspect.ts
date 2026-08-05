@@ -1,14 +1,8 @@
 /**
- * MySQL schema introspection from information_schema. Covers tables, views,
- * columns + types + defaults + generated + comments, PKs, FKs, uniques,
- * indexes, triggers, routines, and enum column values (INT-*).
- *
- * Permission-tolerant: each section is read behind a `safe` wrapper, so an
- * information_schema view the connecting user cannot read is simply absent and
- * recorded as a warning rather than throwing.
- *
- * introspectMysql fetches the rows and (opt-in) samples column values;
- * buildMysqlCatalog is the pure assembly of those rows into a SchemaCatalog.
+ * MySQL schema introspection from information_schema: tables, views, columns, PKs, FKs,
+ * uniques, indexes, triggers, routines, and enum column values. Each section reads behind
+ * a `safe` wrapper, so an unreadable information_schema view becomes a warning, not a throw.
+ * introspectMysql fetches rows; buildMysqlCatalog is their pure assembly into a SchemaCatalog.
  */
 
 import {
@@ -27,8 +21,7 @@ export interface MysqlQueryable {
   query(sql: string, params?: unknown[]): Promise<Record<string, unknown>[]>;
 }
 
-// Value sampling (opt-in) guards: bound the per-column scan, the total number of
-// columns probed per introspect, and how long a sampled value may be.
+// Value sampling (opt-in) guards: per-column scan time, columns probed per introspect, value length.
 const SAMPLE_QUERY_TIMEOUT_MS = 2000;
 const MAX_SAMPLED_COLUMNS = 300;
 const MAX_SAMPLE_VALUE_LEN = 64;
@@ -42,24 +35,48 @@ function backtick(ident: string): string {
   return `\`${ident.replace(/`/g, '``')}\``;
 }
 
-/** Parse the comma-separated quoted labels of an `enum(...)` COLUMN_TYPE. */
+/**
+ * Parse the quoted labels of an `enum(...)` COLUMN_TYPE. Scanned rather than split on commas,
+ * because a label may contain one: `enum('Yes','No','Maybe, sometimes')` has three values.
+ * MySQL renders an embedded quote as `''` and an embedded backslash as `\\`.
+ */
 function parseEnumValues(colType: string): string[] | undefined {
   const enumMatch = /^enum\((.*)\)$/i.exec(colType);
-  return enumMatch
-    ? enumMatch[1]!.split(',').map((s) => s.trim().replace(/^'|'$/g, '').replace(/''/g, "'"))
-    : undefined;
+  if (!enumMatch) return undefined;
+  const body = enumMatch[1]!;
+  const values: string[] = [];
+  let label: string | null = null;
+  for (let i = 0; i < body.length; i++) {
+    const c = body[i]!;
+    if (label === null) {
+      if (c === "'") label = '';
+      continue;
+    }
+    if (c === '\\' && i + 1 < body.length) {
+      const next = body[++i]!;
+      label += next === '\\' || next === "'" || next === '"' ? next : `\\${next}`;
+    } else if (c === "'" && body[i + 1] === "'") {
+      label += "'";
+      i++;
+    } else if (c === "'") {
+      values.push(label);
+      label = null;
+    } else {
+      label += c;
+    }
+  }
+  if (label !== null) values.push(label);
+  return values;
 }
 
-/** Key for the sampled-values map: table + column joined by a NUL, which no
- * identifier can contain, so it is collision-proof within a schema. */
+/** Key for the sampled-values map: table + column joined by a NUL, which no identifier can contain. */
 function sampleKey(table: string, column: string): string {
   return `${table}\u0000${column}`;
 }
 
 /**
- * Distinct values of one short text column, or undefined when the column is
- * not categorical (too many distinct values, or any value is long). Bounded by
- * LIMIT + a MAX_EXECUTION_TIME hint so a big table cannot stall introspection.
+ * Distinct values of one short text column, or undefined when it is not categorical
+ * (too many distinct values, or any value is long). Bounded by LIMIT + MAX_EXECUTION_TIME.
  */
 async function sampleColumn(
   db: MysqlQueryable,
@@ -84,9 +101,8 @@ async function sampleColumn(
 }
 
 /**
- * Opt-in: sample distinct codes of each short non-enum text column on a base
- * table (never views). Bounded by MAX_SAMPLED_COLUMNS; a locked-down, huge, or
- * slow column simply gets no samples. Returns table+column -> distinct values.
+ * Opt-in: sample distinct codes of each short non-enum text column on a base table (never
+ * views), bounded by MAX_SAMPLED_COLUMNS. Returns table+column -> distinct values.
  */
 async function sampleMysqlColumns(
   db: MysqlQueryable,
@@ -96,8 +112,7 @@ async function sampleMysqlColumns(
   const out = new Map<string, string[]>();
   const viewNames = new Set(rows.views.map((v) => String(v['TABLE_NAME'])));
   let budget = MAX_SAMPLED_COLUMNS;
-  // COLUMNS rows arrive ordered by table then ordinal, so a flat pass visits
-  // each table's columns contiguously - the same order as grouping first.
+  // COLUMNS rows arrive ordered by table then ordinal, so a flat pass visits each table contiguously.
   for (const c of rows.cols) {
     if (budget <= 0) break;
     const table = String(c['TABLE_NAME']);
@@ -222,9 +237,8 @@ export interface MysqlIntrospectRows {
 }
 
 /**
- * Pure assembly of a SchemaCatalog from already-fetched information_schema rows.
- * `sampledValues` (table+column -> distinct codes) is attached to matching
- * columns when present.
+ * Pure assembly of a SchemaCatalog from already-fetched information_schema rows;
+ * `sampledValues` (table+column -> distinct codes) attaches to matching columns.
  */
 export function buildMysqlCatalog(
   database: string,
@@ -346,8 +360,7 @@ export function buildMysqlCatalog(
     kind: String(r['ROUTINE_TYPE']).toUpperCase() === 'PROCEDURE' ? 'procedure' : 'function',
     args: '',
     returns: r['DTD_IDENTIFIER'] ? String(r['DTD_IDENTIFIER']) : null,
-    // MySQL doesn't expose PG-style volatility; treat deterministic funcs as
-    // stable (callable), everything else as unknown (listed, not called).
+    // MySQL exposes no PG-style volatility: deterministic means stable (callable), everything else unknown.
     volatility: String(r['IS_DETERMINISTIC']).toUpperCase() === 'YES' ? 'stable' : 'unknown',
   }));
 

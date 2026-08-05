@@ -333,7 +333,7 @@ describe('grounding floor: aliases and change requests', () => {
   it('retries a write request the model wrongly refused, instead of declining it', async () => {
     let call = 0;
     const refuseThenAnswer: CustomModel = async () =>
-      ++call === 1 ? 'OUT_OF_SCOPE' : '```sql\nDELETE FROM shop.orders WHERE placed_at < \'2020-01-01\';\n```';
+      ++call === 1 ? 'OUT_OF_SCOPE' : "```sql\nDELETE FROM shop.orders WHERE placed_at < '2020-01-01';\n```";
     const engine = createAskSql({ connectors: [new FakeConnector()], model: refuseThenAnswer });
     const res = await engine.explainSchema('Write a DELETE removing everything older than 2020');
     expect(call).toBe(2); // challenged once, then answered - no grounding repair, since a proposal may name new things
@@ -464,16 +464,18 @@ it('does not report the stripped marker as an invented name', async () => {
  */
 describe('the read-only note attaches by statement shape', () => {
   const propose = async (reply: string) =>
-    (await createAskSql({ connectors: [new FakeConnector()], model: model(reply) }).explainSchema(
-      'write me a statement for that',
-    )).answer;
+    (
+      await createAskSql({ connectors: [new FakeConnector()], model: model(reply) }).explainSchema(
+        'write me a statement for that',
+      )
+    ).answer;
 
   it.each([
     ['a bare DELETE with no code fence', 'DELETE FROM shop.orders WHERE placed_at < 2020;'],
     ['a bare UPDATE with an alias', 'UPDATE shop.orders o SET status = 1 WHERE o.id = 2;'],
     ['a bare INSERT', 'INSERT INTO shop.orders (id) VALUES (1);'],
     ['TRUNCATE without the TABLE keyword', 'TRUNCATE shop.orders;'],
-    ['CREATE TYPE', 'CREATE TYPE order_status AS ENUM (\'new\');'],
+    ['CREATE TYPE', "CREATE TYPE order_status AS ENUM ('new');"],
     ['COMMENT ON', "COMMENT ON COLUMN shop.orders.id IS 'the id';"],
     ['GRANT', 'GRANT SELECT ON shop.orders TO analyst;'],
     ['a fenced DROP', '```sql\nDROP TABLE shop.orders;\n```'],
@@ -514,7 +516,8 @@ describe('scope backstop for models that ignore the rule', () => {
   });
 
   it('keeps a general database answer that names no table, because the question is about databases', async () => {
-    const general = 'An index speeds up lookups at the cost of slower writes; add one for a column you filter on often.';
+    const general =
+      'An index speeds up lookups at the cost of slower writes; add one for a column you filter on often.';
     const res = await createAskSql({ connectors: [new FakeConnector()], model: model(general) }).explainSchema(
       'what is a database index and when should I add one?',
     );

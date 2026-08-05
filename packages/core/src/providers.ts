@@ -1,10 +1,6 @@
 /**
- * Provider resolution: a config object -> an AI SDK
- * LanguageModel. Provider packages are optional peers, dynamically
- * imported with actionable install errors - a MySQL-only user never
- * downloads Anthropic bytes and vice versa.
- *
- * No model IDs are hardcoded anywhere in core.
+ * Provider resolution: a config object -> an AI SDK LanguageModel. Provider packages are optional
+ * peers, dynamically imported with actionable install errors. No model IDs are hardcoded in core.
  */
 
 import { AskSqlError } from './errors.js';
@@ -36,11 +32,7 @@ const CLOUD_PROVIDERS: ReadonlySet<ProviderName> = new Set([
 
 const OLLAMA_DEFAULT_BASE_URL = 'http://localhost:11434/v1';
 
-/**
- * Official API host per provider; a user `baseURL` always overrides. Used for
- * construction by the createOpenAICompatible providers (nvidia/ollama), and for
- * model listing/display elsewhere. azure and openai-compatible have no fixed host.
- */
+/** Official API host per provider; a user `baseURL` always overrides. azure and openai-compatible have none. */
 export const PROVIDER_API_HOST: Readonly<Record<ProviderName, string | undefined>> = {
   openai: 'https://api.openai.com/v1',
   anthropic: 'https://api.anthropic.com/v1',
@@ -52,10 +44,7 @@ export const PROVIDER_API_HOST: Readonly<Record<ProviderName, string | undefined
   'openai-compatible': undefined,
 };
 
-/**
- * inet_aton also accepts hex (0x), octal (leading 0) and 1-to-3-part forms, so 169.254.169.254
- * can be written 2852039166 or 0xA9FEA9FE. Normalize to dotted-quad before any range check.
- */
+/** Normalize to dotted-quad: inet_aton also accepts hex, octal and 1-to-3-part forms. */
 export function toIpv4OrNull(host: string): string | null {
   const parts = host.split('.');
   if (parts.length === 0 || parts.length > 4) return null;
@@ -81,11 +70,7 @@ export function toIpv4OrNull(host: string): string | null {
   return `${(addr >>> 24) & 0xff}.${(addr >>> 16) & 0xff}.${(addr >>> 8) & 0xff}.${addr & 0xff}`;
 }
 
-/**
- * The embedded IPv4 of an IPv4-mapped IPv6 literal (`::ffff:169.254.169.254` or
- * `::169.254.169.254`), normalized to a dotted quad, else null. Without this the
- * dotted metadata address slips past the range checks below (only its hex form did).
- */
+/** The embedded IPv4 of an IPv4-mapped IPv6 literal, normalized to a dotted quad, else null. */
 const mappedIpv4 = (bare: string): string | null => {
   const m = /^::(?:ffff:)?(.+)$/i.exec(bare);
   if (!m || !m[1]!.includes('.')) return null;
@@ -103,15 +88,13 @@ const isLinkLocal = (h: string): boolean => {
   const bare = h.replace(/^\[|\]$/g, '');
   if (toIpv4OrNull(bare)?.startsWith('169.254.') === true) return true;
   if (mappedIpv4(bare)?.startsWith('169.254.') === true) return true;
-  // The whole 169.254/16 is a9fe:XXXX; the mapped/compatible IPv6 forms compress to
-  // `::ffff:a9fe:...` or `::a9fe:...` after URL normalization, so both prefixes count.
+  // The whole 169.254/16 is a9fe:XXXX, compressed as `::ffff:a9fe:...` or `::a9fe:...`.
   return /^fe80:/i.test(bare) || bare === 'fe80::' || /^::(?:ffff:)?a9fe:/i.test(bare);
 };
 
 /**
- * Validate a user-supplied AI endpoint URL. Never interpolate the raw URL into an
- * error (it may embed credentials). When `carriesSecret`, refuse plaintext http to
- * a remote host and link-local/metadata hosts, so an API key cannot be exfiltrated.
+ * Validate a user-supplied AI endpoint URL; the raw URL is never interpolated into an error. When
+ * `carriesSecret`, plaintext http to a remote host and link-local/metadata hosts are refused.
  */
 export function assertBaseUrl(url: string, carriesSecret: boolean): void {
   let parsed: URL;
@@ -203,13 +186,11 @@ export async function resolveModel(config: ProviderConfig): Promise<ModelLike> {
     case 'google': {
       const mod = await importProvider(import('@ai-sdk/google'), '@ai-sdk/google');
       const create = mod['createGoogleGenerativeAI'] as (o: object) => (id: string) => ModelLike;
-      // Honor a user-supplied baseURL instead of silently sending the key to the
-      // vendor cloud (assertBaseUrl above already validated it).
+      // Honor a user-supplied baseURL instead of sending the key to the vendor cloud.
       return create({ apiKey: config.apiKey, ...(config.baseURL ? { baseURL: config.baseURL } : {}) })(config.model);
     }
     case 'azure': {
-      // Fail at config time, not mid-request: without either setting, the SDK
-      // throws a lazy load error that reads like a transient provider fault.
+      // Fail at config time, not mid-request: the SDK otherwise throws a lazy load error.
       if (!config.resourceName && !config.baseURL) {
         throw new AskSqlError('CONFIG_ERROR', {
           detail: 'azure requires resourceName or baseURL',
@@ -217,8 +198,7 @@ export async function resolveModel(config: ProviderConfig): Promise<ModelLike> {
             'Azure needs the resource name from your endpoint (https://<resource>.openai.azure.com) or a full baseURL. For Azure AI Foundry endpoints (*.services.ai.azure.com), use the openai provider with a baseURL instead.',
         });
       }
-      // resourceName is interpolated into https://<resourceName>.openai.azure.com,
-      // so restrict it to the characters Azure actually allows in a resource name.
+      // resourceName is interpolated into a hostname, so restrict it to the characters Azure allows.
       if (config.resourceName && !/^[A-Za-z0-9][A-Za-z0-9-]{1,62}[A-Za-z0-9]$/.test(config.resourceName)) {
         throw new AskSqlError('CONFIG_ERROR', {
           detail: 'invalid azure resourceName',
@@ -241,8 +221,7 @@ export async function resolveModel(config: ProviderConfig): Promise<ModelLike> {
     case 'nvidia':
     case 'ollama':
     case 'openai-compatible': {
-      // NVIDIA and Ollama are OpenAI-compatible with a known endpoint we pre-seed;
-      // a user-supplied baseURL overrides it. openai-compatible has no default.
+      // NVIDIA and Ollama are OpenAI-compatible with a pre-seeded endpoint; openai-compatible has no default.
       const mod = await importProvider(import('@ai-sdk/openai-compatible'), '@ai-sdk/openai-compatible');
       const create = mod['createOpenAICompatible'] as (o: object) => (id: string) => ModelLike;
       const baseURL = config.baseURL ?? PROVIDER_API_HOST[config.provider];

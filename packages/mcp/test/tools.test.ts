@@ -129,15 +129,69 @@ describe('AskSQL MCP tools', () => {
     expect(res.content[0]!.text).toMatch(/GUARD_BLOCKED/);
   });
 
-  it('asksql_query surfaces a clean error when the model cannot build SQL', async () => {
+  it('asksql_query answers from the catalog when no query can be built', async () => {
+    let call = 0;
     const engine = createAskSql({
       connectors: [new Fake()],
-      model: async () => 'IMPOSSIBLE: not answerable from this schema',
+      // First the SQL attempt gives up; the prose path then answers from the schema.
+      model: async () =>
+        ++call === 1 ? 'IMPOSSIBLE: not answerable from this schema' : 'The users table holds one row per person.',
     });
     const t = Object.fromEntries(createAskSqlMcpTools(engine).map((x) => [x.name, x]));
-    const res = await t['asksql_query']!.handle({ question: 'unanswerable' });
+    const res = await t['asksql_query']!.handle({ question: 'what is this database for' });
+    expect(res.isError).toBeFalsy();
+    const parsed = JSON.parse(res.content[0]!.text);
+    expect(parsed.answer).toBeTruthy();
+    expect(parsed.grounded).toBeDefined();
+  });
+
+  it('a model that kept inventing a table is reported, not relabelled as "no query answers this"', async () => {
+    const engine = createAskSql({
+      connectors: [new Fake()],
+      // Names a table that does not exist, every time: the engine gives up with a "Did you mean".
+      model: async () => '```sql\nSELECT * FROM usrs\n```',
+    });
+    const t = Object.fromEntries(createAskSqlMcpTools(engine).map((x) => [x.name, x]));
+    const res = await t['asksql_query']!.handle({ question: 'how many users' });
     expect(res.isError).toBe(true);
-    expect(res.content[0]!.text).toMatch(/LLM_BAD_OUTPUT|couldn't|could not|not answerable/i);
+    // The actionable part of the message must survive to the agent.
+    expect(res.content[0]!.text).toMatch(/usrs/);
+  });
+
+  it('asksql_query still errors when the failure is not about the question', async () => {
+    const engine = createAskSql({
+      connectors: [new Fake()],
+      model: async () => {
+        throw Object.assign(new Error('no key'), { code: 'LLM_AUTH' });
+      },
+    });
+    const t = Object.fromEntries(createAskSqlMcpTools(engine).map((x) => [x.name, x]));
+    const res = await t['asksql_query']!.handle({ question: 'how many users' });
+    expect(res.isError).toBe(true);
+  });
+
+  it('asksql_query answers an advice question in prose instead of dead-ending the agent', async () => {
+    const engine = createAskSql({
+      connectors: [new Fake()],
+      model: async () => 'Add an index on users(name) and a foreign key from orders to users.',
+    });
+    const t = Object.fromEntries(createAskSqlMcpTools(engine).map((x) => [x.name, x]));
+    const res = await t['asksql_query']!.handle({ question: 'how can I improve this schema' });
+    expect(res.isError).toBeFalsy();
+    const parsed = JSON.parse(res.content[0]!.text);
+    expect(parsed.answer).toBeTruthy();
+    expect(parsed.note).toMatch(/read-only/i);
+  });
+
+  it('asksql_explain_schema answers a schema question directly', async () => {
+    const engine = createAskSql({
+      connectors: [new Fake()],
+      model: async () => 'The users table holds one row per person; orders references it by user id.',
+    });
+    const t = Object.fromEntries(createAskSqlMcpTools(engine).map((x) => [x.name, x]));
+    const res = await t['asksql_explain_schema']!.handle({ question: 'how are these tables related' });
+    expect(res.isError).toBeFalsy();
+    expect(JSON.parse(res.content[0]!.text).answer).toBeTruthy();
   });
 
   it('asksql_schema surfaces a clean error when introspection fails', async () => {
@@ -184,7 +238,7 @@ describe('MCP protocol over the real SDK', () => {
 
     const listed = await client.listTools();
     expect(listed.tools.map((t) => t.name).sort()).toEqual(
-      ['asksql_list_connections', 'asksql_query', 'asksql_run'].concat('asksql_schema').sort(),
+      ['asksql_list_connections', 'asksql_query', 'asksql_run', 'asksql_explain_schema'].concat('asksql_schema').sort(),
     );
     // The advertised inputSchema is real JSON Schema (object type).
     expect(listed.tools.find((t) => t.name === 'asksql_query')?.inputSchema.type).toBe('object');

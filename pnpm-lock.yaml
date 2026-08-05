@@ -287,6 +287,9 @@ importers:
       node-sql-parser:
         specifier: ^5.4.0
         version: 5.4.0
+      zod:
+        specifier: ^3.25.76 || ^4.1.8
+        version: 4.4.3
     devDependencies:
       '@ai-sdk/anthropic':
         specifier: ^4.0.14
@@ -434,6 +437,9 @@ importers:
       '@ai-sdk/anthropic':
         specifier: ^4.0.14
         version: 4.0.14(zod@4.4.3)
+      '@ai-sdk/azure':
+        specifier: ^4.0.13
+        version: 4.0.13(zod@4.4.3)
       '@ai-sdk/google':
         specifier: ^4.0.14
         version: 4.0.14(zod@4.4.3)

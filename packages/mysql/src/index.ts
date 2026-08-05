@@ -1,13 +1,7 @@
 /**
- * @asksql/mysql - MySQL connector.
- *
- * - information_schema introspection (tables, views, columns, PKs, FKs,
- * uniques, indexes, triggers, routines, enum column values) (INT-*).
- * - Read-only enforcement: each query runs in a `START TRANSACTION READ
- * ONLY` with `MAX_EXECUTION_TIME`.
- * - Cancellation via `KILL QUERY <connectionId>` from a side connection.
- *
- * `mysql2` is a peer dependency, imported lazily.
+ * @asksql/mysql - MySQL connector: information_schema introspection, each query in a
+ * `START TRANSACTION READ ONLY` under a `MAX_EXECUTION_TIME` statement hint, and cancellation
+ * via `KILL QUERY <connectionId>` from a side connection. `mysql2` is a lazily imported peer.
  */
 
 import {
@@ -33,11 +27,7 @@ export interface MysqlConnectorConfig {
   readonly uri?: string;
   readonly ssl?: Record<string, unknown>;
   readonly connectionLimit?: number;
-  /**
-   * Opt-in: sample distinct values from short text columns that are NOT declared
-   * enums, so the model sees the real codes a `status VARCHAR` holds. This reads
-   * actual cell values (not just schema), so it is off unless the caller sets it.
-   */
+  /** Opt-in: sample distinct values from short non-enum text columns, so the model sees the real codes they hold. */
   readonly sampleColumnValues?: boolean;
 }
 
@@ -81,10 +71,8 @@ export class MysqlConnector implements Connector {
   }
 
   /**
-   * The database to introspect. With discrete config this is config.database;
-   * with a `uri` (DSN) the database is chosen by the connection string, so ask
-   * the server which one is current instead of filtering information_schema on an
-   * empty name (which would silently return zero tables). Cached after first look.
+   * The database to introspect: config.database, or - in DSN mode, where the connection
+   * string picks it - whatever the server reports as current. Cached after the first look.
    */
   private async databaseName(): Promise<string> {
     if (this.config.database) return this.config.database;
@@ -199,11 +187,9 @@ export class MysqlConnector implements Connector {
     try {
       await conn.query('START TRANSACTION READ ONLY');
       const maxMs = Math.max(1, Math.floor(timeoutMs));
-      // Server-side deadline: MySQL honors MAX_EXECUTION_TIME (ms); MariaDB ignores
-      // it and uses max_statement_time (seconds). Set both; each is a no-op belt
-      // where unsupported. The client-side race below is the real guarantee.
-      await conn.query(`SET SESSION MAX_EXECUTION_TIME = ${maxMs}`).catch(() => {});
-      await conn.query(`SET SESSION max_statement_time = ${(maxMs / 1000).toFixed(3)}`).catch(() => {});
+      // Statement-scoped hint: SET SESSION would outlive release() and cap the next query
+      // this pooled connection serves. Anything the hint cannot reach keeps the client deadline.
+      const deadlined = withMaxExecutionTime(sql, maxMs);
 
       // Reliable backend id for KILL QUERY (thread-id wrappers vary).
       let connId: number | undefined;
@@ -222,12 +208,11 @@ export class MysqlConnector implements Connector {
         if (opts.signal.aborted) onAbort();
       }
 
-      // Client-side deadline so a MariaDB (or any server that ignored the hint)
-      // cannot run past timeoutMs: on expiry, KILL the backend and reject the race.
-      // The query keeps its own catch so its later rejection isn't unhandled.
+      // Client-side deadline for a server that ignored the hint: on expiry, KILL the backend and
+      // reject the race. The query keeps its own catch so its later rejection is not unhandled.
       const runQuery = (async (): Promise<[unknown, unknown]> => {
         try {
-          return await conn.query({ sql, rowsAsArray: true });
+          return await conn.query({ sql: deadlined, rowsAsArray: true });
         } catch (err) {
           if (timedOut) return [[], []];
           throw err;
@@ -241,9 +226,7 @@ export class MysqlConnector implements Connector {
         }, maxMs);
       });
       const [rows, fields] = await Promise.race([runQuery, deadline]);
-      // A killed query can RETURN (e.g. MySQL SLEEP yields 1 when
-      // interrupted) rather than throw - never surface a cancelled query's
-      // results.
+      // A killed query can return rather than throw (MySQL SLEEP yields 1 when interrupted).
       if (cancelled || opts?.signal?.aborted) throw new AskSqlError('CANCELLED');
       await conn.query('COMMIT').catch(() => {});
 
@@ -280,6 +263,17 @@ export class MysqlConnector implements Connector {
   async explain(sql: string, opts?: ExecuteOptions): Promise<ResultSet> {
     return this.execute(`EXPLAIN ${sql}`, opts);
   }
+}
+
+/**
+ * Attach MySQL's `MAX_EXECUTION_TIME(ms)` optimizer hint to a leading SELECT. The hint must sit
+ * immediately after that keyword, so any other statement shape is returned untouched.
+ */
+function withMaxExecutionTime(sql: string, maxMs: number): string {
+  const lead = /^(?:\s|--[^\n]*|#[^\n]*|\/\*[\s\S]*?\*\/)*SELECT\b/i.exec(sql);
+  if (!lead) return sql;
+  const end = lead[0].length;
+  return `${sql.slice(0, end)} /*+ MAX_EXECUTION_TIME(${maxMs}) */${sql.slice(end)}`;
 }
 
 function mapConnectError(err: unknown): AskSqlError {

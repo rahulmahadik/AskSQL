@@ -1,9 +1,8 @@
 /**
  * @asksql/core - the AskSQL engine.
  *
- * Zero database drivers live here. Connectors come from adapter packages
- * (`@asksql/postgres`, `@asksql/mysql`, `@asksql/sqlite`, `@asksql/duckdb`);
- * models come from AI SDK provider packages resolved via `resolveModel`.
+ * Zero database drivers live here. Connectors come from adapter packages; models come from AI SDK
+ * provider packages resolved via `resolveModel`.
  */
 
 export * from './types.js';
@@ -48,5 +47,15 @@ export {
   type SuggestFixOptions,
   type CatalogOptions,
 } from './engine.js';
-export { isMetadataQuestion, catalogQueryHint, closestTableName } from './schema-match.js';
+export {
+  isMetadataQuestion,
+  isSchemaAdviceQuestion,
+  isSchemaProposalQuestion,
+  isWriteRequest,
+  isDatabaseOverviewQuestion,
+  catalogQueryHint,
+  closestTableName,
+} from './schema-match.js';
+// The remaining routing predicates, exported for the JetBrains parity exporter.
+export { isCapabilityQuestion, isPromptInjection } from './scope.js';
 // MongoDB (non-SQL) engine path: import from '@asksql/core/mongo'.

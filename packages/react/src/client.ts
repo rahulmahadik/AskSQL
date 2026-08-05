@@ -1,17 +1,17 @@
 /**
- * AskSQL client transports.
- *
- * Two ways the React UI reaches an engine:
- * - HttpTransport -> talks to an `@asksql/server` sidecar (credentials stay
- * server-side). Streams /chat as SSE.
- * - LocalTransport -> wraps a core `AskSqlEngine` running in the browser
- * (the zero-backend DuckDB file mode).
- *
- * Both satisfy the same `Transport` interface so components are transport-
- * agnostic.
+ * AskSQL client transports. HttpTransport talks to an `@asksql/server` sidecar
+ * (credentials stay server-side) and streams /chat as SSE; LocalTransport wraps a
+ * core `AskSqlEngine` in the browser. Both satisfy the same `Transport` interface.
  */
 
-import type { AskSqlEngine, CapabilityFlags, ExecuteOptions, ResultSet, SchemaAnswer, SchemaCatalog } from '@asksql/core';
+import type {
+  AskSqlEngine,
+  CapabilityFlags,
+  ExecuteOptions,
+  ResultSet,
+  SchemaAnswer,
+  SchemaCatalog,
+} from '@asksql/core';
 
 export interface ConnectionSummary {
   readonly id: string;
@@ -54,7 +54,12 @@ export interface Transport {
   ): Promise<ResultSet>;
   explain(sql: string, connectionId?: string): Promise<string>;
   /** Grounded plain-language answer about the schema (never runs a query). */
-  explainSchema(question: string, connectionId?: string): Promise<SchemaAnswer>;
+  explainSchema(
+    question: string,
+    connectionId?: string,
+    context?: readonly { question: string; sql: string }[],
+    signal?: AbortSignal,
+  ): Promise<SchemaAnswer>;
 }
 
 // ---------------------------------------------------------------------------
@@ -62,9 +67,8 @@ export interface Transport {
 // ---------------------------------------------------------------------------
 
 /**
- * Incrementally parse an SSE byte stream into `data:` JSON payloads.
- * Handles chunk boundaries splitting an event mid-line and ignores
- * comment (`:`) heartbeat lines.
+ * Incrementally parse an SSE byte stream into `data:` JSON payloads, across
+ * chunk boundaries that split an event mid-line, ignoring `:` heartbeat lines.
  */
 export class SseParser {
   private buffer = '';
@@ -103,6 +107,10 @@ export interface HttpTransportOptions {
   readonly fetch?: typeof fetch;
 }
 
+function isRecord(v: unknown): boolean {
+  return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+
 export class HttpTransport implements Transport {
   private readonly f: typeof fetch;
   constructor(private readonly opts: HttpTransportOptions) {
@@ -126,9 +134,8 @@ export class HttpTransport implements Transport {
   }
 
   /**
-   * fetch rejects only for transport-level failures (server unreachable, bad
-   * baseUrl, CORS). Map those to a typed NETWORK_ERROR with an actionable
-   * message; a user abort passes through untouched.
+   * Map transport-level fetch failures (unreachable server, bad baseUrl, CORS)
+   * to a typed NETWORK_ERROR; a user abort passes through untouched.
    */
   private async doFetch(url: string, init?: RequestInit): Promise<Response> {
     try {
@@ -145,7 +152,7 @@ export class HttpTransport implements Transport {
     }
   }
 
-  private async unwrap<T>(res: Response): Promise<T> {
+  private async unwrap(res: Response): Promise<Record<string, unknown>> {
     const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
     if (!res.ok) {
       const err = (body['error'] as { userMessage?: string; code?: string; retryable?: boolean }) ?? {};
@@ -158,21 +165,36 @@ export class HttpTransport implements Transport {
         err.retryable,
       );
     }
-    return body as T;
+    return body;
+  }
+
+  /** Read a field a 2xx body must carry, so a login page or SPA index doesn't reach the UI as undefined. */
+  private field<T>(body: Record<string, unknown>, key: string, ok: (v: unknown) => boolean): T {
+    const value = body[key];
+    if (!ok(value)) {
+      throw new TransportError(
+        'NETWORK_ERROR',
+        'The response did not come from an AskSQL server. Check that the base URL points at the sidecar.',
+        undefined,
+        undefined,
+        true,
+      );
+    }
+    return value as T;
   }
 
   async listConnections(): Promise<ConnectionSummary[]> {
     const res = await this.doFetch(this.url('/connections'), { headers: this.headers(false) });
-    const body = await this.unwrap<{ connections: ConnectionSummary[] }>(res);
-    return body.connections;
+    const body = await this.unwrap(res);
+    return this.field<ConnectionSummary[]>(body, 'connections', Array.isArray);
   }
 
   async schema(connectionId?: string, refresh?: boolean): Promise<SchemaCatalog> {
     const res = await this.doFetch(this.url('/schema', { connectionId, refresh: refresh ? '1' : undefined }), {
       headers: this.headers(false),
     });
-    const body = await this.unwrap<{ catalog: SchemaCatalog }>(res);
-    return body.catalog;
+    const body = await this.unwrap(res);
+    return this.field<SchemaCatalog>(body, 'catalog', isRecord);
   }
 
   async *chat(params: AskParams): AsyncIterable<ChatEvent> {
@@ -216,8 +238,8 @@ export class HttpTransport implements Transport {
       }),
       signal: opts?.signal,
     });
-    const body = await this.unwrap<{ result: ResultSet }>(res);
-    return body.result;
+    const body = await this.unwrap(res);
+    return this.field<ResultSet>(body, 'result', isRecord);
   }
 
   async explain(sql: string, connectionId?: string): Promise<string> {
@@ -226,17 +248,25 @@ export class HttpTransport implements Transport {
       headers: this.headers(),
       body: JSON.stringify({ sql, connectionId }),
     });
-    const body = await this.unwrap<{ explanation: string }>(res);
-    return body.explanation;
+    const body = await this.unwrap(res);
+    return this.field<string>(body, 'explanation', (v) => typeof v === 'string');
   }
 
-  async explainSchema(question: string, connectionId?: string): Promise<SchemaAnswer> {
+  async explainSchema(
+    question: string,
+    connectionId?: string,
+    context?: readonly { question: string; sql: string }[],
+    signal?: AbortSignal,
+  ): Promise<SchemaAnswer> {
     const res = await this.doFetch(this.url('/explainSchema'), {
       method: 'POST',
       headers: this.headers(),
-      body: JSON.stringify({ question, connectionId }),
+      body: JSON.stringify({ question, connectionId, context }),
+      signal,
     });
-    return this.unwrap<SchemaAnswer>(res);
+    const body = await this.unwrap(res);
+    this.field<string>(body, 'answer', (v) => typeof v === 'string');
+    return body as unknown as SchemaAnswer;
   }
 }
 
@@ -329,7 +359,12 @@ export class LocalTransport implements Transport {
   explain(sql: string, connectionId?: string): Promise<string> {
     return this.engine.explain(sql, { connectionId });
   }
-  explainSchema(question: string, connectionId?: string): Promise<SchemaAnswer> {
-    return this.engine.explainSchema(question, { connectionId });
+  explainSchema(
+    question: string,
+    connectionId?: string,
+    context?: readonly { question: string; sql: string }[],
+    signal?: AbortSignal,
+  ): Promise<SchemaAnswer> {
+    return this.engine.explainSchema(question, { connectionId, context, signal });
   }
 }

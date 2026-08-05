@@ -13,7 +13,7 @@ Light and dark themes, CSS-variable theming, CSP nonce support.
 
 ![AskSQL React chat: a plain-language question turned into SQL, with the results and a chart below it](https://github.com/rahulmahadik/AskSQL/raw/HEAD/docs/screenshots/02-results-table-light.png)
 
-Turn on `answerSchemaQuestions` and questions that aren't a data query - "how are the tables related?", "summarize this database", even "how would I add an index?" - get a grounded, read-only explanation from the schema instead of an error. A question with nothing to do with data is declined in one line instead. No query is run, and names it can't find are flagged:
+Turn on `answerSchemaQuestions` and questions that aren't a data query - "how are the tables related?", "summarize this database", even "how would I add an index?" - get a grounded, read-only explanation from the schema instead of an error. A question with nothing to do with data is declined in one line. No query is run, and names it can't find are flagged:
 
 ![AskSQL React chat answering "How are the tables related?" with a plain-language explanation of the foreign-key relationships - no query, no results table](https://github.com/rahulmahadik/AskSQL/raw/HEAD/docs/screenshots/10-schema-answer-light.png)
 
@@ -38,7 +38,7 @@ export function Page() {
 
 ## Headless
 
-`useAskSql` is a conversation of `turns`; each turn carries its own `sql`, `result`, `error`, etc.
+`useAskSql` models the conversation as `turns`; each turn carries its own `sql`, `result`, `error`, etc.
 
 ```tsx
 import { useAskSql, HttpTransport } from '@asksql/react';
@@ -64,6 +64,15 @@ function MyUi() {
 }
 ```
 
+## Charts
+
+The table is always the default view. A **Chart** toggle appears next to it only when the result
+can say something a table cannot: at most 50 rows, at least 2 columns, and at least one numeric
+column besides the label column. A date or timestamp label draws a line chart, anything else a
+bar chart, and at most 4 series are plotted. Nothing switches to a chart on its own.
+`<ResultChart>` and the `isChartable(result)` predicate are exported if you want the same rule in
+your own layout.
+
 ## Reaching the server
 
 When the sidecar is unreachable (wrong `baseUrl`, server down, or a **CORS** rejection), the transport
@@ -71,10 +80,6 @@ surfaces a typed error with `code: 'NETWORK_ERROR'` and an actionable `userMessa
 HTTP error the server returned. The components render it inline; with the hook, read it from the turn's
 `error.userMessage`. If you see `NETWORK_ERROR` in the browser, check that `baseUrl` is correct and that
 the server allows the page's origin (CORS).
-
-Full documentation: [https://github.com/rahulmahadik/AskSQL](https://github.com/rahulmahadik/AskSQL)
-
-API reference: [rahulmahadik.github.io/AskSQL](https://rahulmahadik.github.io/AskSQL/)
 
 ## No backend at all
 
@@ -86,3 +91,7 @@ in-browser - same `<AskSqlChat>`, no server.
 to a new non-empty value - e.g. an "ask about selection" hand-off, with
 `onInitialQuestionConsumed` to clear your state) and `sqlDisplayPlacement`
 (`'before' | 'after'`) to show results first with the SQL below.
+
+Full documentation: [https://github.com/rahulmahadik/AskSQL](https://github.com/rahulmahadik/AskSQL)
+
+API reference: [rahulmahadik.github.io/AskSQL](https://rahulmahadik.github.io/AskSQL/)

@@ -86,7 +86,7 @@ interface FakeResult {
 function fakeRes(): { res: never; done: Promise<FakeResult> } {
   let resolve!: (r: FakeResult) => void;
   const done = new Promise<FakeResult>((r) => (resolve = r));
-  const state: FakeResult = { statusCode: 0, headers: {}, body: '', chunks: [] };
+  const state: FakeResult = { statusCode: 0, headers: { 'content-type': 'application/json' }, body: '', chunks: [] };
   const res = {
     get statusCode() {
       return state.statusCode;

@@ -1,15 +1,7 @@
 /**
- * @asksql/mcp - expose an AskSQL engine over the Model Context Protocol.
- *
- * import { createAskSql } from '@asksql/core';
- * import { PostgresConnector } from '@asksql/postgres';
- * import { startAskSqlMcpServer } from '@asksql/mcp';
- *
- * const engine = createAskSql({ connectors: [...], model });
- * await startAskSqlMcpServer(engine); // serves over stdio
- *
- * `@modelcontextprotocol/sdk` is an optional peer - the tool defs/handlers
- * (`createAskSqlMcpTools`) are usable without it for tests or custom transports.
+ * @asksql/mcp - expose an AskSQL engine over the Model Context Protocol:
+ *   await startAskSqlMcpServer(createAskSql({ connectors: [...], model })); // serves over stdio
+ * `@modelcontextprotocol/sdk` is an optional peer; `createAskSqlMcpTools` works without it.
  */
 
 import { AskSqlError, type AskSqlEngine } from '@asksql/core';
@@ -30,12 +22,9 @@ export interface McpLowLevelServer {
 }
 
 /**
- * Build a low-level MCP server that advertises AskSQL's tools and dispatches
- * calls to their handlers. The low-level `Server` (not the high-level
- * `McpServer`) is used deliberately: it takes each tool's JSON Schema
- * `inputSchema` as-is, whereas `McpServer.registerTool` only accepts Zod raw
- * shapes. Returned unconnected so callers attach their own transport (stdio,
- * an in-memory transport for tests, a custom host).
+ * Build a low-level MCP server advertising AskSQL's tools and dispatching to their handlers.
+ * The low-level `Server` takes each tool's JSON Schema `inputSchema` as-is, where
+ * `McpServer.registerTool` accepts only Zod raw shapes. Returned unconnected, for any transport.
  */
 export async function buildAskSqlMcpServer(
   engine: AskSqlEngine,

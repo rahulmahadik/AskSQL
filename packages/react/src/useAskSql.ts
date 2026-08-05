@@ -11,6 +11,17 @@ import type { ChatEvent, Transport } from './client.js';
 
 export type TurnPhase = 'idle' | 'thinking' | 'sql_ready' | 'running' | 'done' | 'error' | 'stopped';
 
+/** Driver prefixes that name a pooled connection rather than the problem. */
+const DRIVER_NOISE = /^\s*(?:\(conn=\d+\)|error:)\s*/i;
+
+/** The database's own words after the friendly line. Only local transports carry `detail`. */
+function dbErrorMessage(e: { code?: string; userMessage?: string; detail?: string }): string {
+  const base = e.userMessage ?? 'The query failed.';
+  if (e.code !== 'DB_QUERY_ERROR' || typeof e.detail !== 'string') return base;
+  const detail = e.detail.split('\n')[0]?.replace(DRIVER_NOISE, '').trim().slice(0, 300);
+  return detail ? `${base} ${detail}` : base;
+}
+
 export interface Turn {
   readonly id: string;
   readonly question: string;
@@ -29,28 +40,31 @@ export interface Turn {
   /** A corrected query the server suggested after a failed run (apply to retry). */
   suggestedSql?: string;
   /** A grounded plain-language schema answer, when the question wasn't a data query (see answerSchemaQuestions). */
-  schemaAnswer?: { answer: string; grounded: boolean; unknownReferences: string[]; isSchemaChange: boolean };
+  schemaAnswer?: {
+    answer: string;
+    grounded: boolean;
+    unknownReferences: string[];
+    isSchemaChange: boolean;
+    proposedSql?: string;
+  };
 }
 
 export interface UseAskSqlOptions {
   readonly transport: Transport;
   readonly connectionId?: string;
   /**
-   * Require a human approval click before generated SQL runs. Off by default,
-   * so results appear automatically; set true to gate every query behind a
-   * Run button (the SQL and its explanation are always shown first regardless).
+   * Require a human approval click before generated SQL runs. Off by default;
+   * set true to gate every query behind a Run button.
    */
   readonly requireApproval?: boolean;
   /**
-   * When a question can't be turned into a SQL query, answer it in plain language
-   * from the schema instead of showing an error. Grounded in structure only, never
-   * data values. Off by default.
+   * Answer questions that can't become SQL in plain language from the schema
+   * structure, never data values. Off by default.
    */
   readonly answerSchemaQuestions?: boolean;
   /**
-   * Row cap for every query this hook runs. Sent with the request, so it applies to a sidecar
-   * too - without it the server's own cap is the only one, and a client-side row-limit setting
-   * silently does nothing for server-backed connections.
+   * Row cap for every query this hook runs, sent with the request so it applies
+   * to a sidecar too.
    */
   readonly maxRows?: number;
 }
@@ -94,15 +108,12 @@ export function useAskSql(opts: UseAskSqlOptions): UseAskSqlResult {
   const [turns, setTurns] = useState<Turn[]>([]);
   const [busy, setBusy] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
-  // Always-current view of turns, so callbacks can read a turn's question
-  // without re-subscribing (avoids stale closures / dep churn).
+  // Always-current view of turns, so callbacks read a question without re-subscribing.
   const turnsRef = useRef(turns);
   turnsRef.current = turns;
-  // Synchronous in-flight gate. `busy` is React state and updates a tick late,
-  // so several Retry buttons clicked in the same frame would all read
-  // busy===false and fire together. This ref flips synchronously, so only the
-  // first click of a batch runs; the rest are no-ops until it settles.
-  const inFlightRef = useRef(false);
+  // Synchronous in-flight gate: `busy` is state and lands a tick late, so clicks in one frame race.
+  // Holds the token of the run that owns it, so a superseded run releases nothing.
+  const inFlightRef = useRef<object | null>(null);
 
   const patch = useCallback((id: string, update: Partial<Turn>) => {
     setTurns((prev) => prev.map((t) => (t.id === id ? { ...t, ...update } : t)));
@@ -115,9 +126,7 @@ export function useAskSql(opts: UseAskSqlOptions): UseAskSqlResult {
       patch(turnId, { phase: 'running', error: undefined, suggestedSql: undefined });
       try {
         const turn = turnsRef.current.find((t) => t.id === turnId);
-        // `collection` is passed in rather than read from the turn: auto-run
-        // fires before React re-renders, so turnsRef is still pre-patch here
-        // (the same reason the caller passes `sql` instead of reading it).
+        // `collection` is passed in: auto-run fires before React re-renders, so turnsRef is pre-patch.
         const runCollection = collection ?? turn?.collection;
         const result = await opts.transport.execute(sql, {
           connectionId: opts.connectionId,
@@ -128,7 +137,14 @@ export function useAskSql(opts: UseAskSqlOptions): UseAskSqlResult {
         });
         patch(turnId, { phase: 'done', result });
       } catch (err) {
-        const e = err as { name?: string; code?: string; userMessage?: string; retryable?: boolean; suggestedSql?: string };
+        const e = err as {
+          name?: string;
+          code?: string;
+          userMessage?: string;
+          detail?: string;
+          retryable?: boolean;
+          suggestedSql?: string;
+        };
         // A user Stop aborts the fetch; surface a neutral stopped state, not a red error.
         if (e.name === 'AbortError' || controller.signal.aborted) {
           patch(turnId, { phase: 'stopped', error: undefined });
@@ -137,14 +153,15 @@ export function useAskSql(opts: UseAskSqlOptions): UseAskSqlResult {
             phase: 'error',
             error: {
               code: e.code ?? 'DB_QUERY_ERROR',
-              userMessage: e.userMessage ?? 'The query failed.',
+              userMessage: dbErrorMessage(e),
               retryable: e.retryable ?? false,
             },
             suggestedSql: typeof e.suggestedSql === 'string' ? e.suggestedSql : undefined,
           });
         }
       } finally {
-        abortRef.current = null;
+        // Only the owner clears it: a Stop plus a new turn can leave this one still unwinding.
+        if (abortRef.current === controller) abortRef.current = null;
       }
     },
     [opts.transport, opts.connectionId, patch],
@@ -154,7 +171,8 @@ export function useAskSql(opts: UseAskSqlOptions): UseAskSqlResult {
     async (question: string) => {
       const q = question.trim();
       if (!q || inFlightRef.current) return;
-      inFlightRef.current = true;
+      const token = {};
+      inFlightRef.current = token;
       const id = `turn_${++turnSeq}`;
       const context = turns
         .filter((t) => t.sql)
@@ -168,6 +186,8 @@ export function useAskSql(opts: UseAskSqlOptions): UseAskSqlResult {
       let generatedSql: string | undefined;
       let generatedCollection: string | undefined;
       let askErrorCode: string | undefined;
+      // Whether the stream left the turn in a state the UI can render.
+      let settled = false;
       try {
         for await (const ev of opts.transport.chat({
           question: q,
@@ -179,12 +199,16 @@ export function useAskSql(opts: UseAskSqlOptions): UseAskSqlResult {
           if (ev.type === 'sql') {
             generatedSql = ev.sql;
             generatedCollection = ev.collection;
+            settled = true;
+          } else if (ev.type === 'error') {
+            askErrorCode = ev.code;
+            settled = true;
           }
-          else if (ev.type === 'error') askErrorCode = ev.code;
         }
       } catch (err) {
         const e = err as { name?: string; code?: string; userMessage?: string; retryable?: boolean };
         askErrorCode = e.code;
+        settled = true;
         // A user Stop aborts the stream; surface a neutral stopped state, not a red error.
         if (e.name === 'AbortError' || controller.signal.aborted) {
           patch(id, { phase: 'stopped', error: undefined });
@@ -198,40 +222,58 @@ export function useAskSql(opts: UseAskSqlOptions): UseAskSqlResult {
             },
           });
         }
-      } finally {
-        abortRef.current = null;
       }
 
-      // Schema-understanding fallback: when no SQL could be built and the option is on,
-      // answer the question from the schema in prose instead of leaving an error.
+      // A stream that ends with neither SQL nor an error would leave the turn spinning forever.
+      if (!settled) {
+        if (controller.signal.aborted) patch(id, { phase: 'stopped', error: undefined });
+        else
+          patch(id, {
+            phase: 'error',
+            error: {
+              code: 'LLM_UNAVAILABLE',
+              userMessage: 'The response ended before an answer arrived.',
+              retryable: true,
+            },
+          });
+      }
+
+      // Schema-understanding fallback: with no SQL and the option on, answer from the schema in prose.
       if (
         !generatedSql &&
         opts.answerSchemaQuestions &&
         (askErrorCode === 'LLM_BAD_OUTPUT' || askErrorCode === 'LLM_REFUSAL')
       ) {
         try {
-          const sa = await opts.transport.explainSchema(q, opts.connectionId);
+          const sa = await opts.transport.explainSchema(q, opts.connectionId, context, controller.signal);
           patch(id, {
             phase: 'done',
             error: undefined,
+            // Recorded as this turn's sql too, so a follow-up like "run that" has it as context.
+            ...(sa.proposedSql ? { sql: sa.proposedSql } : {}),
             schemaAnswer: {
               answer: sa.answer,
               grounded: sa.grounded,
               unknownReferences: [...sa.unknownReferences],
               isSchemaChange: sa.isSchemaChange,
+              ...(sa.proposedSql ? { proposedSql: sa.proposedSql } : {}),
             },
           });
         } catch {
           /* keep the original error */
         }
       }
-      // Keep busy across the auto-run so Stop stays available and typed input isn't
-      // discarded mid-execute; don't run a query the user just cancelled.
+      // Cleared after the fallback, so Stop still reaches it; only the owner clears it, because a
+      // Stop plus a new question can leave this turn unwinding behind the next one.
+      if (abortRef.current === controller) abortRef.current = null;
+      // Stay busy across the auto-run so Stop stays available; skip a query the user just cancelled.
       if (generatedSql && !opts.requireApproval && !controller.signal.aborted) {
         await doRun(id, generatedSql, generatedCollection);
       }
-      setBusy(false);
-      inFlightRef.current = false;
+      if (inFlightRef.current === token) {
+        setBusy(false);
+        inFlightRef.current = null;
+      }
 
       function applyEvent(turnId: string, ev: ChatEvent) {
         if (ev.type === 'stage') patch(turnId, { stage: ev.stage });
@@ -261,13 +303,16 @@ export function useAskSql(opts: UseAskSqlOptions): UseAskSqlResult {
     async (turnId: string) => {
       const turn = turns.find((t) => t.id === turnId);
       if (!turn?.sql || inFlightRef.current) return;
-      inFlightRef.current = true;
+      const token = {};
+      inFlightRef.current = token;
       setBusy(true);
       try {
         await doRun(turnId, turn.sql);
       } finally {
-        setBusy(false);
-        inFlightRef.current = false;
+        if (inFlightRef.current === token) {
+          setBusy(false);
+          inFlightRef.current = null;
+        }
       }
     },
     [turns, doRun],
@@ -275,15 +320,17 @@ export function useAskSql(opts: UseAskSqlOptions): UseAskSqlResult {
 
   const editSql = useCallback(
     (turnId: string, sql: string) => {
-      // Back to a runnable state; the guard re-validates on run. Auto-run mode runs it now,
-      // approval mode waits behind the Run button.
-      patch(turnId, { sql, phase: 'sql_ready', result: undefined, error: undefined });
+      // Back to a runnable state; auto-run mode runs it now, approval mode waits behind Run.
+      patch(turnId, { sql, phase: 'sql_ready', result: undefined, error: undefined, suggestedSql: undefined });
       if (!opts.requireApproval && !inFlightRef.current) {
-        inFlightRef.current = true;
+        const token = {};
+        inFlightRef.current = token;
         setBusy(true);
         void doRun(turnId, sql).finally(() => {
-          setBusy(false);
-          inFlightRef.current = false;
+          if (inFlightRef.current === token) {
+            setBusy(false);
+            inFlightRef.current = null;
+          }
         });
       }
     },
@@ -296,8 +343,7 @@ export function useAskSql(opts: UseAskSqlOptions): UseAskSqlResult {
       if (!turn?.sql) return;
       patch(turnId, { planning: true });
       try {
-        // Skip on dialects without a bare EXPLAIN (e.g. Oracle needs EXPLAIN PLAN FOR + a follow-up
-        // query); a hardcoded EXPLAIN would just error. Absent capabilities -> attempt it as before.
+        // Skip dialects without a bare EXPLAIN (Oracle needs EXPLAIN PLAN FOR); absent capabilities, try it.
         const conns = await opts.transport.listConnections().catch(() => []);
         const conn = conns.find((c) => c.id === opts.connectionId) ?? conns[0];
         if (conn?.capabilities?.supportsExplain === false) {
@@ -318,13 +364,14 @@ export function useAskSql(opts: UseAskSqlOptions): UseAskSqlResult {
   const cancel = useCallback(() => {
     abortRef.current?.abort();
     abortRef.current = null;
-    inFlightRef.current = false;
+    inFlightRef.current = null;
     setBusy(false);
   }, []);
 
   const reset = useCallback(() => {
     abortRef.current?.abort();
-    inFlightRef.current = false;
+    abortRef.current = null;
+    inFlightRef.current = null;
     setTurns([]);
     setBusy(false);
   }, []);

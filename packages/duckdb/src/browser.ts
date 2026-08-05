@@ -1,14 +1,8 @@
 /**
  * @asksql/duckdb/browser - the zero-backend, in-browser DuckDB connector.
- *
- * Runs entirely in the tab via `@duckdb/duckdb-wasm`: the user drops a CSV /
- * JSON / Parquet, it's registered in DuckDB's virtual filesystem (large files
- * stream from the File handle - never read into a JS string), queried in a Web
- * Worker, and never leaves the browser. Pairs with `LocalTransport` +
- * `createAskSql` so the whole ask->SQL->results loop is client-side.
- *
- * `@duckdb/duckdb-wasm` is an optional peer, imported lazily. This module is
- * browser-only (Web Worker + WASM); import it from client bundles, not Node.
+ * Runs entirely in the tab via `@duckdb/duckdb-wasm`: dropped files are registered in DuckDB's
+ * virtual filesystem (Blobs stream from the File handle) and queried in a Web Worker. Pairs with
+ * `LocalTransport` + `createAskSql`. Browser-only, so import it from client bundles, not Node.
  */
 
 import {
@@ -52,9 +46,8 @@ export interface BrowserFileSource {
   /** Original filename, used to infer format when `format` is omitted. */
   readonly filename?: string;
   /**
-   * Excel worksheet to read (by name). Only used for `xlsx`; defaults to the
-   * first sheet. Register the same workbook once per sheet with distinct
-   * `table` names to query (and join) multiple sheets.
+   * Excel worksheet to read (by name). Only used for `xlsx`; defaults to the first sheet.
+   * Register the same workbook once per sheet with distinct `table` names for multiple sheets.
    */
   readonly sheet?: string;
 }
@@ -69,10 +62,8 @@ export interface DuckDbWasmConnectorConfig {
   readonly bundles?: DuckDbBundles;
   readonly files?: readonly BrowserFileSource[];
   /**
-   * OPFS path (e.g. `opfs://asksql.db`) to back the database with the Origin
-   * Private File System, so persistent tables survive a page reload.
-   * Omit for an in-memory database. Note: file *views* are session-scoped;
-   * materialize into a table (CREATE TABLE) to persist uploaded data.
+   * OPFS path (e.g. `opfs://asksql.db`) backing the database, so tables survive a page reload.
+   * Omit for an in-memory database. File *views* stay session-scoped; CREATE TABLE to persist them.
    */
   readonly persistPath?: string;
 }
@@ -104,14 +95,15 @@ interface WasmDb {
 interface WasmConn {
   query(sql: string): Promise<ArrowTable>;
   send(sql: string): Promise<AsyncBatchReader>;
+  /** Aborts the query started by send() so a timeout doesn't leave the worker running. */
+  cancelSent?(): Promise<boolean>;
   close(): Promise<void>;
 }
 interface ArrowField {
   name: string;
   type: { toString(): string };
 }
-// Arrow's `toArray` is a method in current builds (older ones exposed a
-// property); `arrowRows` tolerates both so a version bump can't break reads.
+// Arrow's `toArray` is a method in current builds and a property in older ones; `arrowRows` reads both.
 type ArrowToArray = (() => Record<string, unknown>[]) | Record<string, unknown>[];
 interface ArrowTable {
   schema: { fields: ArrowField[] };
@@ -193,8 +185,7 @@ export class DuckDbWasmConnector implements Connector {
       const logger = new duckdb.ConsoleLogger();
       this.db = new duckdb.AsyncDuckDB(logger, worker);
       await this.db.instantiate(bundle.mainModule, bundle.pthreadWorker);
-      // OPFS-backed persistence: open the DB against an OPFS file so
-      // persistent tables survive a reload.
+      // OPFS-backed persistence: open the DB against an OPFS file so tables survive a reload.
       if (this.config.persistPath) {
         await this.db.open({
           path: this.config.persistPath,
@@ -233,10 +224,8 @@ export class DuckDbWasmConnector implements Connector {
   }
 
   /**
-   * Register uploaded content as a queryable view. A File/Blob is registered
-   * via a file handle so DuckDB streams from it (large uploads never enter a
-   * JS string); ArrayBuffer/text are registered as buffers. Duplicate names
-   * are versioned. Returns the actual table name used.
+   * Register uploaded content as a queryable view: a File/Blob via a file handle DuckDB streams
+   * from, ArrayBuffer/text as buffers. Duplicate names are versioned; returns the name used.
    */
   async registerFile(file: BrowserFileSource): Promise<string> {
     const duckdb = await this.mod();
@@ -280,9 +269,8 @@ export class DuckDbWasmConnector implements Connector {
   }
 
   /**
-   * Load a portable .sql dump (CREATE TABLE + INSERT) uploaded from the browser
-   * and expose the tables it creates. Vendor dumps (mysqldump / pg_dump) and
-   * file/network statements are rejected with a clear message before running.
+   * Load an uploaded portable .sql dump (CREATE TABLE + INSERT) and expose the tables it creates.
+   * Vendor dumps (mysqldump / pg_dump) and file/network statements are rejected before running.
    */
   private async registerSqlDump(file: BrowserFileSource): Promise<string> {
     const conn = this.connection();
@@ -349,12 +337,12 @@ export class DuckDbWasmConnector implements Connector {
     const started = Date.now();
 
     try {
-      // Bounded read: stream record batches and stop once we have maxRows+1
-      // rows, so `SELECT *` over a huge file never materializes everything.
+      // Bounded read: stream record batches and stop at maxRows+1 rows.
       const { columns, rows, truncated } = await withQueryTimeout(
         readBounded(conn, sql, maxRows),
         opts?.timeoutMs ?? 30_000,
         opts?.signal,
+        () => void conn.cancelSent?.().catch(() => {}),
       );
       return {
         columns,

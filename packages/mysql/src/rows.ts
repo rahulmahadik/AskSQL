@@ -1,10 +1,8 @@
 /**
- * Row-shaping shared by the MySQL connector. Columns are classified from the
- * driver's protocol type code (the reliable signal; digit-count sampling
- * misreads short BIGINTs as text), falling back to a value sample only when the
- * type code is missing. BIGINT / DECIMAL arrive as strings (bigNumberStrings /
- * decimalNumbers:false) and MUST stay strings; binary becomes a size + hex
- * preview; JSON is re-stringified for the cell.
+ * Row-shaping for the MySQL connector. Columns are classified from the driver's protocol
+ * type code, falling back to a value sample only when that code is missing. BIGINT and
+ * DECIMAL arrive as strings (bigNumberStrings / decimalNumbers:false) and stay strings;
+ * binary becomes a size + hex preview; JSON is re-stringified for the cell.
  */
 
 import { type CellValue, type ResultColumn } from '@asksql/core';
@@ -16,11 +14,8 @@ export interface MysqlField {
 }
 
 export function columnsFromFields(fields: readonly MysqlField[], rows: readonly unknown[][]): ResultColumn[] {
-  // Classify from the driver's column type metadata (robust; digit-count
-  // sampling misreads short BIGINTs as text).
   return fields.map((f, i) => {
-    // Prefer the driver's column-type metadata; only scan rows for a
-    // sample value in the rare case the type code is missing/unknown.
+    // Prefer the driver's column-type code; scan rows for a sample value only when it is missing.
     const kind = mysqlKindFromType(f.columnType ?? f.type) ?? inferMysqlKind(rows.find((r) => r[i] != null)?.[i]);
     return { name: f.name, kind };
   });

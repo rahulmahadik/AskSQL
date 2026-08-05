@@ -1,19 +1,12 @@
 /**
- * Lexical pre-processing for the SQL guard.
- *
- * `stripCommentsAndStrings` removes the content of string literals, quoted
- * identifiers and comments (replacing each region with a single space) so
- * lexical safety checks (`FOR UPDATE`, `INTO OUTFILE`, semicolon counting)
- * can never be fooled by keywords hidden inside literals - and so literals
- * can never hide a second statement.
- *
- * Handles: 'single' ('' escape), "double" identifiers, `backtick`
- * identifiers, [bracket] identifiers, E'...' with backslash escapes,
- * $$dollar$$ and $tag$tagged$tag$ quoting (PostgreSQL), -- line comments,
- * # line comments (MySQL), and /* block comments *​/ with nesting
- * (PostgreSQL nests them).
+ * Lexical pre-processing for the SQL guard. `stripCommentsAndStrings` replaces the content of
+ * string literals, quoted identifiers and comments with a single space, so a lexical safety check
+ * cannot be fooled by a keyword - or a second statement - hidden inside a literal.
  */
-export function stripCommentsAndStrings(sql: string): string {
+export function stripCommentsAndStrings(sql: string, engine?: string): string {
+  const hashIsComment = engine === undefined || engine === 'mysql';
+  // MySQL honours \' inside a plain literal; PostgreSQL with standard_conforming_strings does not.
+  const backslashEscapes = engine === 'mysql';
   const out: string[] = [];
   const n = sql.length;
   let i = 0;
@@ -31,7 +24,7 @@ export function stripCommentsAndStrings(sql: string): string {
       continue;
     }
     // # line comment (MySQL)
-    if (c === '#') {
+    if (c === '#' && hashIsComment) {
       while (i < n && sql[i] !== '\n' && sql[i] !== '\r') i++;
       out.push(' ');
       continue;
@@ -66,10 +59,7 @@ export function stripCommentsAndStrings(sql: string): string {
         continue;
       }
     }
-    // E'...' backslash-escape string (PostgreSQL). The `E` must start a token:
-    // otherwise the trailing E of `LIKE'x'` / `date'...'` is misread as an E-string,
-    // treating `\'` as an escaped quote and running past the literal, which hides a
-    // following `;` from the multi-statement check. Never widen without a test.
+    // E'...' backslash-escape string (PostgreSQL); the `E` must start a token, or `LIKE'x'` is misread.
     if ((c === 'e' || c === 'E') && next === "'" && !/[A-Za-z0-9_$]/.test(sql[i - 1] ?? '')) {
       i += 2;
       while (i < n) {
@@ -83,11 +73,12 @@ export function stripCommentsAndStrings(sql: string): string {
       out.push(' ');
       continue;
     }
-    // 'string' with '' escape
+    // 'string' with '' escape, plus \' on MySQL where a backslash escapes inside a plain literal.
     if (c === "'") {
       i++;
       while (i < n) {
-        if (sql[i] === "'" && sql[i + 1] === "'") i += 2;
+        if (backslashEscapes && sql[i] === '\\' && i + 1 < n) i += 2;
+        else if (sql[i] === "'" && sql[i + 1] === "'") i += 2;
         else if (sql[i] === "'") {
           i++;
           break;
@@ -138,13 +129,9 @@ export function hasMultipleStatements(strippedSql: string): boolean {
   return body.includes(';');
 }
 
-/**
- * Trim trailing whitespace, semicolons and comments, preserving string
- * literals and comments before the last real token, so the guard's appended
- * auto-LIMIT binds to a clean single statement rather than landing after a
- * trailing `;` or comment.
- */
-export function trimTrailingNoise(sql: string): string {
+/** Trim trailing whitespace, semicolons and comments, preserving string literals and earlier comments. */
+export function trimTrailingNoise(sql: string, engine?: string): string {
+  const hashIsComment = engine === undefined || engine === 'mysql';
   const n = sql.length;
   let i = 0;
   let lastReal = 0; // index just past the last significant (non-noise) character
@@ -159,7 +146,7 @@ export function trimTrailingNoise(sql: string): string {
       while (i < n && sql[i] !== '\n' && sql[i] !== '\r') i++;
       continue;
     }
-    if (c === '#') {
+    if (c === '#' && hashIsComment) {
       while (i < n && sql[i] !== '\n' && sql[i] !== '\r') i++;
       continue;
     }
@@ -240,8 +227,7 @@ export function trimTrailingNoise(sql: string): string {
         continue;
       }
     }
-    // Ordinary character: whitespace and statement terminators are noise; a `;`
-    // is the only separator reachable here (multi-statement SQL is blocked upstream).
+    // Ordinary character: whitespace and `;` are noise (multi-statement SQL is blocked upstream).
     if (!/\s/.test(c) && c !== ';') lastReal = i + 1;
     i++;
   }

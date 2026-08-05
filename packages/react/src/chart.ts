@@ -21,7 +21,8 @@ export interface ChartSpec {
 }
 
 function toNumber(v: CellValue): number | null {
-  if (typeof v === 'number') return v;
+  // NaN/Infinity have no position on an axis, and one of them scales every series to NaN.
+  if (typeof v === 'number') return Number.isFinite(v) ? v : null;
   if (typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v))) return Number(v);
   return null;
 }
@@ -32,7 +33,9 @@ function isNumericColumn(result: ResultSet, idx: number): boolean {
   // Fall back to sampling values.
   const sample = result.rows.slice(0, 20);
   if (sample.length === 0) return false;
-  return sample.every((r) => r[idx] === null || toNumber(r[idx]!) !== null);
+  // At least one real number: an all-NULL column carries no shape.
+  const seen = sample.some((r) => r[idx] !== null && toNumber(r[idx]!) !== null);
+  return seen && sample.every((r) => r[idx] === null || toNumber(r[idx]!) !== null);
 }
 
 function isTemporal(col: ResultColumn): boolean {

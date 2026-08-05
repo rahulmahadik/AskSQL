@@ -123,7 +123,8 @@ describe('the grounding floor is not disarmed by the English word "with"', () =>
   // A bare `with` counted as SQL context, so `... stored as customer_history` read as a column
   // alias and the invented name was whitelisted.
   it('flags an invented name introduced by a prose "as" after the word "with"', () => {
-    const answer = 'Along with shop.orders, historical activity is stored as customer_history and linked by customer_id.';
+    const answer =
+      'Along with shop.orders, historical activity is stored as customer_history and linked by customer_id.';
     expect(unknownReferencesInProse(answer, CATALOG)).toContain('customer_history');
   });
 
@@ -209,7 +210,11 @@ describe('a change request is recognised however the verb is conjugated', () => 
 
   // Past tense describes data, not a change - keeping these out avoids skipping the grounding
   // floor for ordinary questions about when rows appeared.
-  const QUESTIONS = ['how many orders were created last week', 'show me the address book', 'which rows were updated_at set on'];
+  const QUESTIONS = [
+    'how many orders were created last week',
+    'show me the address book',
+    'which rows were updated_at set on',
+  ];
   for (const q of QUESTIONS) {
     it(`treats as a question: "${q.slice(0, 40)}"`, () => {
       expect(SCHEMA_CHANGE_RE.test(q)).toBe(false);

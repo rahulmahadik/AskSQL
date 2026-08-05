@@ -82,6 +82,17 @@ describe('HttpTransport', () => {
     await expect(t.listConnections()).rejects.toMatchObject({ code: 'NETWORK_ERROR', retryable: true });
   });
 
+  it('rejects a 2xx body that is not AskSQL JSON, rather than returning undefined', async () => {
+    // What a login page / SPA index at the wrong baseUrl actually returns.
+    const fetch = vi.fn(async () => new Response('<!doctype html><title>Sign in</title>', { status: 200 }));
+    const t = new HttpTransport({ baseUrl: '/asksql', fetch });
+    await expect(t.listConnections()).rejects.toMatchObject({ code: 'NETWORK_ERROR', retryable: true });
+    await expect(t.execute('SELECT 1')).rejects.toMatchObject({ code: 'NETWORK_ERROR' });
+    await expect(t.schema()).rejects.toMatchObject({ code: 'NETWORK_ERROR' });
+    await expect(t.explain('SELECT 1')).rejects.toMatchObject({ code: 'NETWORK_ERROR' });
+    await expect(t.explainSchema('what tables?')).rejects.toMatchObject({ code: 'NETWORK_ERROR' });
+  });
+
   it('rethrows an AbortError untouched', async () => {
     const fetch = vi.fn(async () => {
       const e = new Error('aborted');

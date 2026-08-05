@@ -121,7 +121,7 @@ describe('MemoryFewShotStore', () => {
     const hits = await store.retrieve('c1', 'q4 q3 q0', 10);
     expect(hits.length).toBeLessThanOrEqual(2);
   });
-  it('scopes examples per user - one user never retrieves another user\'s approved SQL', async () => {
+  it("scopes examples per user - one user never retrieves another user's approved SQL", async () => {
     const store = new MemoryFewShotStore();
     await store.add('c1', { question: 'revenue by region', sql: "SELECT ... WHERE tenant = 'acme'" }, 'alice');
     // Bob shares the connection but must not see Alice's private example.
@@ -158,7 +158,7 @@ describe('MemoryHistoryStore', () => {
     expect(forBob.total).toBe(1);
   });
 
-  it('retention is per-(connection,user): a busy tenant cannot evict another tenant\'s rows', async () => {
+  it("retention is per-(connection,user): a busy tenant cannot evict another tenant's rows", async () => {
     const store = new MemoryHistoryStore(2); // cap 2 PER scope, not globally
     for (let i = 0; i < 10; i++) await store.add(entry('c1', 'busy', String(100 + i)));
     await store.add(entry('c1', 'quiet', '5'));
@@ -166,7 +166,7 @@ describe('MemoryHistoryStore', () => {
     expect(quiet.items.map((e) => e.id)).toEqual(['5']); // survived the busy tenant's flood
   });
 
-  it('local mode (no userId) aggregates the connection\'s rows newest-first', async () => {
+  it("local mode (no userId) aggregates the connection's rows newest-first", async () => {
     const store = new MemoryHistoryStore();
     await store.add(entry('c1', undefined, '1'));
     await store.add(entry('c1', undefined, '3'));

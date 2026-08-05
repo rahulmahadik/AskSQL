@@ -23,7 +23,8 @@
     "!dist/**/*.map"
   ],
   "scripts": {
-    "build": "tsc -b && node esbuild.mjs"
+    "build": "tsc -b && node esbuild.mjs",
+    "prepack": "node esbuild.mjs"
   },
   "dependencies": {
     "@asksql/react": "workspace:^"

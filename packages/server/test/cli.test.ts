@@ -6,7 +6,13 @@ const base = ['--model', 'qwen2.5-coder:14b'];
 describe('parseArgs', () => {
   it('defaults to a loopback-only ollama server', () => {
     const o = parseArgs(base);
-    expect(o).toMatchObject({ host: '127.0.0.1', port: 3000, provider: 'ollama', model: 'qwen2.5-coder:14b', maxRows: 200 });
+    expect(o).toMatchObject({
+      host: '127.0.0.1',
+      port: 3000,
+      provider: 'ollama',
+      model: 'qwen2.5-coder:14b',
+      maxRows: 200,
+    });
   });
 
   it('accepts `serve` as a leading subcommand', () => {
@@ -15,8 +21,23 @@ describe('parseArgs', () => {
 
   it('reads every option', () => {
     const o = parseArgs([
-      ...base, '--port', '8080', '--provider', 'openai', '--base-url', 'https://x/v1',
-      '--api-key', 'sk-1', '--max-rows', '50', '--host', '0.0.0.0', '--allow-host', 'db1', '--allow-host', 'db2',
+      ...base,
+      '--port',
+      '8080',
+      '--provider',
+      'openai',
+      '--base-url',
+      'https://x/v1',
+      '--api-key',
+      'sk-1',
+      '--max-rows',
+      '50',
+      '--host',
+      '0.0.0.0',
+      '--allow-host',
+      'db1',
+      '--allow-host',
+      'db2',
     ]);
     expect(o).toMatchObject({ port: 8080, provider: 'openai', baseURL: 'https://x/v1', apiKey: 'sk-1', maxRows: 50 });
     expect(o.allowedHosts).toEqual(['db1', 'db2']);
@@ -52,7 +73,16 @@ describe('parseArgs', () => {
   });
 
   it('documents every flag it accepts', () => {
-    for (const flag of ['--port', '--host', '--provider', '--model', '--base-url', '--api-key', '--allow-host', '--max-rows']) {
+    for (const flag of [
+      '--port',
+      '--host',
+      '--provider',
+      '--model',
+      '--base-url',
+      '--api-key',
+      '--allow-host',
+      '--max-rows',
+    ]) {
       expect(USAGE).toContain(flag);
     }
   });
@@ -63,7 +93,11 @@ describe('buildServer', () => {
     // resolveModel for ollama only constructs a client - no network call here.
     const server = await buildServer(parseArgs([...base, '--max-rows', '25']));
     const res = (await server.handle({
-      method: 'GET', path: '/connections', query: {}, headers: {}, json: async () => ({}),
+      method: 'GET',
+      path: '/connections',
+      query: {},
+      headers: { 'content-type': 'application/json' },
+      json: async () => ({}),
     })) as { status: number; body: { connections: unknown[] } };
 
     expect(res.status).toBe(200);
@@ -73,7 +107,10 @@ describe('buildServer', () => {
   it('passes the host allowlist through, so the server refuses databases outside it', async () => {
     const server = await buildServer(parseArgs([...base, '--host', '0.0.0.0', '--allow-host', 'db.internal']));
     const res = (await server.handle({
-      method: 'POST', path: '/connections', query: {}, headers: {},
+      method: 'POST',
+      path: '/connections',
+      query: {},
+      headers: { 'content-type': 'application/json' },
       json: async () => ({ name: 'x', engine: 'mysql', host: 'elsewhere.example', database: 'd' }),
     })) as { status: number; body: { error?: { userMessage: string } } };
 

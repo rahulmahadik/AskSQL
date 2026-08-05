@@ -26,6 +26,11 @@ const connector = new DuckDbConnector({
 // pass to createAskSql({ connectors: [connector], model })
 ```
 
+A `path` with no `files` is opened with `access_mode=READ_ONLY`; the mode is read back before the
+handle is used, and a missing file is not created. Registering `files` writes views, so that
+configuration (and `:memory:`, the default when `path` is omitted) is read-write and the AST guard
+is the only barrier. The browser build is always read-write.
+
 ## Browser (DuckDB-WASM)
 
 Register uploaded content directly: pass the `File`/`Blob` (or an `ArrayBuffer`/text) as `data`, not a

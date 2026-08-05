@@ -21,8 +21,7 @@ export function shapeValue(value: unknown, kind: ColumnKind): CellValue {
   switch (kind) {
     case 'bigint':
     case 'decimal':
-      // NUMBER is fetched as a string (see fetchAsString in index.ts); never
-      // coerce to a JS number and risk losing precision.
+      // NUMBER is fetched as a string; coercing to a JS number would lose precision.
       return typeof value === 'string' ? value : String(value);
     case 'json':
       return typeof value === 'string' ? value : JSON.stringify(value);
@@ -42,10 +41,8 @@ export function shapeValue(value: unknown, kind: ColumnKind): CellValue {
 }
 
 /**
- * Oracle data-type names -> ColumnKind. Covers the numeric-fidelity and
- * binary/temporal cases where the shared regex classifier would be ambiguous
- * (e.g. RAW, TIMESTAMP WITH TIME ZONE). Everything else falls through to
- * {@link classifyColumnKind}.
+ * Oracle data-type names -> ColumnKind, covering the cases the shared regex classifier
+ * reads ambiguously (RAW, TIMESTAMP WITH TIME ZONE); the rest fall to {@link classifyColumnKind}.
  */
 const ORACLE_TYPE_KIND: Record<string, ColumnKind> = {
   NUMBER: 'decimal',
@@ -80,8 +77,7 @@ export interface OracleField {
 
 function kindForOracleType(dbType: string): ColumnKind {
   const upper = dbType.toUpperCase();
-  // Exact match first, then a prefix match so "TIMESTAMP(6)" / "TIMESTAMP(6) WITH
-  // TIME ZONE" resolve, then the shared classifier.
+  // Exact match, then prefix so "TIMESTAMP(6) WITH TIME ZONE" resolves, then the shared classifier.
   if (ORACLE_TYPE_KIND[upper]) return ORACLE_TYPE_KIND[upper]!;
   for (const key of Object.keys(ORACLE_TYPE_KIND)) {
     if (upper.startsWith(key)) return ORACLE_TYPE_KIND[key]!;

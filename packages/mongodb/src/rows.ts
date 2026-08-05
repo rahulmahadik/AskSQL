@@ -1,10 +1,7 @@
 /**
- * Turn a stream of MongoDB documents into a tabular ResultSet.
- *
- * Columns are the union of every document's TOP-LEVEL keys in first-seen order
- * (nested fields are flattened during introspection, never here). Each column's
- * kind is taken from the first non-null value seen for that key; each cell is
- * shaped value-first per the BSON fidelity rules in `bson.ts`.
+ * Turn a stream of MongoDB documents into a tabular ResultSet. Columns are the union of every
+ * document's top-level keys in first-seen order; each column's kind comes from the first
+ * non-null value seen for that key, and each cell is shaped per the BSON rules in `bson.ts`.
  */
 
 import type { CellValue, ColumnKind, ResultColumn } from '@asksql/core';

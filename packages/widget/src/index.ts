@@ -1,16 +1,13 @@
 /**
  * @asksql/widget - vanilla-JS embed for pages without React.
  *
- * AskSQL.mount({ target: '#chat', serverUrl: '/asksql' })
- *
- * Renders the React bubble/chat into a SHADOW ROOT so the host page's CSS
- * cannot bleed into the widget and the widget's CSS cannot leak out
- *. Styles are injected into the shadow root, not document.head.
+ * AskSQL.mount({ target: '#chat', serverUrl: '/asksql' }) renders the React
+ * bubble/chat into a SHADOW ROOT, with its styles injected there too.
  */
 
 import { createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { AskSqlBubble, AskSqlChat, HttpTransport, ASKSQL_CSS, type AskSqlChatProps } from '@asksql/react';
+import { AskSqlBubble, AskSqlChat, HttpTransport, ensureStyles, type AskSqlChatProps } from '@asksql/react';
 
 export interface MountOptions {
   /** CSS selector or element to mount into. Defaults to document.body (bubble). */
@@ -44,24 +41,15 @@ export function mount(options: MountOptions): WidgetHandle {
   if (typeof document === 'undefined') {
     throw new Error('AskSQL.mount must run in a browser.');
   }
-  // Attach the shadow to an element WE create, never to the caller's. Attaching a
-  // shadow root to an existing element stops its light-DOM children rendering -
-  // and since `target` defaults to document.body, the documented zero-config call
-  // blanked the entire host page. Own the mount point instead.
+  // Attach the shadow to an element we create: a shadow root hides its host's light-DOM children.
   const host = resolveTarget(options.target);
   const mountPoint = document.createElement('div');
   mountPoint.setAttribute('data-asksql-widget', '');
   host.appendChild(mountPoint);
   const shadow = mountPoint.attachShadow({ mode: 'closed' });
 
-  // Inject styles INTO the shadow root only, so nothing leaks either
-  // direction. We do NOT call ensureStyles(document) here - that would append
-  // a <style> to the host page's <head>, defeating the shadow isolation this
-  // whole module exists to provide.
-  const style = document.createElement('style');
-  if (options.nonce) style.setAttribute('nonce', options.nonce);
-  style.textContent = ASKSQL_CSS;
-  shadow.appendChild(style);
+  // Styles go into the shadow root, never document.head, keeping the isolation intact.
+  ensureStyles(shadow, options.nonce);
 
   const container = document.createElement('div');
   shadow.appendChild(container);
@@ -74,6 +62,8 @@ export function mount(options: MountOptions): WidgetHandle {
     requireApproval: options.requireApproval,
     suggestions: options.suggestions,
     nonce: options.nonce,
+    // The components style themselves too; point them at the shadow root, not the host page.
+    styleRoot: shadow,
   };
 
   const root: Root = createRoot(container);
@@ -94,7 +84,6 @@ export function mount(options: MountOptions): WidgetHandle {
       root.unmount();
       container.remove();
       mountPoint.remove();
-      style.remove();
     },
   };
 }

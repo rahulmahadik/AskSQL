@@ -50,16 +50,12 @@ page's origin (CORS).
 
 | Option | Type | Default | Notes |
 | --- | --- | --- | --- |
-| `serverUrl` | `string` | — | Required. The `@asksql/server` base URL. |
+| `serverUrl` | `string` | (none) | Required. The `@asksql/server` base URL. |
 | `target` | `string \| HTMLElement` | floating bubble | CSS selector or element to mount into. |
-| `headers` | `Record<string,string>` | — | Extra request headers (e.g. an auth token). |
+| `headers` | `Record<string,string>` | (none) | Extra request headers (e.g. an auth token). |
 | `connectionId` | `string` | server default | Pin the widget to one connection. |
 | `theme` | `'light' \| 'dark' \| 'auto'` | `'auto'` | Colour scheme. |
 | `requireApproval` | `boolean` | `false` | Gate every query behind a Run button. |
-
-Full documentation: [https://github.com/rahulmahadik/AskSQL](https://github.com/rahulmahadik/AskSQL)
-
-API reference: [rahulmahadik.github.io/AskSQL](https://rahulmahadik.github.io/AskSQL/)
 
 ## More options
 
@@ -67,6 +63,10 @@ API reference: [rahulmahadik.github.io/AskSQL](https://rahulmahadik.github.io/As
 |---|---|---|---|
 | `mode` | `'bubble' \| 'chat'` | `'bubble'` | Floating chat-head, or a full-page chat filling `target`. |
 | `position` | corner | `'bottom-right'` | Bubble corner, with `offset` and `zIndex` to fit your UI. |
-| `title` | `string` | - | Bubble header title. |
-| `suggestions` | `string[]` | - | Starter questions shown as clickable chips. |
-| `nonce` | `string` | - | CSP nonce for the injected stylesheet (strict-CSP pages). |
+| `title` | `string` | (none) | Bubble header title. |
+| `suggestions` | `string[]` | (none) | Starter questions shown as clickable chips. |
+| `nonce` | `string` | (none) | CSP nonce for the injected stylesheet (strict-CSP pages). |
+
+Full documentation: [https://github.com/rahulmahadik/AskSQL](https://github.com/rahulmahadik/AskSQL)
+
+API reference: [rahulmahadik.github.io/AskSQL](https://rahulmahadik.github.io/AskSQL/)

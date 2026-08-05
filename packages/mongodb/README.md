@@ -44,9 +44,9 @@ new MongodbConnector({ id, name, database: 'app',
 
 **Atlas gotchas** (the two most common connection failures):
 
-- **IP allow-list** — add your current IP under Atlas → **Network Access** (or `0.0.0.0/0` to test).
+- **IP allow-list** - add your current IP under Atlas → **Network Access** (or `0.0.0.0/0` to test).
   A blocked IP shows up as a TLS/connection error, not an auth error.
-- **The `<password>` placeholder** — Atlas copies the URI with a literal `<password>`; replace it
+- **The `<password>` placeholder** - Atlas copies the URI with a literal `<password>`; replace it
   with the real password (no angle brackets), and URL-encode any `@ : / ?` in it.
 
 Because MongoDB has no fixed schema, `introspect()` samples up to 200 documents
@@ -54,6 +54,11 @@ per collection and infers each field's type, how often it is present, and (opt-i
 via `sampleColumnValues`) a small set of example values. Queries are single
 read-only aggregation pipelines; there is no read-only session, so the core
 pipeline guard is the safety floor.
+
+Those example values are gated twice. `sampleColumnValues` decides whether the connector
+collects them at all, and the engine's `allowDataInPrompt` (default off) decides whether they
+survive the catalog exit and reach a prompt. With either off, the model sees field names, types
+and presence percentages only.
 
 Pass the connector to `createMongoAskSql` from `@asksql/core/mongo`.
 

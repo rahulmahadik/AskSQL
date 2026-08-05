@@ -1,4 +1,6 @@
 /** Client-supplied connection details opened server-side (a browser extension cannot open a DB socket). OFF unless the operator opts in - dialling arbitrary hosts is an SSRF primitive - and link-local (cloud-metadata) addresses are refused even when on. */
+import { realpathSync } from 'node:fs';
+import { basename, dirname, join, resolve as resolvePath, sep } from 'node:path';
 import { AskSqlError, type Connector } from '@asksql/core';
 import type { MongoConnector } from '@asksql/core/mongo';
 
@@ -24,6 +26,13 @@ export interface DynamicConnectionOptions {
   readonly enabled: boolean;
   /** When set, only these hostnames may be dialled. */
   readonly allowedHosts?: readonly string[];
+  /** Directories a client-supplied SQLite/DuckDB path may live under. Unset means anywhere. */
+  readonly allowedFileRoots?: readonly string[];
+  /**
+   * Whether a client may name a server-side database file at all. Off unless set: the CLI turns it
+   * on for a loopback bind, where the caller is the machine's own user.
+   */
+  readonly allowFileEngines?: boolean;
 }
 
 /** Per-engine defaults, so a client form can prefill the same values a DB tool would. */
@@ -44,15 +53,47 @@ function bad(userMessage: string, detail: string): AskSqlError {
   return new AskSqlError('INVALID_INPUT', { detail, userMessage });
 }
 
-/** 169.254.0.0/16 reaches cloud instance metadata; refuse it however it is spelled. */
+/**
+ * IPv4 as the resolver reads it: dotted-quad, but also a bare decimal (2852039166), hex
+ * (0xA9FEA9FE), octal (0251.0376.0251.0376) and short forms (169.16689918). Returns the four
+ * octets, or null when the text is not an IPv4 literal at all.
+ */
+function ipv4Octets(text: string): [number, number, number, number] | null {
+  const parts = text.split('.');
+  if (parts.length > 4 || parts.length === 0) return null;
+  const values: number[] = [];
+  for (const part of parts) {
+    if (part === '') return null;
+    let value: number;
+    if (/^0[xX][0-9a-fA-F]+$/.test(part)) value = Number.parseInt(part.slice(2), 16);
+    else if (/^0[0-7]+$/.test(part)) value = Number.parseInt(part.slice(1), 8);
+    else if (/^[0-9]+$/.test(part)) value = Number.parseInt(part, 10);
+    else return null;
+    if (!Number.isInteger(value) || value < 0) return null;
+    values.push(value);
+  }
+  // The last part absorbs the remaining octets: 169.16689918 is 169.254.169.254.
+  const last = values.pop()!;
+  if (last >= 2 ** (8 * (4 - values.length))) return null;
+  if (values.some((v) => v > 255)) return null;
+  const octets = [...values];
+  for (let i = 4 - values.length - 1; i >= 0; i--) octets.push((last >>> (8 * i)) & 0xff);
+  return octets as [number, number, number, number];
+}
+
+/** Addresses that reach cloud instance metadata or the host itself; refused however they are spelled. */
 function isLinkLocal(host: string): boolean {
-  const lower = host.toLowerCase();
+  let lower = host.trim().toLowerCase();
   if (lower === 'metadata.google.internal') return true;
-  const parts = lower.split('.');
-  if (parts.length !== 4) return false;
-  const nums = parts.map((p) => Number(p));
-  if (nums.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return false;
-  return nums[0] === 169 && nums[1] === 254;
+  // An IPv4-mapped IPv6 literal carries the same address.
+  lower = lower.replace(/^\[|\]$/g, '');
+  const mapped = /^::ffff:(.+)$/.exec(lower);
+  if (mapped) lower = mapped[1]!;
+  if (lower === '::1' || lower === '0:0:0:0:0:0:0:1') return false; // loopback is not metadata
+  if (/^fe80:/i.test(lower)) return true; // IPv6 link-local
+  const octets = ipv4Octets(lower);
+  if (!octets) return false;
+  return octets[0] === 169 && octets[1] === 254;
 }
 
 /** Host names inside a mongodb:// or mongodb+srv:// URI (may list several, comma-separated). */
@@ -65,6 +106,41 @@ export function mongoUriHosts(uri: string): string[] {
     .filter((h) => h.length > 0);
 }
 
+/** Real path of `target`, or of its nearest existing ancestor with the rest appended. */
+function realpathOr(target: string): string {
+  try {
+    return realpathSync(target);
+  } catch {
+    const parent = dirname(target);
+    if (parent === target) return target;
+    return join(realpathOr(parent), basename(target));
+  }
+}
+
+/**
+ * A client-supplied file path must resolve inside a configured root. Symlinks are resolved first,
+ * so a link planted inside the root cannot point out of it.
+ */
+function assertFileAllowed(file: string, options: DynamicConnectionOptions): void {
+  const roots = options.allowedFileRoots;
+  // Opening a client-named file is opt-in: unset means no, and so does an empty root list.
+  if (options.allowFileEngines !== true && (!roots || roots.length === 0)) {
+    throw bad(
+      'This server is not configured to open database files.',
+      'file engine requires allowFileEngines or allowedFileRoots',
+    );
+  }
+  if (!roots || roots.length === 0) return;
+  // A file that does not exist yet is resolved through its parent, so a symlinked root
+  // (/tmp -> /private/tmp on macOS) still compares equal.
+  const resolved = realpathOr(resolvePath(file));
+  const inside = roots.some((root) => {
+    const base = realpathOr(resolvePath(root));
+    return resolved === base || resolved.startsWith(base.endsWith(sep) ? base : base + sep);
+  });
+  if (!inside) throw bad('That database file is outside the allowed directory.', 'file path outside allowedFileRoots');
+}
+
 export function assertSpecAllowed(spec: ConnectionSpec, options: DynamicConnectionOptions): void {
   if (!ENGINES.includes(spec.engine)) {
     throw bad(`Unsupported engine.`, `unknown engine: ${String(spec.engine)}`);
@@ -73,7 +149,9 @@ export function assertSpecAllowed(spec: ConnectionSpec, options: DynamicConnecti
 
   const defaults = ENGINE_DEFAULTS[spec.engine];
   if (defaults.usesFilePath) {
-    if (!spec.database?.trim()) throw bad('Enter the database file path.', 'missing file path');
+    const file = spec.database?.trim();
+    if (!file) throw bad('Enter the database file path.', 'missing file path');
+    assertFileAllowed(file, options);
     return;
   }
 
@@ -87,8 +165,7 @@ export function assertSpecAllowed(spec: ConnectionSpec, options: DynamicConnecti
       throw bad('Put the user and password in their own fields, not in the connection string.', 'embedded credentials');
     }
     if (!spec.database?.trim()) throw bad('Enter the database name.', 'missing database');
-    // The URI names hosts too - they get the same SSRF floor as spec.host, or
-    // mongodb://169.254.169.254/ would sail past both checks below.
+    // Hosts named inside the URI get the same floor as spec.host.
     for (const uriHost of mongoUriHosts(uri)) {
       if (isLinkLocal(uriHost)) throw bad('That host address is not allowed.', 'link-local mongo host');
       if (options.allowedHosts && !options.allowedHosts.includes(uriHost)) {
@@ -129,7 +206,10 @@ export async function createConnector(spec: ConnectionSpec, id: string): Promise
   const common = { id, name: spec.name.trim() };
   switch (spec.engine) {
     case 'mongodb':
-      throw new AskSqlError('CONFIG_ERROR', { detail: 'mongodb uses createMongoConnector', userMessage: 'Internal routing error.' });
+      throw new AskSqlError('CONFIG_ERROR', {
+        detail: 'mongodb uses createMongoConnector',
+        userMessage: 'Internal routing error.',
+      });
     case 'postgres': {
       const { PostgresConnector } = await import('@asksql/postgres');
       return new PostgresConnector({

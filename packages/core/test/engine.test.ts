@@ -143,7 +143,7 @@ describe('repair loop', () => {
       connectors: [conn],
       model: model(['```sql\nDELETE FROM users\n```', '```sql\nSELECT * FROM users\n```']),
     });
-    const res = await engine.ask('remove users then show them');
+    const res = await engine.ask('show me the users');
     expect(res.sql).toMatch(/SELECT \* FROM users/i);
     expect(res.repairs).toBe(1);
   });
@@ -154,7 +154,7 @@ describe('repair loop', () => {
       connectors: [conn],
       model: model(['```sql\nDROP TABLE users\n```']),
     });
-    await expect(engine.ask('drop users')).rejects.toMatchObject({ code: 'GUARD_BLOCKED' });
+    await expect(engine.ask('list the users')).rejects.toMatchObject({ code: 'GUARD_BLOCKED' });
   });
 });
 

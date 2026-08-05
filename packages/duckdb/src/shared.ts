@@ -1,10 +1,8 @@
 /**
- * Driver-agnostic DuckDB logic shared by the Node connector
- * (`@duckdb/node-api`) and the browser connector (`@duckdb/duckdb-wasm`):
- * file-format resolution, table-name sanitization, introspection SQL +
- * catalog assembly, row-value shaping, and the query timeout race. The two
- * connectors differ only in how they instantiate, register files, run SQL,
- * and read results.
+ * Driver-agnostic DuckDB logic shared by the Node (`@duckdb/node-api`) and
+ * browser (`@duckdb/duckdb-wasm`) connectors: file-format resolution,
+ * table-name sanitization, introspection SQL + catalog assembly, row-value
+ * shaping, and the query timeout race.
  */
 
 import {
@@ -27,10 +25,8 @@ export interface FileSource {
   /** CSV text encoding (e.g. 'utf-8', 'utf-16', 'latin-1'). Default: sniffed. */
   readonly encoding?: string;
   /**
-   * Excel worksheet to read (by name, e.g. 'Q1 Sales'). Only used for `xlsx`.
-   * Default: the workbook's first sheet. To load several sheets from one
-   * workbook, register the same file once per sheet with distinct `table`
-   * names - each becomes its own table, so you can join across sheets.
+   * Excel worksheet to read (by name, e.g. 'Q1 Sales'). Only used for `xlsx`; defaults to the first sheet.
+   * Register the same workbook once per sheet with distinct `table` names to query several sheets.
    */
   readonly sheet?: string;
   /** Allow a URL path (http/s3/...). Off by default - a URL means a network read. */
@@ -121,10 +117,8 @@ export function sqlStr(s: string): string {
 }
 
 /**
- * A registered file path must be a plain local path. A URL scheme (http://, s3://,
- * ...) makes DuckDB fetch over the network (SSRF if the path is untrusted), and a
- * glob metacharacter fans one registration out to many files. Both are rejected
- * unless the caller sets `allowRemote` / `allowGlob` on the source.
+ * Require a plain local path: a URL scheme makes DuckDB fetch over the network and a glob
+ * metacharacter fans one registration out to many files. Both need `allowRemote` / `allowGlob`.
  */
 export function assertSafeFilePath(file: FileSource): void {
   if (!file.allowRemote && /^[a-z][a-z0-9+.-]*:\/\//i.test(file.path)) {
@@ -153,14 +147,56 @@ export function resolveFormat(file: FileSource): Exclude<FileFormat, 'auto'> {
 }
 
 /**
- * A .sql upload is EXECUTED to build tables, so - unlike a generated query - it
- * is not read-only-guarded. Reject the two things that matter before running it:
- * vendor dumps DuckDB cannot parse (a helpful message beats a cryptic parser
- * error), and statements that would reach the filesystem, network, or load
- * extensions. What survives is structure + data: CREATE TABLE / INSERT and the like.
+ * Reject, before a .sql upload is executed, vendor dumps DuckDB cannot parse and statements
+ * that reach the filesystem, network, or extensions. What survives is CREATE TABLE / INSERT.
  */
+/**
+ * Blanks the bodies of string and quoted-identifier literals - and, unless `keepComments`, of
+ * comments too - keeping the delimiters, newlines and offsets. A comment then cannot split a
+ * call from its name, and a row value cannot look like a statement.
+ */
+function blankLiterals(sql: string, keepComments = false): string {
+  let out = '';
+  let i = 0;
+  const blankWhile = (stop: () => boolean): void => {
+    while (i < sql.length && !stop()) {
+      out += sql[i] === '\n' ? '\n' : ' ';
+      i++;
+    }
+  };
+  const copyWhile = (stop: () => boolean): void => {
+    while (i < sql.length && !stop()) out += sql[i++];
+  };
+  while (i < sql.length) {
+    if (sql[i] === '-' && sql[i + 1] === '-') {
+      (keepComments ? copyWhile : blankWhile)(() => sql[i] === '\n');
+      continue;
+    }
+    if (sql[i] === '/' && sql[i + 1] === '*') {
+      (keepComments ? copyWhile : blankWhile)(() => sql[i] === '*' && sql[i + 1] === '/');
+      out += keepComments ? sql.slice(i, i + 2) : '  ';
+      i += 2;
+      continue;
+    }
+    if (sql[i] === "'" || sql[i] === '"') {
+      const quote = sql[i]!;
+      out += sql[i++];
+      blankWhile(() => sql[i] === quote);
+      if (i < sql.length) out += sql[i++];
+      continue;
+    }
+    out += sql[i++];
+  }
+  return out;
+}
+
 export function validateSqlDump(content: string): void {
-  if (/`/.test(content) || /\bENGINE\s*=/i.test(content) || /\/\*!\d/.test(content)) {
+  // Checked outside literals and comments: `read_csv/**/('/etc/passwd')` is the same call as
+  // `read_csv(...)`, while the row value 'EXPORT' is data, not a statement.
+  const scanned = blankLiterals(content);
+  // mysqldump's own `/*!40101 ... */` is executable syntax, so this one keeps comments.
+  const code = blankLiterals(content, true);
+  if (/`/.test(scanned) || /\bENGINE\s*=/i.test(scanned) || /\/\*!\d/.test(code)) {
     throw new AskSqlError('FILE_PARSE', {
       detail: 'mysqldump syntax detected in .sql upload',
       userMessage:
@@ -168,9 +204,9 @@ export function validateSqlDump(content: string): void {
     });
   }
   if (
-    /\bCOPY\b[\s\S]*?\bFROM\s+stdin/i.test(content) ||
-    /^\s*\\[.]/m.test(content) ||
-    /^\s*\\connect\b/im.test(content)
+    /\bCOPY\b[\s\S]*?\bFROM\s+stdin/i.test(scanned) ||
+    /^\s*\\[.]/m.test(scanned) ||
+    /^\s*\\connect\b/im.test(scanned)
   ) {
     throw new AskSqlError('FILE_PARSE', {
       detail: 'pg_dump syntax detected in .sql upload',
@@ -178,14 +214,12 @@ export function validateSqlDump(content: string): void {
         'This looks like a PostgreSQL (pg_dump) file, which cannot be loaded directly. Re-export it as CSV, or with "pg_dump --inserts" so it uses plain INSERT statements.',
     });
   }
-  // The .sql upload runs verbatim (no AST guard), so this denylist is the only control. Match the
-  // whole reader/scan FAMILY by prefix - a fixed list lets read_csv_auto/read_blob/parquet_scan
-  // through - plus a bare quoted FROM path (DuckDB file shorthand).
+  // Match the whole reader/scan family by prefix, plus a bare quoted FROM path (DuckDB's file shorthand).
   const danger =
-    /\b(ATTACH|INSTALL|LOAD|COPY|IMPORT|EXPORT)\b/i.exec(content) ??
-    /\b((?:read_|scan_)\w*)\s*\(/i.exec(content) ??
-    /\b(parquet_scan|sniff_csv|glob|delta_scan|iceberg_scan|st_read\w*)\s*\(/i.exec(content) ??
-    /\b(FROM)\s+'[^']*'/i.exec(content);
+    /\b(ATTACH|INSTALL|LOAD|COPY|IMPORT|EXPORT)\b/i.exec(scanned) ??
+    /\b((?:read_|scan_)\w*)\s*\(/i.exec(scanned) ??
+    /\b(parquet_scan|sniff_csv|glob|delta_scan|iceberg_scan|st_read\w*)\s*\(/i.exec(scanned) ??
+    /\b(FROM)\s+'[^']*'/i.exec(scanned);
   if (danger) {
     throw new AskSqlError('FILE_PARSE', {
       detail: `disallowed statement in .sql upload: ${danger[0]}`,
@@ -304,21 +338,21 @@ export function shapeDuckValue(v: unknown, kind: ResultColumn['kind']): CellValu
 }
 
 /**
- * Classify an Apache Arrow type name (as DuckDB-WASM returns them -
- * "Int64", "Float64", "Decimal<...>", "Utf8", ...) into a ColumnKind. Falls
- * back to the SQL-name classifier for the Node driver's type strings.
+ * Classify an Apache Arrow type name as DuckDB-WASM returns them ("Int64", "Decimal<...>", "Utf8")
+ * into a ColumnKind, falling back to SQL type names for the Node driver.
  */
 export function classifyDuckType(typeStr: string | undefined): ResultColumn['kind'] {
   if (!typeStr) return 'unknown';
   const t = typeStr.toLowerCase();
-  // Most-specific first: "bigint"/"Int64" must beat the generic int check,
-  // and "decimal" must beat everything numeric (fidelity).
+  // Most-specific first: "bigint"/"Int64" beats the generic int check, and "decimal" beats everything numeric.
   if (/bool/.test(t)) return 'boolean';
   if (/decimal|numeric/.test(t)) return 'decimal';
   if (/bigint|hugeint|int64|int128/.test(t)) return 'bigint';
   if (/timestamp|datetime/.test(t)) return 'timestamp';
   if (/date/.test(t)) return 'date';
-  if (/float|double|real|serial|\bint\b|integer|int8|int4|int2|int16|int32|tinyint|smallint|mediumint|uint|number/.test(t))
+  if (
+    /float|double|real|serial|\bint\b|integer|int8|int4|int2|int16|int32|tinyint|smallint|mediumint|uint|number/.test(t)
+  )
     return 'number';
   if (/utf8|string|varchar|char|text|uuid|enum/.test(t)) return 'text';
   if (/binary|blob|bytea|bit/.test(t)) return 'binary';
@@ -338,11 +372,13 @@ export function buildResultColumns(
   }));
 }
 
-/**
- * Race a query promise against a timeout + abort signal. `onCancel` (the driver interrupt) fires on
- * timeout or abort so a runaway query stops instead of grinding on the shared connection.
- */
-export function withQueryTimeout<T>(p: Promise<T>, ms: number, signal?: AbortSignal, onCancel?: () => void): Promise<T> {
+/** Race a query promise against a timeout + abort signal; `onCancel` (the driver interrupt) fires on either. */
+export function withQueryTimeout<T>(
+  p: Promise<T>,
+  ms: number,
+  signal?: AbortSignal,
+  onCancel?: () => void,
+): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => {
       onCancel?.();

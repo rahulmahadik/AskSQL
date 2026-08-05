@@ -1,7 +1,7 @@
 # @asksql/sqlite
 
-The sqlite connector for [AskSQL](https://github.com/rahulmahadik/AskSQL): introspection (tables, views, keys,
-enums, indexes) and guarded read-only query execution. On Node 22.5 or newer no driver
+The SQLite connector for [AskSQL](https://github.com/rahulmahadik/AskSQL): introspection (tables, views, keys,
+indexes) and guarded read-only query execution. On Node 22.5 or newer no driver
 install is needed - the built-in `node:sqlite` is used automatically. Install
 `better-sqlite3` alongside it if you prefer that driver, or need an older Node.
 

@@ -34,7 +34,9 @@ beforeAll(async () => {
       if (r.ok) {
         model = await resolveModel({
           provider: 'ollama',
-          model: 'qwen2.5-coder:14b',
+          // Overridable like the other live suites: a hardcoded tag fails the whole file on a
+          // machine that has a perfectly good local model under a different name.
+          model: process.env['ASKSQL_OLLAMA_MODEL'] ?? 'qwen2.5-coder:7b',
           baseURL: 'http://localhost:11434/v1',
         });
         label = 'ollama';
@@ -146,3 +148,5 @@ describe('glossary steers a real model', () => {
     await ans.run();
   });
 });
+
+/** Wrong-but-valid answers are measured over repeated trials by `tools/answer-quality-audit.mjs`. */
