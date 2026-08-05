@@ -22,6 +22,7 @@ pnpm test          # the full suite (see gating below)
 pnpm format:check  # prettier, as CI runs it
 pnpm coverage      # what CI runs instead of `test`; the coverage floor applies only with --coverage
 pnpm test:packaged # installs the packed tarballs outside the workspace and exercises every export
+pnpm verify        # all of the above in the order CI runs them; use this before pushing
 ```
 
 `test:packaged` is the one gate the in-repo suite cannot stand in for: pnpm's workspace links

@@ -11,10 +11,10 @@ import {
 const BASE = 'http://localhost:4000';
 const form = (over: Partial<DatabaseForm> = {}): DatabaseForm => ({ ...defaultsFor('postgres'), ...over });
 
+// Typed as fetch, so each recorded call carries request options the assertions can read.
 const reply = (status: number, body: unknown) =>
-  vi.fn(
-    async (_input: RequestInfo | URL, _init?: RequestInit) =>
-      ({ status, ok: status >= 200 && status < 300, json: async () => body }) as unknown as Response,
+  vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(
+    async () => ({ status, ok: status >= 200 && status < 300, json: async () => body }) as unknown as Response,
   );
 
 /** The request options of a recorded call, so a test can assert on what was actually sent. */
