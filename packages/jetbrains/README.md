@@ -197,11 +197,17 @@ Everything below is for working on the plugin itself. See the repo's
 The Kotlin SQL guard and prompt builders are ports of `@asksql/core` (the npm engine
 used by the VS Code extension and `@asksql/server`), re-architected around JSqlParser
 and JDBC instead of node-sql-parser and Node's DB drivers. To keep the Kotlin guard
-from silently drifting from the published core's security behavior, `tools/parity/`
-runs a corpus of SQL statements through the **published** `@asksql/core` package and
-records the verdicts as committed JSON vectors (`vectors/guard.json`,
-`vectors/prompts.json`). `GuardVectorTest` and `PromptParityTest` replay those vectors
-against this Kotlin port in every `./gradlew test` run.
+from silently drifting from core's security behavior, `tools/parity/` runs a corpus of
+SQL statements and questions through `@asksql/core` and records the verdicts as
+committed JSON vectors (`vectors/guard.json`, `vectors/prompts.json`,
+`vectors/classifiers.json`). `GuardVectorTest`, `PromptParityTest` and the classifier
+tests replay those vectors against this Kotlin port in every `./gradlew test` run.
+
+Which core the vectors come from is set by the `@asksql/core` pin in
+`tools/parity/package.json`. It is `file:../../../core` between releases, so a change to
+core's guard, prompts or routing must be ported to Kotlin and the vectors regenerated in
+the same commit; CI fails on any uncommitted difference. The pin returns to a published
+version after each release.
 
 ```bash
 ./gradlew parityVectors   # regenerates tools/parity/vectors/*.json (needs Node + npm)

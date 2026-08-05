@@ -3,7 +3,7 @@
     "tell me a joke about penguins": false,
     "what is the weather in Mumbai today?": false,
     "who won the football world cup in 2022?": false,
-    "write me a python function that reverses a string": true,
+    "write me a python function that reverses a string": false,
     "what is this database for?": true,
     "how do I write a SQL JOIN here?": true,
     "how would I do this in MongoDB aggregation instead?": true,
