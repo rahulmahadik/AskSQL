@@ -9,6 +9,7 @@
   },
   "scripts": {
     "typecheck": "tsc -b",
+    "typecheck:all": "tsc -b && pnpm --filter asksql-vscode --filter asksql-browser-extension run typecheck",
     "format": "prettier --write \"packages/*/src/**/*.{ts,tsx}\" \"packages/*/media/**/*.{js,css}\" \"packages/*/*.mjs\" \"tests/**/*.ts\" \"*.ts\"",
     "format:check": "prettier --check \"packages/*/src/**/*.{ts,tsx}\" \"packages/*/media/**/*.{js,css}\" \"packages/*/*.mjs\" \"tests/**/*.ts\" \"*.ts\"",
     "test": "vitest run",

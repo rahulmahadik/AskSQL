@@ -12,7 +12,21 @@ const BASE = 'http://localhost:4000';
 const form = (over: Partial<DatabaseForm> = {}): DatabaseForm => ({ ...defaultsFor('postgres'), ...over });
 
 const reply = (status: number, body: unknown) =>
-  vi.fn(async () => ({ status, ok: status >= 200 && status < 300, json: async () => body }) as unknown as Response);
+  vi.fn(
+    async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      ({ status, ok: status >= 200 && status < 300, json: async () => body }) as unknown as Response,
+  );
+
+/** The request options of a recorded call, so a test can assert on what was actually sent. */
+const sent = (fetcher: ReturnType<typeof reply>, call = 0): RequestInit => {
+  const init = fetcher.mock.calls[call]?.[1];
+  if (!init) throw new Error(`fetch call ${call} was made without request options`);
+  return init;
+};
+const sentHeaders = (fetcher: ReturnType<typeof reply>, call = 0): Record<string, string> =>
+  (sent(fetcher, call).headers ?? {}) as Record<string, string>;
+const sentBody = (fetcher: ReturnType<typeof reply>, call = 0): Record<string, unknown> =>
+  JSON.parse(String(sent(fetcher, call).body)) as Record<string, unknown>;
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -42,21 +56,19 @@ describe('creating the connection', () => {
     const fetcher = reply(200, { connection: { id: 'c1', engine: 'postgres' } });
     vi.stubGlobal('fetch', fetcher);
     await createRemoteDatabaseConnection(BASE, 'Bearer t', 'Shop', form());
-    const withAuth = (fetcher.mock.calls[0]?.[1] as { headers: Record<string, string> }).headers;
-    expect(withAuth['Authorization']).toBe('Bearer t');
+    expect(sentHeaders(fetcher)['Authorization']).toBe('Bearer t');
 
     const plain = reply(200, { connection: { id: 'c2', engine: 'postgres' } });
     vi.stubGlobal('fetch', plain);
     await createRemoteDatabaseConnection(BASE, undefined, 'Shop', form());
-    const noAuth = (plain.mock.calls[0]?.[1] as { headers: Record<string, string> }).headers;
-    expect(noAuth['Authorization']).toBeUndefined();
+    expect(sentHeaders(plain)['Authorization']).toBeUndefined();
   });
 
   it('addresses MongoDB by connection string rather than host and port', async () => {
     const fetcher = reply(200, { connection: { id: 'm1', engine: 'mongodb' } });
     vi.stubGlobal('fetch', fetcher);
     await createRemoteDatabaseConnection(BASE, undefined, 'M', { ...defaultsFor('mongodb'), database: 'shop' });
-    const body = JSON.parse((fetcher.mock.calls[0]?.[1] as { body: string }).body) as Record<string, unknown>;
+    const body = sentBody(fetcher);
     expect(body['uri']).toBe('mongodb://localhost:27017');
     expect(body['host']).toBeUndefined();
   });

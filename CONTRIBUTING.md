@@ -15,7 +15,8 @@ This guide gets you from clone to green tests.
 
 ```bash
 pnpm install
-pnpm typecheck     # tsc -b across every package
+pnpm typecheck     # tsc -b across every package in the build graph
+pnpm typecheck:all # adds the two extension packages, which are outside it and checked only by their own CI
 pnpm build         # ESM + .d.ts for every package
 pnpm test          # the full suite (see gating below)
 pnpm format:check  # prettier, as CI runs it
