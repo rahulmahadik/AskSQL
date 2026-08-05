@@ -6,6 +6,25 @@ All notable changes to the AskSQL VS Code extension are documented here. The for
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-08-06
+
+### Added
+- **Azure OpenAI** is selectable as a provider. Set `asksql.resourceName` for a classic
+  resource, or leave it empty and set `asksql.baseURL` for an AI Foundry endpoint. With
+  Azure, `asksql.model` is your deployment name rather than the base model name.
+- **A business glossary** (`asksql.glossary`). Give your own terms a meaning once
+  ("active customer", "GMV", which table counts as revenue) and every answer uses them.
+- **Custom instructions** (`asksql.customInstructions`), appended to every prompt. The
+  built-in read-only rules still apply; your text is additive, never a replacement.
+- **A schema token budget** (`asksql.maxSchemaTokens`), for large databases where the
+  whole schema will not fit in the prompt.
+
+### Changed
+- A follow-up can refer to a query an answer suggested in prose. "Run that query" used to
+  be treated as a new question, because only turns that produced SQL were remembered.
+- When an answer proposes a query rather than running one, the query is shown so it can be
+  copied or opened in an editor. It is never executed: a proposal is often a write.
+
 ## [0.5.0] - 2026-08-01
 
 ### Added

@@ -5,6 +5,8 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-08-06
+
 ### Added
 - **A business glossary** in Settings. Give your own terms a meaning once ("active
   customer", "GMV", which table counts as revenue) and every answer uses them.
