@@ -13,6 +13,9 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - When an answer proposes a query rather than running one, the query now appears as a
   SQL block with a copy button, formatted as JSON for MongoDB pipelines. There is no
   run button: a proposal is often a write, and the plugin executes none.
+- **A chart above the result** when the shape suits one. A label column and a numeric
+  column draw a bar chart; a date label draws a line. Anything else stays a table, and
+  the table always holds every column.
 
 ### Changed
 - Installs on **2025.1 and newer**, down from 2025.2.

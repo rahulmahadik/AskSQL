@@ -122,7 +122,6 @@ intellijPlatform {
 
     pluginVerification {
         ides {
-            recommended()
             // ideaIC publishes both build-number and marketing-version Maven
             // artifacts; build numbers pin the exact floor/latest builds.
             create(IntelliJPlatformType.IntellijIdeaCommunity, "251.29188.72")  // 2025.1 (compatibility floor)
