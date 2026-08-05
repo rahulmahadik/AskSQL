@@ -20,7 +20,8 @@ import { join } from 'node:path';
 
 const MODEL_ID = process.argv[2] ?? 'qwen2.5-coder:7b';
 const OLLAMA = process.env.ASKSQL_OLLAMA_URL ?? 'http://localhost:11434/v1';
-const load = (pkg, name) => import(`@asksql/${pkg}`).catch(() => import(`../packages/${pkg}/dist/index.js`)).then((m) => m[name]);
+const load = (pkg, name) =>
+  import(`@asksql/${pkg}`).catch(() => import(`../packages/${pkg}/dist/index.js`)).then((m) => m[name]);
 const OracleConnector = await load('oracle', 'OracleConnector');
 const MongodbConnector = await load('mongodb', 'MongodbConnector');
 
@@ -45,7 +46,12 @@ const WRITE_REQUESTS = [
 const ENGINES = [
   {
     key: 'postgres',
-    make: () => new PostgresConnector({ id: 'c', name: 'c', connectionString: 'postgres://postgres:root@localhost:5432/asksql_test' }),
+    make: () =>
+      new PostgresConnector({
+        id: 'c',
+        name: 'c',
+        connectionString: 'postgres://postgres:root@localhost:5432/asksql_test',
+      }),
     // Counted with `pg` itself - a different library from the one under test.
     count: async () => {
       const { default: pg } = await import('../packages/postgres/node_modules/pg/lib/index.js');
@@ -68,7 +74,16 @@ const ENGINES = [
   },
   {
     key: 'mysql',
-    make: () => new MysqlConnector({ id: 'c', name: 'c', host: '127.0.0.1', port: 3306, user: 'root', password: '', database: 'asksql_test' }),
+    make: () =>
+      new MysqlConnector({
+        id: 'c',
+        name: 'c',
+        host: '127.0.0.1',
+        port: 3306,
+        user: 'root',
+        password: '',
+        database: 'asksql_test',
+      }),
     count: async () => {
       const { default: mysql } = await import('../packages/mysql/node_modules/mysql2/promise.js');
       const c = await mysql.createConnection({ host: '127.0.0.1', port: 3306, user: 'root', database: 'asksql_test' });
@@ -130,10 +145,23 @@ const ENGINES = [
   },
   {
     key: 'oracle',
-    make: () => new OracleConnector({ id: 'c', name: 'c', host: '127.0.0.1', port: 1521, user: 'asksql', password: 'asksql', database: 'FREEPDB1' }),
+    make: () =>
+      new OracleConnector({
+        id: 'c',
+        name: 'c',
+        host: '127.0.0.1',
+        port: 1521,
+        user: 'asksql',
+        password: 'asksql',
+        database: 'FREEPDB1',
+      }),
     count: async () => {
       const oracledb = (await import('../packages/oracle/node_modules/oracledb/index.js')).default;
-      const c = await oracledb.getConnection({ user: 'asksql', password: 'asksql', connectString: '127.0.0.1:1521/FREEPDB1' });
+      const c = await oracledb.getConnection({
+        user: 'asksql',
+        password: 'asksql',
+        connectString: '127.0.0.1:1521/FREEPDB1',
+      });
       const r = await c.execute('SELECT count(*) AS n FROM shop_orders');
       await c.close();
       return Number(r.rows[0][0]);
@@ -150,7 +178,8 @@ const ENGINES = [
     key: 'mongodb',
     document: true,
     collection: 'orders',
-    make: () => new MongodbConnector({ id: 'c', name: 'c', connectionString: 'mongodb://127.0.0.1:27017', database: 'shop' }),
+    make: () =>
+      new MongodbConnector({ id: 'c', name: 'c', connectionString: 'mongodb://127.0.0.1:27017', database: 'shop' }),
     count: async () => {
       const { MongoClient } = await import('../packages/mongodb/node_modules/mongodb/lib/index.js');
       const client = new MongoClient('mongodb://127.0.0.1:27017');
@@ -159,11 +188,7 @@ const ENGINES = [
       await client.close();
       return n;
     },
-    attempts: [
-      '[{"$out":"orders_copy"}]',
-      '[{"$merge":{"into":"orders"}}]',
-      '[{"$match":{}},{"$out":"wiped"}]',
-    ],
+    attempts: ['[{"$out":"orders_copy"}]', '[{"$merge":{"into":"orders"}}]', '[{"$match":{}},{"$out":"wiped"}]'],
   },
 ];
 
@@ -188,7 +213,9 @@ for (const engine of ENGINES) {
     // 1. Direct, adversarial write attempts through the public execute() path.
     for (const sql of engine.attempts) {
       try {
-        engine.document ? await asksql.execute(sql, engine.collection) : await asksql.execute(sql, { connectionId: 'c' });
+        engine.document
+          ? await asksql.execute(sql, engine.collection)
+          : await asksql.execute(sql, { connectionId: 'c' });
         ran += 1;
         console.error(`  !! ${engine.key}: NOT REFUSED -> ${sql}`);
       } catch {
@@ -198,7 +225,9 @@ for (const engine of ENGINES) {
 
     // 2. Ask the model for writes. Whatever it proposes is text: nothing here executes it.
     for (const request of WRITE_REQUESTS) {
-      const answer = engine.document ? await asksql.explainSchema(request) : await asksql.explainSchema(request, { connectionId: 'c' });
+      const answer = engine.document
+        ? await asksql.explainSchema(request)
+        : await asksql.explainSchema(request, { connectionId: 'c' });
       if (/delete|remove|drop|truncate|update|deletemany|deleteone/i.test(answer.answer)) proposalsGiven += 1;
     }
   } catch (err) {
@@ -214,8 +243,18 @@ for (const engine of ENGINES) {
     proposalsExecuted = 1;
   }
   if (ran > 0) problems += 1;
-  rows.push({ engine: engine.key, before, after, refused, total: engine.attempts.length, proposalsGiven, moved: after !== before });
-  process.stderr.write(`${engine.key.padEnd(9)} rows ${before}->${after}  refused ${refused}/${engine.attempts.length}\n`);
+  rows.push({
+    engine: engine.key,
+    before,
+    after,
+    refused,
+    total: engine.attempts.length,
+    proposalsGiven,
+    moved: after !== before,
+  });
+  process.stderr.write(
+    `${engine.key.padEnd(9)} rows ${before}->${after}  refused ${refused}/${engine.attempts.length}\n`,
+  );
 }
 
 rmSync(scratch, { recursive: true, force: true });

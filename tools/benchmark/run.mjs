@@ -111,7 +111,9 @@ for (const m of MODELS) {
   rows.push(await benchmark(m));
 }
 
-console.log(`| Model | SQL correct | Blocked by the guard | Scope correct | DELETE request | Median ask | Median schema answer |`);
+console.log(
+  `| Model | SQL correct | Blocked by the guard | Scope correct | DELETE request | Median ask | Median schema answer |`,
+);
 console.log(`|---|---|---|---|---|---|---|`);
 for (const r of rows) {
   const proposal = r.proposal.statement

@@ -20,12 +20,33 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+      - name: Passthrough covers every path ci.yml ignores
+        run: |
+          # Each file carries one kind of path list, so its quoted packages/... list
+          # items ARE the list. Anchored to list items so this step's own pattern,
+          # which is not one, does not match itself.
+          entries() { sed -n "s/^[[:space:]]*- '\(packages\/[^']*\)'[[:space:]]*$/\1/p" "$1" | sort -u; }
+          ignored="$(entries .github/workflows/ci.yml)"
+          covered="$(entries .github/workflows/ci-passthrough.yml)"
+          if [ "$ignored" != "$covered" ]; then
+            # Quoted: these entries end in ** and would otherwise glob against the checkout.
+            echo 'ci.yml paths-ignore:'; echo "$ignored"
+            echo 'ci-passthrough.yml paths:'; echo "$covered"
+            echo "::error::ci.yml's paths-ignore and ci-passthrough.yml's paths must be identical. A path ignored here and missing there reports no 'check' at all, so a PR touching only that path waits forever on the required status."
+            exit 1
+          fi
+          echo "Passthrough covers every ignored path."
       - uses: pnpm/action-setup@v5
       - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm build   # tsc -b: typecheck + emit in one pass
+      - run: pnpm build # tsc -b: typecheck + emit in one pass
       # Live DB / AI / browser suites self-skip without services, keys, or Chrome.
-      - run: pnpm test
+      - run: pnpm format:check
+      # `coverage`, not `test`: the floor in vitest.config.ts applies only with --coverage.
+      - run: pnpm coverage
+      # Packs the tarballs and installs them outside the workspace, where a dependency that is
+      # used but never declared has no workspace link to resolve through.
+      - run: node tools/packaged-consumer-test.mjs --skip-build

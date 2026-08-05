@@ -10,4 +10,4 @@ labels: bug
 
 **Expected vs actual**
 
-**Environment** — package versions, Node, OS
+**Environment**: package versions, Node, OS

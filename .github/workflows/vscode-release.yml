@@ -63,15 +63,18 @@ jobs:
         working-directory: packages/vscode
         run: npx --yes @vscode/vsce@3.9.2 package --no-dependencies -o asksql-vscode.vsix
 
-      - name: Release notes from the annotated tag
+      - name: Release notes
         id: notes
         run: |
-          # The tag message is written when the release is cut and is the most accurate
-          # description of it; without a body the release is published empty.
+          # %(contents) falls through to the tagged commit for a lightweight tag.
           git fetch --force --tags --quiet
+          body=''
+          if [ "$(git for-each-ref --format='%(objecttype)' "refs/tags/$GITHUB_REF_NAME")" = 'tag' ]; then
+            body="$(git for-each-ref --format='%(contents)' "refs/tags/$GITHUB_REF_NAME")"
+          fi
           {
             echo 'body<<ASKSQL_EOF'
-            git tag -l --format='%(contents)' "$GITHUB_REF_NAME"
+            echo "$body"
             echo 'ASKSQL_EOF'
           } >> "$GITHUB_OUTPUT"
 
@@ -79,6 +82,7 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           body: ${{ steps.notes.outputs.body }}
+          generate_release_notes: true
           files: packages/vscode/asksql-vscode.vsix
           fail_on_unmatched_files: true
       # Optional: also publish to Open VSX (for VSCodium / Cursor / etc.).

@@ -67,15 +67,18 @@ jobs:
               if (m.key) { console.error('manifest key leaked into the zip'); process.exit(1); }
               console.log('zip manifest is key-free, version ' + m.version);
             })"
-      - name: Release notes from the annotated tag
+      - name: Release notes
         id: notes
         run: |
-          # The tag message is written when the release is cut and is the most accurate
-          # description of it; without a body the action creates an empty release.
+          # %(contents) falls through to the tagged commit for a lightweight tag.
           git fetch --force --tags --quiet
+          body=''
+          if [ "$(git for-each-ref --format='%(objecttype)' "refs/tags/$GITHUB_REF_NAME")" = 'tag' ]; then
+            body="$(git for-each-ref --format='%(contents)' "refs/tags/$GITHUB_REF_NAME")"
+          fi
           {
             echo 'body<<ASKSQL_EOF'
-            git tag -l --format='%(contents)' "$GITHUB_REF_NAME"
+            echo "$body"
             echo 'ASKSQL_EOF'
           } >> "$GITHUB_OUTPUT"
 
@@ -83,6 +86,7 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           body: ${{ steps.notes.outputs.body }}
+          generate_release_notes: true
           files: packages/browser-extension/asksql-browser-extension.zip
       # Opt-in once Partner Center credentials exist: set the repository
       # variable EDGE_PUBLISH_ENABLED=true and the environment secrets
