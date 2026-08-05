@@ -28,6 +28,21 @@ pnpm verify        # all of the above in the order CI runs them; use this before
 `test:packaged` is the one gate the in-repo suite cannot stand in for: pnpm's workspace links
 resolve a dependency that is used but never declared, and a consumer's install does not.
 
+None of these touch the JetBrains plugin, which builds under Gradle. Its two suites are disjoint:
+`./gradlew test` excludes the `IntegrationTest` category and `-PintegrationTests=true` runs only
+that category, so a green run of one says nothing about the other. Run both when changing anything
+the plugin shares with core, such as the routing predicates.
+
+```bash
+cd packages/jetbrains
+./gradlew test                            # unit suite
+./gradlew test -PintegrationTests=true    # integration suite; needs Docker
+```
+
+The integration suite reaches Docker through Testcontainers, which reads the environment of the
+Gradle **daemon**, not of your shell. On Colima, export `DOCKER_HOST` and then `./gradlew --stop`,
+or a daemon started earlier keeps failing with "Could not find a valid Docker environment".
+
 ## Layout
 
 | Path | What |

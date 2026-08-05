@@ -138,6 +138,8 @@ class MongoEnginePipelineTest {
 
     // ---- MAX_REPAIRS exhaustion on a guard rejection ----
 
+    // The question must read as a data question. One that asks for a write is refused before any
+    // model call, so it would never reach the guard-repair loop this test is about.
     @Test
     fun `ask throws GUARD_BLOCKED after MAX_REPAIRS repeated guard rejections`() = runTest {
         val (pipeline, history) = pipeline()
@@ -145,14 +147,30 @@ class MongoEnginePipelineTest {
 
         var thrownCode: AskSqlErrorCode? = null
         try {
-            pipeline.ask(question = "delete everything", descriptor = descriptor(), password = null, llmClient = llm)
+            pipeline.ask(question = "orders by status", descriptor = descriptor(), password = null, llmClient = llm)
             fail("expected GUARD_BLOCKED after repeated guard rejections")
         } catch (e: AskSqlException) {
             thrownCode = e.code
         }
         assertEquals(AskSqlErrorCode.GUARD_BLOCKED, thrownCode)
         assertEquals(3, llm.callCount) // attempts 0, 1, 2 (MAX_REPAIRS = 2)
-        assertTrue(history.recent().any { it.question == "delete everything" && it.status == HistoryStatus.BLOCKED })
+        assertTrue(history.recent().any { it.question == "orders by status" && it.status == HistoryStatus.BLOCKED })
+    }
+
+    @Test
+    fun `ask refuses a write request before calling the model`() = runTest {
+        val (pipeline, _) = pipeline()
+        val llm = FakeLlmClient(listOf(fence("""[{"${'$'}match": {}}]""")))
+
+        var thrown: AskSqlException? = null
+        try {
+            pipeline.ask(question = "delete everything", descriptor = descriptor(), password = null, llmClient = llm)
+            fail("expected a write request to be routed to the prose path")
+        } catch (e: AskSqlException) {
+            thrown = e
+        }
+        assertEquals(AskSqlErrorCode.LLM_CANNOT_ANSWER, thrown!!.code)
+        assertEquals("the model must not be called for a write request", 0, llm.callCount)
     }
 
     // ---- IMPOSSIBLE sentinel ----
