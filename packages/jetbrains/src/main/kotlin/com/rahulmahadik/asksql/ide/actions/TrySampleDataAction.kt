@@ -24,10 +24,7 @@ import java.nio.file.Path
 import java.util.Properties
 import java.util.concurrent.atomic.AtomicBoolean
 
-/**
- * Materializes a small demo SQLite database and registers it as a connection, so a fresh install
- * reaches a working chat without configuring anything. Regenerated each time; never sensitive.
- */
+/** Materializes a small demo SQLite database and registers it as a connection, regenerated on every run. */
 class TrySampleDataAction : DumbAwareAction() {
     override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.BGT
 
@@ -84,15 +81,14 @@ class TrySampleDataAction : DumbAwareAction() {
             )
         }
 
-        /** Creates (or reuses, if already valid) a small shop-style SQLite database with FKs, for onboarding. Internal (not private) so tests can time/verify it directly without going through the UI action. */
+        /** Creates a small shop-style SQLite database with FKs, for onboarding. */
         internal fun materializeSampleDatabase(): Path {
             val dir = Path.of(PathManager.getSystemPath(), "asksql", "sample")
             Files.createDirectories(dir)
             val file = dir.resolve("shop-demo.db")
-            Files.deleteIfExists(file) // always regenerate, this is demo data, never user data
+            Files.deleteIfExists(file) // always regenerate, this is demo data
 
-            // Direct (non-read-only) connection for the one-time seed write; every query afterward
-            // goes through the guarded ConnectionRegistry/JdbcConnectionFactory path instead.
+            // Direct (non-read-only) connection for the one-time seed write.
             val driver = DriverProvisioner.driverFor(EngineKind.SQLITE)
             driver.connect("jdbc:sqlite:$file", Properties()).use { connection ->
                 connection.createStatement().use { st ->

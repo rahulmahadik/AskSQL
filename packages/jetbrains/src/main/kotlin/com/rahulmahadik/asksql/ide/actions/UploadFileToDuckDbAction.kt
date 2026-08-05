@@ -8,7 +8,10 @@ import com.intellij.openapi.fileChooser.FileChooser
 import com.intellij.openapi.fileChooser.FileChooserDescriptor
 import com.intellij.openapi.project.DumbAwareAction
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.ui.DialogWrapper
 import com.intellij.openapi.ui.Messages
+import com.intellij.ui.components.JBList
+import com.intellij.ui.components.JBScrollPane
 import com.rahulmahadik.asksql.ide.AskSqlEngineService
 import com.rahulmahadik.asksql.ide.db.ConnectionDescriptor
 import com.rahulmahadik.asksql.ide.db.ConnectionRegistry
@@ -25,7 +28,12 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.nio.file.Files
 import java.nio.file.Path
+import java.awt.BorderLayout
 import java.util.Properties
+import javax.swing.JComponent
+import javax.swing.JLabel
+import javax.swing.JPanel
+import javax.swing.ListSelectionModel
 
 /**
  * Loads user-picked data files (CSV/JSON/NDJSON/Parquet/XLSX/portable .sql) into a DuckDB database
@@ -59,13 +67,11 @@ class UploadFileToDuckDbAction : DumbAwareAction() {
             return
         }
         val options = arrayOf("A new set of data files") + existing.map { it.name }.toTypedArray()
-        // showChooseDialog is deprecated with no non-deprecated modal list equivalent; the Plugin
-        // Verifier accepts it as Compatible, and the alternatives (async popup, N buttons) are worse.
-        @Suppress("DEPRECATION")
-        val choice = Messages.showChooseDialog(
-            project, "Add these ${files.size} file(s) to which set of data files?", "Query Data Files",
-            null, options, options[0],
+        val dialog = ChooseOneDialog(
+            project, "Query Data Files", "Add these ${files.size} file(s) to which set of data files?", options,
         )
+        if (!dialog.showAndGet()) return
+        val choice = dialog.choice
         if (choice < 0) return
         uploadFiles(project, files.map { it.path }, target = if (choice == 0) null else existing[choice - 1]) {}
     }
@@ -74,23 +80,19 @@ class UploadFileToDuckDbAction : DumbAwareAction() {
         /** Data-file formats DuckDB can load directly (see [DuckDbFileLoader]). TSV/TXT go through read_csv_auto, which sniffs the delimiter. */
         val ALLOWED_EXTENSIONS = setOf("csv", "tsv", "txt", "json", "ndjson", "parquet", "xlsx", "xls", "sql")
 
-        /**
-         * Deliberately unfiltered multi-select. Every descriptor-level filter tried here made one
-         * unsupported file in the selection silently disable OK with no explanation; picking freely
-         * and reporting unsupported files afterwards is the behaviour users can actually act on.
-         */
+        /** Deliberately unfiltered multi-select: a descriptor-level filter silently disables OK, so unsupported picks are reported afterwards instead. */
         fun dataFileChooserDescriptor(): FileChooserDescriptor =
             FileChooserDescriptor(true, false, false, false, false, true)
 
-        /** A stale remembered selection the current filter rejects makes the chooser fail to reopen; an explicit start directory avoids that. */
+        /** An explicit start directory: a stale remembered selection the current filter rejects makes the chooser fail to reopen. */
         fun chooserStartDir(project: Project) =
             project.basePath?.let { com.intellij.openapi.vfs.LocalFileSystem.getInstance().findFileByPath(it) }
 
-        /** Names any picked file the loader cannot handle, so an unsupported pick fails with a clear message instead of a driver error. */
+        /** Names any picked file the loader cannot handle. */
         fun unsupported(paths: List<String>): List<String> =
             paths.filter { java.io.File(it).extension.lowercase() !in ALLOWED_EXTENSIONS }.map { java.io.File(it).name }
 
-        /** Says which files were skipped and why, since "OK is greyed out" taught the user nothing. */
+        /** Says which files were skipped and why. */
         fun unsupportedMessage(rejected: List<String>): String =
             "These aren't data files DuckDB can read as tables, so I left them out:\n" +
                 rejected.joinToString("\n") { "  - $it" } +
@@ -136,6 +138,8 @@ class UploadFileToDuckDbAction : DumbAwareAction() {
                 var managedDbPath: Path? = null
                 try {
                     val dbPath = if (target != null) {
+                        // DuckDB refuses a read-write handle while our read-only one is open, so drop ours first.
+                        project.getService(ConnectionRegistry::class.java).invalidate(target.id)
                         Path.of(target.filePath!!)
                     } else {
                         newManagedDbPath(sourcePaths.first()).also { managedDbPath = it }
@@ -173,4 +177,29 @@ class UploadFileToDuckDbAction : DumbAwareAction() {
             }
         }
     }
+}
+
+/** Modal single-choice list; the platform's `showChooseDialog` is deprecated. */
+private class ChooseOneDialog(
+    project: Project,
+    dialogTitle: String,
+    private val message: String,
+    options: Array<String>,
+) : DialogWrapper(project, true) {
+
+    private val list = JBList(*options)
+
+    init {
+        title = dialogTitle
+        list.selectionMode = ListSelectionModel.SINGLE_SELECTION
+        list.selectedIndex = 0
+        init()
+    }
+
+    override fun createCenterPanel(): JComponent = JPanel(BorderLayout(0, 8)).apply {
+        add(JLabel(message), BorderLayout.NORTH)
+        add(JBScrollPane(list), BorderLayout.CENTER)
+    }
+
+    val choice: Int get() = list.selectedIndex
 }

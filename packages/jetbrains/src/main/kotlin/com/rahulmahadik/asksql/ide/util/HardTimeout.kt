@@ -19,9 +19,7 @@ private val EXECUTOR = Executors.newCachedThreadPool { r -> Thread(r, "AskSQL-ha
 suspend fun <T> withHardTimeout(timeoutMs: Long, block: suspend () -> T): T {
     val future = EXECUTOR.submit<T> { runBlocking { block() } }
     try {
-        // runInterruptible so the caller cancelling (Stop) interrupts the blocked get; that plus the
-        // catch below cancels the daemon runBlocking, so block()'s job cancels and its hooks (e.g. an
-        // in-flight SSE stream close) fire instead of running to completion.
+        // runInterruptible so a caller cancel (Stop) interrupts the blocked get and fires block()'s cancellation hooks.
         return runInterruptible(Dispatchers.IO) {
             try {
                 future.get(timeoutMs, TimeUnit.MILLISECONDS)

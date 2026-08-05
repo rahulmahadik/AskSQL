@@ -10,10 +10,7 @@ object BaseUrlGuard {
 
     private val IPV4_MAPPED = Regex("""^::ffff:(\d+\.\d+\.\d+\.\d+)$""", RegexOption.IGNORE_CASE)
 
-    /**
-     * inet_aton also accepts hex (0x), octal (leading 0) and 1-to-3-part forms, so 169.254.169.254
-     * can be written 2852039166 or 0xA9FEA9FE. Normalize to dotted-quad before any range check.
-     */
+    /** Normalizes the inet_aton forms (hex, octal, 1-to-3 parts) to dotted-quad before any range check. */
     internal fun toIpv4OrNull(host: String): String? {
         val parts = host.split('.')
         if (parts.isEmpty() || parts.size > 4) return null
@@ -43,10 +40,7 @@ object BaseUrlGuard {
         return toIpv4OrNull(h)?.startsWith("127.") == true
     }
 
-    /**
-     * Link-local range (169.254.0.0/16), which includes the cloud instance-metadata address. A
-     * request there from a dev machine on a cloud VM can return instance credentials.
-     */
+    /** Link-local range (169.254.0.0/16), which includes the cloud instance-metadata address. */
     private fun isLinkLocal(host: String): Boolean {
         val h = host.removePrefix("[").removeSuffix("]")
         val mapped = IPV4_MAPPED.find(h)
@@ -73,8 +67,7 @@ object BaseUrlGuard {
         if (isLinkLocal(host)) {
             throw configError("That base URL points at a link-local address, which is not a model endpoint.")
         }
-        // Sending a key over plaintext hands it to anyone on the path.
-        // Loopback is exempt: that is Ollama / LM Studio on the user's own machine.
+        // Loopback is exempt from the https requirement: that is Ollama / LM Studio on this machine.
         if (carriesSecret && scheme != "https" && !isLoopback(host)) {
             throw configError("Refusing to send your API key over http to a remote host. Use https, or clear the key for a local endpoint.")
         }

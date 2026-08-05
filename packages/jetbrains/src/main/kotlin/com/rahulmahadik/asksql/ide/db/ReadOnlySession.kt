@@ -21,17 +21,13 @@ object ReadOnlySession {
                 it.execute("SET SESSION TRANSACTION READ ONLY")
             }
             EngineKind.SQLITE -> {
-                // Enforced at connect time via SQLiteConfig.setReadOnly(true) (see
-                // JdbcConnectionFactory); SQLite has no per-session SQL statement for this.
+                // Enforced at connect time via SQLiteConfig.setReadOnly(true); SQLite has no per-session statement for this.
             }
             EngineKind.DUCKDB -> {
-                // Enforced at connect time via the duckdb.read_only=true JDBC property for
-                // file-backed databases (see JdbcConnectionFactory); DuckDB has no read-only SQL
-                // pragma that survives across statements the way Postgres/MySQL do.
+                // Enforced at connect time via the duckdb.read_only=true JDBC property; DuckDB has no read-only pragma.
             }
             EngineKind.ORACLE -> {
-                // Oracle's read-only transaction covers only itself, not the session; re-armed
-                // per query in JdbcExecutor instead.
+                // Oracle's read-only transaction covers only itself, not the session; JdbcExecutor re-arms it per query.
             }
             EngineKind.MONGODB -> error("MongoDB has no JDBC session - see MongoClientFactory/MongoGuard")
         }

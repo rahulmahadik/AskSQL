@@ -41,6 +41,7 @@ internal class AnthropicClient(
             addProperty("system", system)
             addProperty("max_tokens", MAX_TOKENS)
             addProperty("stream", true)
+            addProperty("temperature", LlmClients.TEMPERATURE)
             add("messages", JsonArray().apply {
                 add(JsonObject().apply { addProperty("role", "user"); addProperty("content", userPrompt) })
             })
@@ -60,8 +61,7 @@ internal class AnthropicClient(
         var outputTokens = 0
         val coroutineContext = currentCoroutineContext()
 
-        // See OpenAiCompatibleClient.chat's identical hop: the blocking read loop, not just opening
-        // the connection, needs to run off the caller's (Dispatchers.Default) dispatcher.
+        // The blocking read loop, not just the connect, runs off the caller's dispatcher.
         LlmClients.onIo {
             reader.use { r ->
                 SseReader(r).forEachDataLine { payload ->

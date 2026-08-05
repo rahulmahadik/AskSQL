@@ -22,8 +22,8 @@ import java.util.concurrent.ConcurrentHashMap
 import kotlin.time.Duration.Companion.seconds
 
 /**
- * MongoDB's counterpart to [EnginePipeline]: same repair-loop shape and event stages. Not a
- * parameterization of it, since MongoDB has no SQL/JDBC/Dialect concept to share.
+ * MongoDB's counterpart to [EnginePipeline]: same repair-loop shape and event stages, sharing no
+ * SQL/JDBC/Dialect concept with it.
  */
 class MongoEnginePipeline(
     private val clientRegistry: MongoClientRegistry,
@@ -32,18 +32,40 @@ class MongoEnginePipeline(
     var policy: MongoGuardPolicy = MongoGuardPolicy(),
     /** Schema token budget, refreshed from settings on every access like [policy]. */
     var maxSchemaTokens: Int = CatalogPruner.PrunerSettings().maxSchemaTokens,
+    /** Send example field values to the model. Off by default: only the schema leaves the machine. */
+    var allowDataInPrompt: Boolean = false,
 ) {
     companion object {
         private const val MAX_REPAIRS = 2
         private val CATALOG_TTL = 300.seconds
         private const val DEFAULT_QUERY_TIMEOUT_MS = 30_000L
 
-        /**
-         * A question asking to add/change/remove data or collections: the answer is a proposal, so new
-         * names are expected. Word-for-word the SQL path's list - a divergence classified the same
-         * request differently depending on which engine the user happened to be connected to.
-         */
+        /** A question asking to add/change/remove data or collections, where new names are proposals; word-for-word the SQL path's list. */
         private val MONGO_SCHEMA_CHANGE_RE = Grounding.SCHEMA_CHANGE_RE
+
+        /** The model saying in prose that it cannot answer while still emitting a pipeline. */
+        private val CANNOT_ANSWER_RE = Regex(
+            """\b(?:impossible to answer|impossible to determine|cannot be answered|can(?:no|')t be answered|not possible to answer|unable to answer|no way to answer|(?:does not|doesn't|do not|don't) (?:contain|have) (?:any |the )?(?:information|data|fields?|columns?)[^.?!]{0,30}(?:needed|required|necessary) to answer|(?:cannot|can(?:no|')t) (?:be )?(?:determine|determined|answer)[^.?!]{0,40}\bfrom (?:this|the) schema)\b""",
+            RegexOption.IGNORE_CASE,
+        )
+
+        /** Stages that only slice a result; a pipeline made solely of these answers nothing. */
+        private val PASSTHROUGH_STAGES = setOf("\$limit", "\$skip", "\$sort", "\$sample")
+
+        /** True when a pipeline selects, groups and computes nothing - it just hands back arbitrary documents. */
+        internal fun isNoOpPipeline(pipelineJson: String): Boolean {
+            val array = try {
+                com.google.gson.JsonParser.parseString(pipelineJson).asJsonArray
+            } catch (e: Exception) {
+                return false // unparsable is the guard's problem, not this check's
+            }
+            // `[]` selects nothing; the guard auto-limits it into 1000 arbitrary documents.
+            if (array.size() == 0) return true
+            return array.all { element ->
+                val obj = element as? com.google.gson.JsonObject ?: return@all false
+                obj.keySet().isNotEmpty() && obj.keySet().all { it in PASSTHROUGH_STAGES }
+            }
+        }
 
         /** A write command offered in an answer: the document counterpart of PROPOSED_WRITE_RE. */
         private val WRITE_COMMAND_RE = Regex(
@@ -76,6 +98,14 @@ class MongoEnginePipeline(
         catalogCache.clear()
     }
 
+    /**
+     * Drops sampled field values unless the user opted in. Applied at the single exit from
+     * [catalog], so a caller cannot leak values by forgetting to ask for the stripped form.
+     */
+    private fun withoutSampledData(catalog: SchemaCatalog): SchemaCatalog =
+        if (allowDataInPrompt) catalog
+        else catalog.copy(tables = catalog.tables.map { t -> t.copy(columns = t.columns.map { it.copy(sampledValues = emptyList()) }) })
+
     private fun requireDatabase(descriptor: ConnectionDescriptor): String =
         descriptor.database?.takeIf { it.isNotBlank() } ?: throw AskSqlException(
             AskSqlErrorCode.CONFIG_ERROR,
@@ -83,20 +113,19 @@ class MongoEnginePipeline(
         )
 
     // -----------------------------------------------------------------
-    // Catalog (300s TTL, single in-flight fetch per connection): same pattern as
-    // EnginePipeline.catalog(), but sampling-based instead of metadata-based.
+    // Catalog (300s TTL, single in-flight fetch per connection): sampling-based, not metadata-based.
     // -----------------------------------------------------------------
 
     suspend fun catalog(descriptor: ConnectionDescriptor, password: String?, refresh: Boolean = false): SchemaCatalog {
         val cached = catalogCache[descriptor.id]
         if (!refresh && cached != null && System.currentTimeMillis() - cached.fetchedAtMillis < CATALOG_TTL.inWholeMilliseconds) {
-            return cached.catalog
+            return withoutSampledData(cached.catalog)
         }
         val lock = catalogLocks.getOrPut(descriptor.id) { Mutex() }
         return lock.withLock {
             val recheck = catalogCache[descriptor.id]
             if (!refresh && recheck != null && System.currentTimeMillis() - recheck.fetchedAtMillis < CATALOG_TTL.inWholeMilliseconds) {
-                return@withLock recheck.catalog
+                return@withLock withoutSampledData(recheck.catalog)
             }
             val dbName = requireDatabase(descriptor)
             val gen = catalogGeneration.get()
@@ -108,13 +137,12 @@ class MongoEnginePipeline(
             }
             // Skip the write if an edit invalidated mid-fetch, or this stores the old target's schema.
             if (catalogGeneration.get() == gen) catalogCache[descriptor.id] = CachedCatalog(fresh, System.currentTimeMillis())
-            fresh
+            withoutSampledData(fresh)
         }
     }
 
     // -----------------------------------------------------------------
-    // ask(): question -> catalog -> prune -> prompt -> LLM -> extract ->
-    //        guard -> collection-exists floor -> repair loop
+    // ask(): question -> catalog -> prune -> prompt -> LLM -> extract -> guard -> collection floor -> repair loop
     // -----------------------------------------------------------------
 
     suspend fun ask(
@@ -135,6 +163,43 @@ class MongoEnginePipeline(
             )
         }
 
+        // Same routing, and the same order, as the SQL pipeline.
+        // Capability questions are answered from the prose path, not by the model.
+        if (Scope.isCapabilityQuestion(q)) {
+            throw AskSqlException(
+                AskSqlErrorCode.LLM_CANNOT_ANSWER,
+                userMessage = "That is a question about AskSQL itself rather than the data.",
+                detail = "capability question routed to the prose path",
+                retryable = false,
+            )
+        }
+        // Declined before any model call.
+        if (Scope.isPromptInjection(q)) {
+            throw AskSqlException(
+                AskSqlErrorCode.LLM_REFUSAL,
+                userMessage = "I only answer questions about the data in this database.",
+                detail = "prompt-injection attempt declined",
+                retryable = false,
+            )
+        }
+        // Asked to be handed a write: refused before a model call and routed to the prose path.
+        if (EnginePipeline.isWriteRequest(q)) {
+            throw AskSqlException(
+                AskSqlErrorCode.LLM_CANNOT_ANSWER,
+                userMessage = "That asks for a statement that changes data. AskSQL is read-only, so it is written out for you to run yourself.",
+                detail = "write request routed to the proposal path",
+                retryable = false,
+            )
+        }
+        if (EnginePipeline.isSchemaAdviceQuestion(q) || EnginePipeline.isDatabaseOverviewQuestion(q)) {
+            throw AskSqlException(
+                AskSqlErrorCode.LLM_CANNOT_ANSWER,
+                userMessage = "That asks about the schema itself rather than the data in it, so there is no query to run.",
+                detail = "schema-advice question routed to the prose path",
+                retryable = false,
+            )
+        }
+
         onEvent?.onEvent(EngineEvent.StageEvent(Stage.CATALOG))
         val fullCatalog = catalog(descriptor, password)
 
@@ -150,6 +215,8 @@ class MongoEnginePipeline(
         var userPrompt = MongoPrompts.buildPipelineUser(question = q, schemaText = schemaText, context = context)
 
         var lastPipeline = ""
+        // Tracks a model that says nothing on every attempt, which means unreachable, not bad output.
+        var everyReplyEmpty = true
         var attempt = 0
         var contextShrunk = false
         var triedFuzzyCollectionRepair = false
@@ -163,8 +230,7 @@ class MongoEnginePipeline(
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e // must propagate unwrapped: this IS the coroutine's own cancellation signal, not an LLM failure
             } catch (e: AskSqlException) {
-                // On context overflow, shrink the schema once and retry without consuming a repair
-                // attempt (see EnginePipeline.ask's identical handling).
+                // On context overflow, shrink the schema once and retry without consuming a repair attempt.
                 if (e.code == AskSqlErrorCode.LLM_CONTEXT_OVERFLOW && !contextShrunk) {
                     contextShrunk = true
                     val tighter = CatalogPruner.pruneCatalog(
@@ -185,13 +251,14 @@ class MongoEnginePipeline(
             }
             val text = result.text
 
+            if (text.isNotBlank()) everyReplyEmpty = false
+
             onEvent?.onEvent(EngineEvent.StageEvent(Stage.EXTRACT))
             val extraction = MongoExtract.extractPipeline(text)
             if (extraction == null) {
                 val impossibleReason = Extract.extractImpossible(text)
                 if (impossibleReason != null) {
-                    // Same idea as EnginePipeline.ask: a refusal is often a misspelled collection
-                    // name, not a genuinely missing one - one repair attempt, told to disclose it.
+                    // A refusal is often a misspelled collection name: one repair attempt, told to disclose it.
                     val fuzzyCollection = if (!triedFuzzyCollectionRepair) SchemaFuzzyMatch.closestTableName(q, fullCatalog) else null
                     if (fuzzyCollection != null && attempt < MAX_REPAIRS) {
                         triedFuzzyCollectionRepair = true
@@ -206,9 +273,19 @@ class MongoEnginePipeline(
                     throw AskSqlException(AskSqlErrorCode.LLM_CANNOT_ANSWER, userMessage = impossibleReason, retryable = false)
                 }
                 if (attempt >= MAX_REPAIRS) {
+                    // Nothing at all on every attempt: the model name is wrong or the account cannot reach it.
+                    if (everyReplyEmpty) {
+                        throw AskSqlException(
+                            AskSqlErrorCode.LLM_UNAVAILABLE,
+                            userMessage = "The AI model returned an empty response. Check the model name is right and that your account can use it.",
+                            detail = "model returned nothing on all ${attempt + 1} attempts",
+                        )
+                    }
                     val refusal = Extract.looksLikeRefusal(text)
                     throw AskSqlException(
                         if (refusal) AskSqlErrorCode.LLM_REFUSAL else AskSqlErrorCode.LLM_BAD_OUTPUT,
+                        // The default message says "SQL", the wrong word on a MongoDB connection.
+                        userMessage = "Couldn't produce a valid aggregation pipeline for this question. Try rephrasing it.",
                         detail = "no pipeline extracted after ${attempt + 1} attempts",
                     )
                 }
@@ -221,6 +298,25 @@ class MongoEnginePipeline(
                 continue
             }
             lastPipeline = extraction.pipelineJson
+
+            // The document counterpart of the SQL path's literal-answer check.
+            if (isNoOpPipeline(extraction.pipelineJson) && CANNOT_ANSWER_RE.containsMatchIn(text)) {
+                if (attempt >= MAX_REPAIRS) {
+                    throw AskSqlException(
+                        AskSqlErrorCode.LLM_BAD_OUTPUT,
+                        userMessage = "That question doesn't seem to match any collection in this database.",
+                        detail = "pipeline selects nothing (no \$match/\$group/\$project stage)",
+                        retryable = false,
+                    )
+                }
+                userPrompt = MongoPrompts.buildRepairUser(
+                    question = q, failedPipeline = extraction.pipelineJson,
+                    failure = "That pipeline has no stage that answers the question. Use \$match/\$group/\$project, or reply with IMPOSSIBLE and one sentence saying why.",
+                    schemaText = pruned.schemaText,
+                )
+                attempt++
+                continue
+            }
 
             onEvent?.onEvent(EngineEvent.StageEvent(Stage.GUARD))
             val verdict = MongoGuard.guard(extraction.pipelineJson, policy)
@@ -242,9 +338,7 @@ class MongoEnginePipeline(
                 continue
             }
 
-            // Collections are enumerable exactly, so an unknown one is a hard block. MongoDB
-            // collection names are case-sensitive, so resolve to the catalog's real casing:
-            // querying "Orders" when only "orders" exists would silently return zero documents.
+            // An unknown collection is a hard block; MongoDB names are case-sensitive, so resolve to the catalog's casing.
             val resolvedCollection = fullCatalog.tables.firstOrNull { it.name.equals(extraction.collection, ignoreCase = true) }?.name
             if (resolvedCollection == null) {
                 if (attempt >= MAX_REPAIRS) {
@@ -276,8 +370,7 @@ class MongoEnginePipeline(
     }
 
     // -----------------------------------------------------------------
-    // execute(): guard EVERY pipeline, even one the caller already saw guarded once;
-    // an edited-then-replayed pipeline is re-verified from scratch.
+    // execute(): guards EVERY pipeline, including one the caller already saw guarded once.
     // -----------------------------------------------------------------
 
     suspend fun execute(
@@ -299,8 +392,7 @@ class MongoEnginePipeline(
             )
         }
 
-        // Re-checked here too (same floor as ask()): Mongo silently returns zero rows for a
-        // nonexistent collection, so a stale/wrong-case name would look like "no matching rows".
+        // Mongo silently returns zero rows for a nonexistent collection, so the name is re-resolved here.
         val fullCatalog = catalog(descriptor, password)
         val resolvedCollection = fullCatalog.tables.firstOrNull { it.name.equals(collection, ignoreCase = true) }?.name
             ?: throw AskSqlException(
@@ -360,8 +452,7 @@ class MongoEnginePipeline(
             val extraction = MongoExtract.extractPipeline(repaired.text) ?: return null
             val verdict = MongoGuard.guard(extraction.pipelineJson, policy)
             if (!verdict.allowed || verdict.pipelineJson == bad) return null
-            // Same collection-existence floor and case resolution as ask(): a "fix" naming a
-            // nonexistent or differently-cased collection would just fail again once re-approved.
+            // Same collection-existence floor and case resolution as ask().
             val resolvedCollection = catalog.tables.firstOrNull { it.name.equals(extraction.collection, ignoreCase = true) }?.name ?: return null
             MongoFix(resolvedCollection, verdict.pipelineJson)
         } catch (e: kotlinx.coroutines.CancellationException) {
@@ -374,8 +465,7 @@ class MongoEnginePipeline(
     suspend fun explain(pipelineJson: String, descriptor: ConnectionDescriptor, password: String?, llmClient: LlmClient): String {
         val p = pipelineJson.trim()
         if (p.isEmpty()) throw AskSqlException(AskSqlErrorCode.INVALID_INPUT, userMessage = "Provide a pipeline to explain.")
-        // Guard first: without it, explain() is a free text channel to the model on the host's
-        // API key (see EnginePipeline.explain's identical check).
+        // Guard first: without it, explain() is a free text channel to the model on the host's API key.
         val verdict = MongoGuard.guard(p, policy)
         if (!verdict.allowed) {
             throw AskSqlException(
@@ -403,28 +493,34 @@ class MongoEnginePipeline(
         descriptor: ConnectionDescriptor,
         password: String?,
         llmClient: LlmClient,
+        /** Prior turns, so a follow-up like "explain this pipeline" knows which one. */
+        context: List<MongoPrompts.ContextTurn> = emptyList(),
     ): Scope.SchemaAnswer {
         val q = question.trim()
         if (q.isEmpty()) throw AskSqlException(AskSqlErrorCode.INVALID_INPUT, userMessage = "Ask a question about the schema.")
-        // Same cap as every other entry point.
+        // Length is checked before routing, as in core.
         if (q.length > 10_000) {
             throw AskSqlException(
                 AskSqlErrorCode.INVALID_INPUT,
                 userMessage = "The question is too long. Keep it under 10,000 characters.",
             )
         }
+        // Answered in code rather than by the model.
+        if (Scope.isPromptInjection(q)) return Scope.offTopicAnswer("MongoDB")
+        if (Scope.isCapabilityQuestion(q)) return Scope.capabilityAnswer("MongoDB")
         val full = catalog(descriptor, password)
         if (full.tables.isEmpty()) {
             return Scope.SchemaAnswer("This connection has no collections the current user can read.", emptyList(), true, emptyList(), false)
         }
-        val isSchemaChange = MONGO_SCHEMA_CHANGE_RE.containsMatchIn(q)
+        // Advice counts too: names of indexes that do not exist yet are proposals, not hallucinations.
+        val isSchemaChange = MONGO_SCHEMA_CHANGE_RE.containsMatchIn(q) || EnginePipeline.isSchemaProposalQuestion(q)
         val pruned = CatalogPruner.pruneCatalog(full, q)
         var answer = com.rahulmahadik.asksql.ide.llm.LlmClients.withChatTimeout {
-            llmClient.chat(MongoPrompts.buildSchemaAnswerSystem(isSchemaChange), MongoPrompts.buildSchemaAnswerUser(q, pruned.schemaText))
+            llmClient.chat(MongoPrompts.buildSchemaAnswerSystem(isSchemaChange), MongoPrompts.buildSchemaAnswerUser(q, pruned.schemaText, context))
         }.text.trim()
-        // Same three signals as the SQL path; the last does not depend on phrasing.
+        // Same three signals as the SQL path; the last, prior turns, does not depend on phrasing.
         val questionIsAboutThisDatabase =
-            Scope.looksDatabaseRelated(q) || isSchemaChange || Grounding.mentionsCatalogName(q, full)
+            Scope.looksDatabaseRelated(q) || isSchemaChange || Grounding.mentionsCatalogName(q, full) || context.any { it.pipeline.isNotBlank() }
         if (Scope.isOffTopic(answer) || (Scope.isDegenerateAnswer(answer) && !WRITE_COMMAND_RE.containsMatchIn(answer))) {
             // Challenge the refusal once when the question is plainly about data; accept it otherwise.
             if (!questionIsAboutThisDatabase) return Scope.offTopicAnswer("MongoDB")
@@ -453,16 +549,23 @@ class MongoEnginePipeline(
             return Scope.offTopicAnswer("MongoDB")
         }
         answer = Scope.stripSentinel(answer)
-        if (WRITE_COMMAND_RE.containsMatchIn(answer) && !answer.contains("read-only", ignoreCase = true)) {
+        // The QUESTION counts too: a pasted write command is being discussed.
+        if ((WRITE_COMMAND_RE.containsMatchIn(answer) || WRITE_COMMAND_RE.containsMatchIn(q)) && !answer.contains("read-only", ignoreCase = true)) {
             answer += "\n\n*Proposal only - AskSQL is read-only and never executes commands; run it yourself if you want it applied.*"
         }
-        // Same grounding floor as the SQL path, against the FULL catalog so a collection dropped by
-        // pruning is not mistaken for an invention. Reporting grounded=true unconditionally hid
-        // exactly the hallucinations this value warns about.
-        // Computed unconditionally, like the SQL path: for a change request these are the PROPOSED
-        // names, which the UI shows as proposals rather than errors.
+        // Grounded against the FULL catalog, so a pruned-away collection is not read as an invention.
+        // For a change request these are the PROPOSED names, which the UI shows as proposals.
         val unknown = Grounding.unknownReferencesInProse(answer, full, documentStyle = true)
-        return Scope.SchemaAnswer(answer, pruned.catalog.tables.map { it.name }, unknown.isEmpty(), unknown, isSchemaChange)
+        // The pipeline a prose answer suggested, so a follow-up can refer to it. Read-only only, and
+        // only when it names collections and fields that exist.
+        val proposed = MongoExtract.extractPipeline(answer)?.pipelineJson?.trim()
+        val proposedSql = proposed?.takeIf {
+            MongoGuard.guard(it, policy).allowed &&
+                Grounding.unknownReferencesInProse(it, full, documentStyle = true).isEmpty()
+        }
+        return Scope.SchemaAnswer(
+            answer, pruned.catalog.tables.map { it.name }, unknown.isEmpty(), unknown, isSchemaChange, proposedSql,
+        )
     }
 
     private fun auditEntry(

@@ -27,16 +27,16 @@ object MongoIntrospector {
     private const val SAMPLE_SIZE = 200
     private const val SAMPLE_TIMEOUT_SECONDS = 15L
 
-    /** Bounds concurrent per-collection sampling to the client's own connection pool size (see MongoClientFactory); more concurrency than that would just queue on checkout, not go any faster. */
+    /** Bounds concurrent per-collection sampling to the client's connection pool size (see MongoClientFactory). */
     private const val MAX_CONCURRENT_SAMPLES = 5
 
-    /** Object/array flattening depth; dotted paths beyond this are not descended into (their own type is still recorded, just not their children). */
+    /** Object/array flattening depth; deeper paths keep their own type but are not descended into. */
     private const val MAX_FLATTEN_DEPTH = 4
 
-    /** Cap on distinct field paths per collection; far above any real schema, low enough to bound a map-shaped one. */
+    /** Cap on distinct field paths recorded per collection. */
     private const val MAX_TRACKED_FIELDS = 500
 
-    /** A schema with hundreds of collections would take minutes to introspect one at a time; sampling runs concurrently, bounded so it doesn't starve the connection pool. */
+    /** Samples every collection concurrently, bounded by [MAX_CONCURRENT_SAMPLES]. */
     suspend fun introspect(database: MongoDatabase): SchemaCatalog = coroutineScope {
         val collectionNames = database.listCollectionNames().toList()
         val semaphore = Semaphore(MAX_CONCURRENT_SAMPLES)
@@ -80,7 +80,7 @@ object MongoIntrospector {
         )
     }
 
-    /** Pure field-shape inference over already-sampled documents, split out so `MongoIntrospectorTest` can cover it without a live MongoDB. */
+    /** Pure field-shape inference over already-sampled documents. */
     fun inferColumns(samples: List<Document>): List<ColumnInfo> {
         if (samples.isEmpty()) return emptyList()
         val stats = linkedMapOf<String, FieldStats>()
@@ -95,7 +95,7 @@ object MongoIntrospector {
         val types = linkedSetOf<String>()
         var everAbsentOrNull = false
         val exampleValues = linkedSetOf<String>()
-        /** True once a genuinely NEW distinct value arrives after the cap; distinct from merely having capped insertion, so a truly high-cardinality field is never reported as if its first 20 values were the complete set. */
+        /** True once a new distinct value arrives after the example cap, marking the recorded set incomplete. */
         var exceededExampleCap = false
 
         fun toColumnInfo(path: String, totalSamples: Int): ColumnInfo {

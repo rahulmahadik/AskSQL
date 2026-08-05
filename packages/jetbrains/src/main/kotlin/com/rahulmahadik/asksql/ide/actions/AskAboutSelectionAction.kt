@@ -26,8 +26,7 @@ class AskAboutSelectionAction : DumbAwareAction() {
         toolWindow.show()
         chatContent?.let { content ->
             toolWindow.contentManager.setSelectedContent(content)
-            // Content is created once and reused, so refresh()'s consume-on-build only runs at
-            // construction; re-consume explicitly here or a later selection would never be picked up.
+            // Content is created once and reused, so the pending question is consumed explicitly here.
             content.getUserData(AskSqlToolWindowFactory.CHAT_PANEL_KEY)?.consumePendingQuestion()
         }
     }

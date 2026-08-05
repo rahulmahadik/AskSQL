@@ -5,10 +5,7 @@ import com.intellij.openapi.project.ProjectCloseListener
 import com.rahulmahadik.asksql.ide.db.ConnectionRegistry
 import com.rahulmahadik.asksql.ide.db.MongoClientRegistry
 
-/**
- * Registered in `plugin.xml` under `applicationListeners`. `projectClosing` fires before the
- * project's services are torn down, so every JDBC connection and MongoDB client can close synchronously.
- */
+/** Registered in `plugin.xml` under `applicationListeners`; `projectClosing` fires before the project's services are torn down. */
 class AskSqlProjectCloseListener : ProjectCloseListener {
     override fun projectClosing(project: Project) {
         project.getService(ConnectionRegistry::class.java).closeAll()

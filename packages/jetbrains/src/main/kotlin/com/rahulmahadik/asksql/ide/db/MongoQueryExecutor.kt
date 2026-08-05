@@ -34,10 +34,8 @@ object MongoQueryExecutor {
         withContext(Dispatchers.IO) {
             val started = System.nanoTime()
             val collection = database.getCollection(collectionName)
-            // Appended AFTER the guard's own $limit: whichever of the two is
-            // smaller wins (limits compose in sequence), so this only ever
-            // narrows the guard's cap, never widens it. Fetching one extra
-            // document is how truncation is detected without a second count query.
+            // Appended AFTER the guard's own $limit: sequential $limits compose, so the smaller wins.
+            // The one extra document is how truncation is detected without a second count query.
             val effectivePipeline = pipeline + Document("\$limit", (maxRows + 1).toLong())
 
             val docs = mutableListOf<Document>()
@@ -48,8 +46,7 @@ object MongoQueryExecutor {
                     .maxTime(timeoutMs, TimeUnit.MILLISECONDS)
                     .batchSize((maxRows + 1).coerceAtMost(10_000))
                     .iterator().use { cursor ->
-                        // Closing the cursor from the cancellation hook aborts the blocking batch
-                        // fetch, the Mongo counterpart of JdbcExecutor's Statement.cancel() wiring.
+                        // Closing the cursor from the cancellation hook aborts the blocking batch fetch.
                         job.invokeOnCompletion { cause ->
                             if (cause is kotlinx.coroutines.CancellationException) {
                                 try { cursor.close() } catch (_: Exception) { /* best-effort */ }

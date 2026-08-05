@@ -2,10 +2,7 @@ package com.rahulmahadik.asksql.ide.engine
 
 import com.rahulmahadik.asksql.ide.model.SchemaCatalog
 
-/**
- * Finds a real table name that's a likely misspelling of a question word, so a model that refused
- * ("no such table") can retry with the real name, told to disclose the correction rather than silently guess.
- */
+/** Finds a real table name that is a likely misspelling of a word in the question. */
 object SchemaFuzzyMatch {
 
     private val WORD_RE = Regex("""[A-Za-z][A-Za-z0-9_]{2,}""")
@@ -19,7 +16,7 @@ object SchemaFuzzyMatch {
         for (word in words) {
             for (table in catalog.tables) {
                 val name = table.name.lowercase()
-                if (name == word) continue // an exact match means the table exists; not the case this is for
+                if (name == word) continue // an exact match means the table exists
                 val threshold = maxOf(1, minOf(word.length, name.length) / 4)
                 val distance = levenshtein(word, name)
                 if (distance <= threshold && distance < bestDistance) {

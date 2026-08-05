@@ -8,12 +8,12 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
 
-/** Daemon so a leaked, still-running blocking call (a driver that ignores its own timeout, a hung NFS mount) never keeps the JVM/IDE process alive on its own. */
+/** Daemon threads, so a leaked blocking call never keeps the IDE process alive. */
 private val EXECUTOR = Executors.newCachedThreadPool { r -> Thread(r, "AskSQL-blocking-progress").apply { isDaemon = true } }
 
 /**
  * Runs [action] under a native modal progress dialog until it finishes, is cancelled, or [timeoutMs] elapses.
- * Bounded via `Future.get(timeout)`, not `withTimeout` (which never bounds a genuinely blocking call); a non-cooperative task leaks a daemon thread instead of hanging the caller.
+ * Bounded via `Future.get(timeout)`, not `withTimeout`, which never bounds a genuinely blocking call.
  */
 fun <T> runBlockingWithProgress(
     project: Project?,

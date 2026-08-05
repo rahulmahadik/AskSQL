@@ -2,7 +2,7 @@ package com.rahulmahadik.asksql.ide.settings
 
 import com.intellij.util.messages.Topic
 
-/** Broadcast when AI-provider/connection settings change, so already-open UI can refresh without polling. Published on the application message bus. */
+/** Broadcast on the application message bus when AI-provider or connection settings change. */
 fun interface AskSqlSettingsListener {
     fun settingsChanged()
 

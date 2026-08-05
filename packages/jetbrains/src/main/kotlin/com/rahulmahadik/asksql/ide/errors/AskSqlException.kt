@@ -15,7 +15,7 @@ enum class AskSqlErrorCode {
     LLM_UNAVAILABLE,
     LLM_BAD_OUTPUT,
     LLM_REFUSAL,
-    /** The model examined the schema and legitimately concluded the question is unanswerable from it; a normal outcome, not a malfunction, shown calmly rather than as a red error. */
+    /** The model concluded the question is unanswerable from the schema; shown calmly, not as a red error. */
     LLM_CANNOT_ANSWER,
     LLM_CONTEXT_OVERFLOW,
     CANCELLED,
@@ -33,10 +33,7 @@ class AskSqlException(
     val userMessage: String = defaultUserMessage(code),
     val detail: String? = null,
     val retryable: Boolean = code in RETRYABLE_CODES,
-    /**
-     * On a runtime DB error, the engine may attach a model-suggested corrected statement here,
-     * surfaced to the user for re-approval; never executed automatically.
-     */
+    /** A model-suggested corrected statement attached on a runtime DB error, surfaced for re-approval and never executed automatically. */
     var suggestedSql: String? = null,
     cause: Throwable? = null,
 ) : Exception(detail ?: userMessage, cause) {

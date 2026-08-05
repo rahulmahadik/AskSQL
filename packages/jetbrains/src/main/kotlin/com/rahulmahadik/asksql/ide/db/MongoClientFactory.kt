@@ -23,11 +23,9 @@ object MongoClientFactory {
             )
 
             val settings = MongoClientSettings.builder().applyConnectionString(ConnectionString(connectionString)).apply {
-                applicationName("AskSQL") // visible in db.currentOp()/serverStatus(), so a DBA can attribute this plugin's load
+                applicationName("AskSQL") // visible in db.currentOp()/serverStatus()
                 applyToConnectionPoolSettings { it.maxSize(5).maxConnectionIdleTime(60, TimeUnit.SECONDS) }
-                // Explicit and shorter than the driver's own defaults (30s/10s) so an unreachable
-                // host fails at a pace consistent with the other engines' ~10s connect timeouts,
-                // instead of "Test Connection" feeling stuck for half a minute before it gives up.
+                // Shorter than the driver's own 30s/10s defaults, matching the other engines' ~10s connect timeouts.
                 applyToClusterSettings { it.serverSelectionTimeout(10, TimeUnit.SECONDS) }
                 applyToSocketSettings { it.connectTimeout(10, TimeUnit.SECONDS).readTimeout(30, TimeUnit.SECONDS) }
                 if (!descriptor.user.isNullOrBlank() && !password.isNullOrEmpty()) {
@@ -42,7 +40,7 @@ object MongoClientFactory {
                 throw AskSqlException(AskSqlErrorCode.DB_UNREACHABLE, detail = e.message, cause = e)
             }
             try {
-                // MongoClients.create() never blocks or validates anything; a ping forces one real round-trip so a bad connection surfaces now, not on the first query.
+                // MongoClients.create() never blocks or validates; the ping forces one real round-trip.
                 client.getDatabase(descriptor.database?.takeIf { it.isNotBlank() } ?: "admin")
                     .runCommand(Document("ping", 1))
                 client

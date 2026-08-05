@@ -117,7 +117,7 @@ class SchemaTreePanel(private val project: Project) : Disposable {
     private fun editConnection(descriptor: ConnectionDescriptor) {
         val dialog = ConnectionEditorDialog(project, descriptor)
         val updated = dialog.showAndGetDescriptor() ?: return
-        // Secret before config, synchronously off the disposable scope, so a mid-edit close can't save a connection with no password.
+        // Secret first, config second, synchronously off the disposable scope.
         dialog.enteredPassword?.let { pwd ->
             runBlockingWithProgress(project, "Saving connection password", cancellable = false) {
                 AskSqlSecrets.setDbPassword(updated, pwd)
@@ -152,7 +152,7 @@ class SchemaTreePanel(private val project: Project) : Disposable {
                 s.connections = s.connections.filter { it.id != descriptor.id }
             }
         }
-        // Synchronous off the disposable scope, so dispose can't cancel it and a late removal can't wipe a re-added same-id password.
+        // Runs synchronously off the disposable scope.
         runBlockingWithProgress(project, "Removing connection password", cancellable = false) {
             AskSqlSecrets.removeDbPassword(descriptor.id)
         }
@@ -165,7 +165,7 @@ class SchemaTreePanel(private val project: Project) : Disposable {
         } else {
             project.getService(ConnectionRegistry::class.java).invalidate(descriptor.id)
         }
-        // The pipelines' schema caches would otherwise keep serving the old target for up to 300s.
+        // Drops the pipelines' schema caches, which hold the old target for up to 300s.
         AskSqlEngineService.getInstance(project).let {
             it.pipeline.invalidateCatalogCache()
             it.mongoPipeline.invalidateCatalogCache()
@@ -193,8 +193,7 @@ class SchemaTreePanel(private val project: Project) : Disposable {
 
         scope.launch {
             try {
-                // Each connection loads concurrently and updates the tree as it finishes, so one slow/broken connection can't block the rest.
-                // supervisorScope: a connection failing in a way loadConnectionNode can't catch must not cancel its siblings.
+                // Each connection loads concurrently and updates the tree as it finishes; supervisorScope keeps one failure from cancelling its siblings.
                 supervisorScope {
                     descriptors.mapIndexed { index, descriptor ->
                         launch {
@@ -208,18 +207,15 @@ class SchemaTreePanel(private val project: Project) : Disposable {
                     }.joinAll()
                 }
             } finally {
-                // In a finally: a load that fails would otherwise leave the panel marked busy,
-                // making every later Refresh a no-op for the rest of the session.
+                // In a finally: the busy flag clears even when a load fails.
                 val cancelled = !coroutineContext.isActive
                 ApplicationManager.getApplication().invokeLater {
                     if (forceRefresh && !cancelled) {
                         val loaded = nodes.filterNotNull()
                         val tables = loaded.sumOf { node -> tableCount(node) }
-                        // A connection that could not be read renders an error child instead of groups;
-                        // saying only "N tables" there would report a failed refresh as a clean one.
+                        // A connection that could not be read renders an error child instead of groups.
                         val failed = descriptors.size - loaded.count { tableCount(it) > 0 || hasEmptyMarker(it) }
                         val suffix = if (failed > 0) " ($failed could not be read)" else ""
-                        // Refreshing an unchanged schema looks identical to a Refresh that did nothing.
                         com.intellij.openapi.wm.WindowManager.getInstance().getStatusBar(project)
                             ?.info = "AskSQL: schema refreshed - $tables tables across ${descriptors.size} connection(s)$suffix"
                     }
@@ -300,12 +296,8 @@ class SchemaTreePanel(private val project: Project) : Disposable {
 }
 
 /**
- * Serializes schema reloads: one runs at a time and later requests fold into a single follow-up.
- * The follow-up keeps the strongest refresh asked for, so a Refresh pressed during a slow load
- * still bypasses the catalog cache instead of re-rendering the cached schema.
- *
- * Not synchronized: every call is made from the EDT (UI actions, the settings listener, and the
- * `invokeLater` that ends a load), so the state needs no locking.
+ * Serializes schema reloads: one runs at a time and later requests fold into a single follow-up
+ * that keeps the strongest refresh asked for. Not synchronized; every call is made from the EDT.
  */
 internal class ReloadCoalescer {
     private var loading = false

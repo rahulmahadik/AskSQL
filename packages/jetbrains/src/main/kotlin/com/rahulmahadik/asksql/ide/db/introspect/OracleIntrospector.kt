@@ -9,8 +9,8 @@ import com.rahulmahadik.asksql.ide.model.TableInfo
 import java.sql.Connection
 
 /**
- * Oracle has no catalog concept, so queries scope to `connection.schema` via `ALL_*` views, never `DBA_*`
- * (privilege this plugin shouldn't need). Routine volatility has no reliable signal, so routines report UNKNOWN: listed, never offered as callable.
+ * Oracle has no catalog concept; queries scope to `connection.schema` via `ALL_*` views, never `DBA_*`.
+ * Routines report UNKNOWN volatility, which Oracle exposes no reliable signal for.
  */
 object OracleIntrospector : Introspector {
 
@@ -20,9 +20,7 @@ object OracleIntrospector : Introspector {
 
         val tableComments = tableComments(connection, currentSchema)
         val columnComments = columnComments(connection, currentSchema)
-        // NUM_ROWS reflects the last time statistics were gathered (DBMS_STATS or an auto-stats
-        // job), not a live count, the same estimate-not-exact contract Postgres's reltuples
-        // already carries in PostgresIntrospector.
+        // NUM_ROWS is the last gathered statistic (DBMS_STATS or auto-stats), not a live count.
         val rowEstimates = rowEstimates(connection, currentSchema)
 
         val tables = raw.map { t ->
@@ -87,7 +85,7 @@ object OracleIntrospector : Introspector {
         return map
     }
 
-    /** Standalone functions/procedures only (v1); package member subprograms need `ALL_PROCEDURES`/`ALL_ARGUMENTS` join work not yet done here. */
+    /** Standalone functions/procedures only; package member subprograms are not listed. */
     private fun routines(connection: Connection, schema: String?): List<RoutineInfo> {
         val list = mutableListOf<RoutineInfo>()
         connection.prepareStatement(

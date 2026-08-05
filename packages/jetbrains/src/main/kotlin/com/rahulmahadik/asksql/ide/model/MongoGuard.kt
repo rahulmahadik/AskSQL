@@ -1,9 +1,6 @@
 package com.rahulmahadik.asksql.ide.model
 
-/**
- * MongoDB has no upstream `@asksql/core` counterpart. Original to this plugin,
- * with its own test suite instead of a parity harness.
- */
+/** MongoDB has no upstream `@asksql/core` counterpart; this policy is original to the plugin. */
 data class MongoGuardPolicy(
     val maxRows: Int = 1000,
     /** Object/array walk depth; plays [GuardPolicy.maxDepth]'s role for the Mongo guard. */

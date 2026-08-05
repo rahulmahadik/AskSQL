@@ -12,10 +12,7 @@ import com.intellij.testFramework.LightVirtualFile
 import java.awt.datatransfer.StringSelection
 import java.nio.file.Files
 
-/**
- * Bundles plugin/IDE versions and recent AskSQL log lines for bug reports. Secrets are never logged,
- * but driver/provider error text can echo attacker-influenceable fragments, so lines are capped at [MAX_LINE_CHARS].
- */
+/** Bundles plugin/IDE versions and recent AskSQL log lines for bug reports, each line capped at [MAX_LINE_CHARS]. */
 class CollectDiagnosticsAction : DumbAwareAction() {
     override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.BGT
 

@@ -6,7 +6,7 @@ import com.intellij.openapi.project.DumbAwareAction
 import com.intellij.openapi.wm.ToolWindowManager
 import com.rahulmahadik.asksql.ide.ui.AskSqlToolWindowFactory
 
-/** Clears the transcript and the follow-up context. Lives in the tool window title bar, the platform's place for window-wide actions. */
+/** Clears the transcript and the follow-up context. */
 class ClearChatAction : DumbAwareAction() {
     override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.EDT
 

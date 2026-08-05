@@ -12,8 +12,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 /**
- * PasswordSafe-backed secret storage; entry points hop to [Dispatchers.IO] since PasswordSafe blocks. DB passwords
- * carry [ConnectionDescriptor.endpointIdentity], checked on read, so re-pointing a connection id never leaks the old host's password.
+ * PasswordSafe-backed secret storage; entry points hop to [Dispatchers.IO] since PasswordSafe blocks.
+ * DB passwords carry [ConnectionDescriptor.endpointIdentity] and are checked against it on read.
  */
 object AskSqlSecrets {
 

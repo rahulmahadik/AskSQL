@@ -38,14 +38,16 @@ class AskSqlConfigurable : Configurable {
     private var maxSchemaTokensField: Int = settings.maxSchemaTokens
     private var requireApprovalField: Boolean = settings.requireApproval
     private var explainAutomaticallyField: Boolean = settings.explainAutomatically
+    private var allowDataInPromptField: Boolean = settings.allowDataInPrompt
     private var answerSchemaQuestionsField: Boolean = settings.answerSchemaQuestions
     private var customInstructionsField: String = settings.customInstructions
+    private var glossaryField: String = settings.glossary
     private val apiKeyComponent = JPasswordField()
 
     /** Typed as DialogPanel so [resetToDefaults] can call its real `reset()`. */
     private var dialogPanel: com.intellij.openapi.ui.DialogPanel? = null
 
-    /** Set by [resetToDefaults]: it resets `dialogPanel`'s modification baseline, so without this a Reset-then-OK would silently not persist. */
+    /** Forces [apply] to persist after [resetToDefaults] clears `dialogPanel`'s modification baseline. */
     private var forcePersistOnNextApply = false
 
     override fun getDisplayName(): String = "AskSQL"
@@ -135,9 +137,29 @@ class AskSqlConfigurable : Configurable {
                         .comment("Adds a plain-language description under every result. Uses one extra model call per query; the Explain button always works on demand.")
                 }
                 row {
+                    checkBox("Send sample column values to the model")
+                        .bindSelected({ allowDataInPromptField }, { allowDataInPromptField = it })
+                        .comment("Off by default. On the SQL engines the model only ever sees declared values, such as a column's ENUM labels from the DDL. MongoDB has no DDL to declare them, so its introspector records a few distinct field values while sampling; this setting decides whether those reach a prompt. Query results are never sent on any engine.")
+                }
+                row {
                     checkBox("Answer schema questions in plain language")
                         .bindSelected({ answerSchemaQuestionsField }, { answerSchemaQuestionsField = it })
                         .comment("When a question can't become SQL (\"what is this database for?\", \"how are these tables related?\", \"write me a DELETE for stale rows\"), answer it from the schema instead of erroring - a write request comes back as a statement to run yourself, never executed. Grounded in structure only, never data values; invented names are flagged. Accuracy depends on your model, so treat it as guidance, not fact.")
+                }
+            }
+            group("Business glossary") {
+                row {
+                    textArea()
+                        .bindText({ glossaryField }, { glossaryField = it })
+                        .applyToComponent { rows = 4 }
+                        .align(Align.FILL)
+                        .comment(
+                            "One term per line, as <code>term = definition</code>. Use it for words your schema " +
+                                "does not define (<code>big order = an order whose total_cents is over 100000</code>) " +
+                                "or for a column whose name only hints at its unit " +
+                                "(<code>revenue in dollars = sum of orders.total_cents divided by 100</code>). " +
+                                "Definitions go to the model with the schema.",
+                        )
                 }
             }
             group("Custom instructions") {
@@ -176,17 +198,16 @@ class AskSqlConfigurable : Configurable {
         maxSchemaTokensField = defaults.maxSchemaTokens
         requireApprovalField = defaults.requireApproval
         explainAutomaticallyField = defaults.explainAutomatically
+        allowDataInPromptField = defaults.allowDataInPrompt
         answerSchemaQuestionsField = defaults.answerSchemaQuestions
         customInstructionsField = defaults.customInstructions
+        glossaryField = defaults.glossary
         modelComboBox.removeAllItems()
         dialogPanel?.reset() // re-reads the (now-defaulted) backing fields into every bound Swing component
         forcePersistOnNextApply = true
     }
 
-    /**
-     * Actually calls the model. Constructing a client proves nothing - a wrong
-     * key, model id, or base URL all fail only once a request is made.
-     */
+    /** Makes a real model call: a wrong key, model id, or base URL only fails once a request is sent. */
     private fun testProvider(
         providerComboBox: com.intellij.openapi.ui.ComboBox<ProviderKind>,
         baseUrlTextField: javax.swing.JTextField,
@@ -250,8 +271,7 @@ class AskSqlConfigurable : Configurable {
         if (modelField in models) modelComboBox.selectedItem = modelField
     }
 
-    // Adds two cases the DSL binding graph can't see: forcePersistOnNextApply, and the API key
-    // field (a raw JPasswordField with no binding, so the DSL never learns it changed).
+    // Adds two cases the DSL binding graph can't see: forcePersistOnNextApply, and the unbound API key field.
     override fun isModified(): Boolean =
         forcePersistOnNextApply || (dialogPanel?.isModified() ?: false) || apiKeyComponent.password.isNotEmpty()
 
@@ -279,8 +299,10 @@ class AskSqlConfigurable : Configurable {
         settings.maxSchemaTokens = maxSchemaTokensField
         settings.requireApproval = requireApprovalField
         settings.explainAutomatically = explainAutomaticallyField
+        settings.allowDataInPrompt = allowDataInPromptField
         settings.answerSchemaQuestions = answerSchemaQuestionsField
-        settings.customInstructions = customInstructionsField.trim()
+        settings.customInstructions = customInstructionsField
+        settings.glossary = glossaryField.trim()
         if (apiKey.isNotEmpty()) {
             runBlockingWithProgress(null, "Saving API key") {
                 AskSqlSecrets.setApiKey(providerField!!.wireName, apiKey)
@@ -288,8 +310,7 @@ class AskSqlConfigurable : Configurable {
             apiKeyComponent.text = ""
         }
         forcePersistOnNextApply = false
-        // Refreshes an already-open Chat tab's provider/model label and onboarding state even when
-        // Settings was opened via the IDE Settings menu, not the Chat tab's own entry points.
+        // Refreshes an already-open Chat tab's provider/model label and onboarding state.
         ApplicationManager.getApplication().messageBus.syncPublisher(AskSqlSettingsListener.TOPIC).settingsChanged()
     }
 }

@@ -22,10 +22,7 @@ class ConnectionsConfigurable(private val project: Project) : Configurable {
     /** Snapshot taken by [reset], compared against the live list in [isModified] for native Apply-button behavior (greyed out until something really changed). */
     private var savedSnapshot: List<ConnectionDescriptor> = emptyList()
 
-    /**
-     * Passwords entered in Add/Edit are staged here and flushed to PasswordSafe only from [apply],
-     * so Cancelling the Settings dialog doesn't leave an orphaned or overwritten keychain entry.
-     */
+    /** Passwords entered in Add/Edit are staged here and flushed to PasswordSafe only from [apply]. */
     private val pendingPasswords = mutableMapOf<String, String>()
 
     override fun getDisplayName(): String = "AskSQL Connections"
@@ -34,8 +31,7 @@ class ConnectionsConfigurable(private val project: Project) : Configurable {
         loadFromSettings()
 
         val list = JBList(model)
-        // A bare DefaultListCellRenderer() calls ConnectionDescriptor's data-class toString()
-        // (host/user/id and all); this must render descriptor.name instead.
+        // Renders descriptor.name, not ConnectionDescriptor's data-class toString().
         list.cellRenderer = object : javax.swing.DefaultListCellRenderer() {
             override fun getListCellRendererComponent(
                 list: javax.swing.JList<*>?, value: Any?, index: Int, isSelected: Boolean, cellHasFocus: Boolean,
@@ -90,10 +86,10 @@ class ConnectionsConfigurable(private val project: Project) : Configurable {
 
     private fun currentList(): List<ConnectionDescriptor> = (0 until model.size).map { model.getElementAt(it) }
 
-    /** Real dirtiness check (not a hardcoded `true`) so the native Settings dialog's Apply button behaves normally, enabled only once a connection is actually added, edited, or removed. */
+    /** True once a connection has been added, edited, or removed; drives the Settings dialog's Apply button. */
     override fun isModified(): Boolean = currentList() != savedSnapshot || pendingPasswords.isNotEmpty()
 
-    /** Reverts the on-screen list to the last-saved connections, invoked by the Settings dialog on Cancel/reopen. Without this the list would keep showing in-progress, un-applied edits. */
+    /** Reverts the on-screen list to the last-saved connections; invoked by the Settings dialog on Cancel/reopen. */
     override fun reset() {
         loadFromSettings()
         pendingPasswords.clear()
@@ -102,7 +98,7 @@ class ConnectionsConfigurable(private val project: Project) : Configurable {
     override fun apply() {
         val descriptors = currentList()
         val newIds = descriptors.map { it.id }.toSet()
-        // Secrets before the config commit, so a failed keychain write leaves the connection list untouched.
+        // Secrets are committed before the connection list.
         if (pendingPasswords.isNotEmpty()) {
             val toWrite = pendingPasswords.toMap()
             runBlockingWithProgress(project, "Saving connection passwords", cancellable = false) {
@@ -120,17 +116,14 @@ class ConnectionsConfigurable(private val project: Project) : Configurable {
         AskSqlProjectSettings.getInstance(project).connections = descriptors.map { it.toState() }
         previouslyKnownIds = newIds
         savedSnapshot = descriptors
-        // Every cache keyed by connection id must be dropped together: editing a connection's
-        // host/database while keeping the same id would otherwise leave a stale JDBC connection,
-        // MongoClient, or up to 300s of cached schema serving the old target.
+        // Every cache keyed by connection id is dropped together; an edit can change the target while keeping the id.
         project.getService(com.rahulmahadik.asksql.ide.db.ConnectionRegistry::class.java).invalidateAll()
         project.getService(com.rahulmahadik.asksql.ide.db.MongoClientRegistry::class.java).invalidateAll()
         project.getService(com.rahulmahadik.asksql.ide.AskSqlEngineService::class.java).let {
             it.pipeline.invalidateCatalogCache()
             it.mongoPipeline.invalidateCatalogCache()
         }
-        // Refreshes an already-open Chat tab's connection combo/onboarding state even when this
-        // page was opened via the IDE Settings menu, not the Chat tab's own buttons.
+        // Refreshes an already-open Chat tab's connection combo and onboarding state.
         ApplicationManager.getApplication().messageBus.syncPublisher(AskSqlSettingsListener.TOPIC).settingsChanged()
     }
 }

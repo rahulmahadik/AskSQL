@@ -11,7 +11,7 @@ import kotlinx.coroutines.async
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 
-/** Owns the lifecycle of every configured [MongoClient] for a project, thinner than [ConnectionRegistry] since a [MongoClient] is already internally pooled and thread-safe. */
+/** Owns the lifecycle of every configured [MongoClient] for a project. */
 @Service(Service.Level.PROJECT)
 class MongoClientRegistry(private val project: Project, private val scope: CoroutineScope) {
 
@@ -26,7 +26,7 @@ class MongoClientRegistry(private val project: Project, private val scope: Corou
     private val slots = ConcurrentHashMap<String, Slot>()
     private val generations = ConcurrentHashMap<String, AtomicInteger>()
 
-    /** Runs [block] with a live client for [descriptor]; the only way callers should touch a client, so a concurrent [invalidate] can't close it mid-use. */
+    /** Runs [block] with a live client for [descriptor]; the only supported way to touch a client. */
     suspend fun <T> withClient(descriptor: ConnectionDescriptor, password: String?, block: suspend (MongoClient) -> T): T {
         val generation = generations.getOrPut(descriptor.id) { AtomicInteger(0) }.get()
         while (true) {
@@ -39,13 +39,11 @@ class MongoClientRegistry(private val project: Project, private val scope: Corou
             val client = try {
                 slot.deferred.await()
             } catch (e: Exception) {
-                // A failed connect must not poison this id forever; remove it so the next call
-                // opens a fresh attempt instead of replaying this same cached exception indefinitely.
+                // Drop the failed slot so the next call opens a fresh attempt.
                 slots.remove(descriptor.id, slot)
                 throw e
             }
             slot.leases.incrementAndGet()
-            // Same race ConnectionRegistry.withConnection guards against via connection.isClosed;
             // MongoClient has no public isClosed(), hence the explicit flag.
             if (slot.superseded && slot.closed) {
                 slot.leases.decrementAndGet()
@@ -99,7 +97,7 @@ class MongoClientRegistry(private val project: Project, private val scope: Corou
         try {
             client.close()
         } catch (e: Exception) {
-            log.warn("Error closing AskSQL MongoDB client", e) // expected/recoverable, never Logger.error, which surfaces a Fatal Error dialog
+            log.warn("Error closing AskSQL MongoDB client", e) // never Logger.error, which surfaces a Fatal Error dialog
         }
     }
 

@@ -37,9 +37,11 @@ class MongoGuardTest {
         assertEquals(2, stages.size) // the original $match stage plus the auto-appended $limit
     }
 
-    @Test fun `blocks empty pipeline`() {
+    @Test fun `blocks a blank pipeline but allows the empty one`() {
         assertFalse(guard("   ").allowed)
-        assertFalse(guard("[]").allowed)
+        // `[]` is valid MongoDB and core auto-limits it; a model dodging with it is caught by
+        // MongoEnginePipeline.isNoOpPipeline, not here.
+        assertTrue(guard("[]").allowed)
     }
 
     @Test fun `blocks unparseable garbage fail-closed`() {
@@ -138,6 +140,31 @@ class MongoGuardTest {
     @Test fun `blocks where hidden inside a facet branch`() {
         val json = """[{"${'$'}facet": {"branchA": [{"${'$'}match": {"${'$'}where": "1"}}], "branchB": [{"${'$'}count": "n"}]}}]"""
         assertFalse(guard(json).allowed)
+    }
+
+    /** A $facet branch returns its rows inside ONE output document, which the top-level $limit counts as a single row. */
+    @Test fun `caps every facet branch, not just the top level`() {
+        val json = """[{"${'$'}facet": {"rows": [{"${'$'}match": {"status": "paid"}}], "counted": [{"${'$'}count": "n"}]}}]"""
+        val v = guard(json)
+        assertTrue(v.allowed)
+        assertTrue(v.autoLimited)
+
+        val facet = MongoGuard.parsePipeline(v.pipelineJson).first()["\$facet"] as org.bson.Document
+        for (branch in listOf("rows", "counted")) {
+            val stages = facet.getList(branch, org.bson.Document::class.java)
+            val limit = (stages.lastOrNull()?.get("\$limit") as? Number)?.toLong() ?: 0L
+            assertEquals("the \"$branch\" branch needs its own cap", 1000L, limit)
+        }
+    }
+
+    @Test fun `lowers a high limit inside a facet branch`() {
+        val json = """[{"${'$'}facet": {"rows": [{"${'$'}match": {"status": "paid"}}, {"${'$'}limit": 500000}]}}]"""
+        val v = guard(json)
+        assertTrue(v.allowed)
+        assertTrue(v.loweredLimit)
+        val facet = MongoGuard.parsePipeline(v.pipelineJson).first()["\$facet"] as org.bson.Document
+        val stages = facet.getList("rows", org.bson.Document::class.java)
+        assertEquals(1000L, (stages.last()["\$limit"] as Number).toLong())
     }
 
     @Test fun `allows a legitimate nested lookup pipeline`() {

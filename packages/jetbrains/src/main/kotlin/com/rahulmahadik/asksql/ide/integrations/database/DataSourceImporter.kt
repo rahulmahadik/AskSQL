@@ -4,10 +4,7 @@ import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.project.Project
 import com.rahulmahadik.asksql.ide.model.EngineKind
 
-/**
- * Best-effort, purely reflective import of connection basics (never a password) from the Database
- * plugin, keeping the build IntelliJ-Community-only. Every step fails soft to an empty list, never throws.
- */
+/** Reflective import of connection basics (never a password) from the Database plugin; every step fails soft to an empty list. */
 object DataSourceImporter {
 
     data class ImportedDataSource(val name: String, val engine: EngineKind, val host: String?, val port: Int?, val database: String?, val user: String?)

@@ -1,9 +1,6 @@
 package com.rahulmahadik.asksql.ide.model
 
-/**
- * Built-in engine identifiers: core's `EngineKind` as a closed enum rather than an open string
- * union, since every engine-specific code path is written against these exact members.
- */
+/** Built-in engine identifiers; core's `EngineKind` as a closed enum. */
 enum class EngineKind {
     POSTGRES,
     MYSQL,
@@ -92,8 +89,7 @@ object Dialects {
         ),
     )
 
-    // Oracle has no upstream `@asksql/core` counterpart; these notes are original to this
-    // plugin, and PromptParityTest's byte-identical check does not cover them.
+    // Oracle has no upstream `@asksql/core` counterpart; PromptParityTest does not cover these notes.
     val ORACLE = DialectInfo(
         engine = EngineKind.ORACLE,
         quoteChar = '"',

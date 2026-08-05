@@ -17,24 +17,20 @@ data class AskSqlAppState(
     @JvmField val maxRows: Int = 100,
     /** Token budget for the schema sent to the model (estimate at ~4 chars/token). Higher fits more tables for complex joins; lower keeps prompts small for limited-context models. */
     @JvmField val maxSchemaTokens: Int = 5000,
+    /** Send a few example values per field to the model. Off by default: only the schema leaves the machine. */
+    @JvmField val allowDataInPrompt: Boolean = false,
     @JvmField val requireApproval: Boolean = false,
     /** Auto-generate a plain-language description of each answer (one extra model call per query); the "Explain" button also produces it on demand. */
     @JvmField val explainAutomatically: Boolean = true,
-    /**
-     * When a question can't become SQL, answer it in prose from the schema (structure only, grounded,
-     * invented names flagged) instead of erroring; write requests come back as a statement to run
-     * yourself, never executed. Only reached on the path that would otherwise be an error.
-     */
+    /** When a question can't become SQL, answer it in prose from the schema instead of erroring; a write request comes back as a statement to run yourself, never executed. */
     @JvmField val answerSchemaQuestions: Boolean = true,
     @JvmField val connections: List<ConnectionState> = emptyList(),
-    /** Appended verbatim after the default system-prompt rules (see [com.rahulmahadik.asksql.ide.engine.Prompts.buildSqlSystem]); the AST guard still enforces read-only regardless. */
+    /** Appended verbatim after the default system-prompt rules (see [com.rahulmahadik.asksql.ide.engine.Prompts.buildSqlSystem]). */
     @JvmField val customInstructions: String = "",
+    @JvmField val glossary: String = "",
 )
 
-/**
- * Application-scoped settings: AI provider/model/key selection and global engine defaults.
- * `RoamingType.DISABLED` since this is per-machine data, not something to sync across machines.
- */
+/** Application-scoped settings: AI provider/model/key selection and global engine defaults, held per machine (`RoamingType.DISABLED`). */
 @Service(Service.Level.APP)
 @State(name = "AskSqlAppSettings", storages = [Storage(value = "asksql.xml", roamingType = RoamingType.DISABLED)])
 class AskSqlAppSettings : SerializablePersistentStateComponent<AskSqlAppState>(migrate(AskSqlAppState())) {
@@ -72,6 +68,10 @@ class AskSqlAppSettings : SerializablePersistentStateComponent<AskSqlAppState>(m
         get() = state.maxSchemaTokens
         set(value) { updateState { it.copy(maxSchemaTokens = value) } }
 
+    var allowDataInPrompt: Boolean
+        get() = state.allowDataInPrompt
+        set(value) { updateState { it.copy(allowDataInPrompt = value) } }
+
     var requireApproval: Boolean
         get() = state.requireApproval
         set(value) { updateState { it.copy(requireApproval = value) } }
@@ -87,6 +87,10 @@ class AskSqlAppSettings : SerializablePersistentStateComponent<AskSqlAppState>(m
     var connections: List<ConnectionState>
         get() = state.connections
         set(value) { updateState { it.copy(connections = value) } }
+
+    var glossary: String
+        get() = state.glossary
+        set(value) { updateState { it.copy(glossary = value) } }
 
     var customInstructions: String
         get() = state.customInstructions

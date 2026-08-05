@@ -54,10 +54,7 @@ data class RoutineInfo(
     val args: String,
     val returns: String? = null,
     val language: String? = null,
-    /**
-     * Only IMMUTABLE/STABLE routines are offered to the model as callable;
-     * VOLATILE/UNKNOWN are listed in the schema browser but excluded from the prompt (same rule as core).
-     */
+    /** Only IMMUTABLE/STABLE routines are offered to the model as callable; VOLATILE/UNKNOWN are listed but never called. */
     val volatility: RoutineVolatility,
     val securityDefiner: Boolean = false,
     val source: String? = null,

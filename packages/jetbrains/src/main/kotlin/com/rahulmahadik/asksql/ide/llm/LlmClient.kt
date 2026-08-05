@@ -20,7 +20,7 @@ import java.nio.charset.StandardCharsets
 import java.time.Duration
 import java.util.concurrent.TimeoutException
 
-/** A single chat-completion call with streaming tokens; thin adapters over each provider's HTTP wire format, no provider SDK dependency needed for small JSON payloads. */
+/** A single chat-completion call with streaming tokens; thin adapters over each provider's HTTP wire format. */
 interface LlmClient {
     suspend fun chat(system: String, userPrompt: String, onToken: TokenListener? = null): LlmResult
     suspend fun listModels(): List<String>
@@ -28,12 +28,35 @@ interface LlmClient {
 
 object LlmClients {
 
+    /** Greedy decoding for every provider, matching core's `buildLlmRequestOptions`. */
+    const val TEMPERATURE = 0.0
+
+    /** OpenAI o-series and GPT-5 fix temperature internally and reject it being set. */
+    private val REASONING_MODEL_RE = Regex("""(?:^|[/:])(o[1-9](?:$|[-.\d])|gpt-5)""", RegexOption.IGNORE_CASE)
+
+    /** A provider rejecting the request specifically because the model fixes temperature internally. */
+    private val UNSUPPORTED_TEMPERATURE_RE = Regex(
+        """(?:unsupported|not support(?:ed)?|does not support)[^.]{0,60}temperature|temperature[^.]{0,60}(?:unsupported|not support(?:ed)?)""",
+        RegexOption.IGNORE_CASE,
+    )
+
+    fun isUnsupportedTemperatureError(e: Throwable): Boolean {
+        val detail = (e as? com.rahulmahadik.asksql.ide.errors.AskSqlException)?.detail.orEmpty()
+        return UNSUPPORTED_TEMPERATURE_RE.containsMatchIn(e.message.orEmpty() + " " + detail)
+    }
+
+    fun acceptsTemperature(modelId: String?): Boolean {
+        if (modelId.isNullOrBlank()) return true
+        return !(REASONING_MODEL_RE.containsMatchIn(modelId) && !modelId.contains("chat", ignoreCase = true))
+    }
+
+
     private val CONTEXT_OVERFLOW_RE = Regex("""context|token|length|maximum|too long|exceeds""", RegexOption.IGNORE_CASE)
 
-    /** Same classification as core's `classifyLlmError`: a 400/413 whose body talks about context/token/length is a context-overflow, not a generic outage; [EnginePipeline.ask]/[com.rahulmahadik.asksql.ide.engine.MongoEnginePipeline.ask] shrink the schema and retry on that code. */
+    /** Same classification as core's `classifyLlmError`: a 400/413 whose body talks about context/token/length is a context-overflow, not a generic outage. */
     fun isContextOverflowMessage(message: String): Boolean = CONTEXT_OVERFLOW_RE.containsMatchIn(message)
 
-    /** A shared [HttpClient] wired to the platform's proxy selector, so every provider call honors a corporate HTTP/SOCKS proxy like the rest of the IDE. */
+    /** A shared [HttpClient] wired to the platform's proxy selector, so provider calls honor the IDE's HTTP/SOCKS proxy. */
     val sharedHttpClient: HttpClient by lazy {
         HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(15))
@@ -71,7 +94,7 @@ object LlmClients {
 
     private const val CHAT_TIMEOUT_MS = 600_000L
 
-    /** Bounds a full `chat()` call, streamed response included, so a provider that goes silent mid-stream doesn't hang forever. Uses [withHardTimeout] (a real `Future.get`), not `kotlinx.coroutines.withTimeout`, since the latter is dispatcher-bound and gets fast-forwarded by test virtual clocks that don't know about the real blocking HTTP read. */
+    /** Bounds a full `chat()` call, streamed response included. Uses [withHardTimeout] (a real `Future.get`), not `kotlinx.coroutines.withTimeout`, which test virtual clocks fast-forward. */
     suspend fun <T> withChatTimeout(block: suspend () -> T): T =
         try {
             withHardTimeout(CHAT_TIMEOUT_MS) { block() }
@@ -85,13 +108,11 @@ object LlmClients {
 
     /**
      * Sends [request] and returns a [BufferedReader] over its body; cancelling the calling coroutine
-     * closes the HTTP stream, unblocking the uninterruptible socket read. Non-2xx becomes [AskSqlException] immediately.
+     * closes the HTTP stream. Non-2xx becomes [AskSqlException] immediately.
      */
     suspend fun openCancellableSseStream(httpClient: HttpClient, request: HttpRequest, authErrorCode: AskSqlErrorCode): BufferedReader {
-        // Captured before the withContext hop inside onIo{}: that hop creates a short-lived child
-        // job that completes the moment this returns the BufferedReader, so the close-on-cancel
-        // hook must go on the caller's own job (what Stop cancels), which stays alive for the
-        // whole read loop.
+        // Captured before the withContext hop in onIo{}: the close-on-cancel hook goes on the caller's
+        // own job (what Stop cancels), not that hop's short-lived child.
         val callerJob = currentCoroutineContext().job
         return onIo {
             val response: HttpResponse<java.io.InputStream> = try {

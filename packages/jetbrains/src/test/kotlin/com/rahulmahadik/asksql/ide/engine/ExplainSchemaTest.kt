@@ -117,6 +117,24 @@ class ExplainSchemaTest {
         assertTrue(sa.tables.contains("customers"))
     }
 
+    @Test fun `explainSchema hands back the read-only query it proposed`() = runTest {
+        val db = descriptor(seedDb())
+        val sa = pipeline().explainSchema(
+            "How do I join orders and customers?", db, null,
+            FixedLlm("Join them like this:\n\n```sql\nSELECT c.id FROM customers c JOIN orders o ON o.customer_id = c.id\n```"),
+        )
+        assertTrue(sa.proposedSql ?: "", (sa.proposedSql ?: "").contains("JOIN orders"))
+    }
+
+    @Test fun `explainSchema never hands back a write proposal`() = runTest {
+        val db = descriptor(seedDb())
+        val sa = pipeline().explainSchema(
+            "write a statement that deletes cancelled orders", db, null,
+            FixedLlm("Run this yourself:\n\n```sql\nDELETE FROM orders WHERE status = 'cancelled'\n```"),
+        )
+        assertEquals(null, sa.proposedSql)
+    }
+
     @Test fun `explainSchema repairs an ungrounded understanding answer on one retry`() = runTest {
         val db = descriptor(seedDb())
         val sa = pipeline().explainSchema(

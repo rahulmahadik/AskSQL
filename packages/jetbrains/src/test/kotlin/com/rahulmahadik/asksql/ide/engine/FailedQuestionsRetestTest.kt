@@ -34,6 +34,12 @@ import kotlin.time.Duration.Companion.minutes
 @Category(IntegrationTest::class)
 class FailedQuestionsRetestTest {
 
+    /** Overridable so the suite runs on whatever models a machine has; comma-separated. */
+    private fun evalModels(): List<String> =
+        System.getenv("ASKSQL_OLLAMA_MODEL")?.split(",")?.map { it.trim() }?.filter { it.isNotEmpty() }
+            ?: listOf("qwen3-coder:30b-a3b-q8_0", "qwen2.5-coder:32b-instruct-q8_0")
+
+
     companion object {
         private const val OLLAMA_BASE_URL = "http://localhost:11434/v1"
         private val REPORT_DIR = System.getProperty("java.io.tmpdir")
@@ -123,7 +129,7 @@ class FailedQuestionsRetestTest {
         val pgUp = runCatching { Socket("localhost", 55432).use { true } }.getOrDefault(false)
         assumeTrue("Neither MySQL nor Postgres reachable", mysqlUp || pgUp)
 
-        val models = listOf("qwen2.5-coder:14b-instruct", "qwen2.5:14b-instruct")
+        val models = evalModels()
         val report = StringBuilder()
         val registry = ConnectionRegistry(fakeProject(), CoroutineScope(SupervisorJob() + Dispatchers.Default))
         val pipeline = EnginePipeline(registry)
@@ -169,7 +175,7 @@ class FailedQuestionsRetestTest {
     @Test
     fun `retest the failed duckdb question with untried local models`() = runTest(timeout = 60.minutes) {
         assumeTrue("Ollama not reachable", runCatching { Socket("localhost", 11434).use { true } }.getOrDefault(false))
-        val models = listOf("qwen2.5-coder:14b-instruct", "qwen2.5:14b-instruct")
+        val models = evalModels()
         val report = StringBuilder()
         val dbFile = File.createTempFile("asksql-retest", ".duckdb")
         dbFile.delete()
@@ -207,7 +213,7 @@ class FailedQuestionsRetestTest {
     @Test
     fun `retest the failed mongodb questions with untried local models`() = runTest(timeout = 60.minutes) {
         assumeTrue("MongoDB not reachable", runCatching { Socket("localhost", 57017).use { true } }.getOrDefault(false))
-        val models = listOf("qwen2.5-coder:14b-instruct", "qwen2.5:14b-instruct")
+        val models = evalModels()
         val report = StringBuilder()
         val descriptor = ConnectionDescriptor(
             id = "mongo-retest", name = "retest", engine = EngineKind.MONGODB, scope = ConnectionScope.PROJECT,

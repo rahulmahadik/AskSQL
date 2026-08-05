@@ -2,10 +2,7 @@ package com.rahulmahadik.asksql.ide.llm
 
 import java.io.BufferedReader
 
-/**
- * Minimal Server-Sent-Events line reader shared by every [LlmClient]: `data:` lines, blank-line
- * terminators, and the `data: [DONE]` sentinel. Retry/id/event-name fields are unused by every supported provider.
- */
+/** Minimal Server-Sent-Events line reader: `data:` lines, blank-line terminators, and the `data: [DONE]` sentinel. */
 class SseReader(private val reader: BufferedReader) {
 
     /** Invokes [onData] once per SSE `data:` payload; returns normally on stream end or `[DONE]`. */

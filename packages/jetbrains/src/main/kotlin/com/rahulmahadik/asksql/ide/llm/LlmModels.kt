@@ -1,9 +1,6 @@
 package com.rahulmahadik.asksql.ide.llm
 
-/**
- * The VS Code extension's provider set plus named presets (LM_STUDIO, NVIDIA) for settings-UI
- * discoverability; the presets add only a friendly name and default base URL over OPENAI_COMPATIBLE.
- */
+/** Supported providers; LM_STUDIO and NVIDIA are presets adding a friendly name and default base URL over OPENAI_COMPATIBLE. */
 enum class ProviderKind {
     OPENAI, ANTHROPIC, GOOGLE, GROQ, OLLAMA, OPENAI_COMPATIBLE, LM_STUDIO, NVIDIA;
 

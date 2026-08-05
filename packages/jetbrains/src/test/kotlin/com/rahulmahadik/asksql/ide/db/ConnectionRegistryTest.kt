@@ -101,4 +101,29 @@ class ConnectionRegistryTest {
         assertNotSame(first, second)
         second.close()
     }
+
+    /** [JdbcExecutor]'s lock map keys strongly on the [Connection], so a dropped one has to be released there too. */
+    private fun perConnectionLocks(): Map<*, *> {
+        val field = JdbcExecutor::class.java.getDeclaredField("perConnectionLocks")
+        field.isAccessible = true
+        return field.get(JdbcExecutor) as Map<*, *>
+    }
+
+    /** A connection that fails its validity probe - a server restart or a dropped VPN - is closed, not just unmapped. */
+    @Test
+    fun `a connection failing the validity probe is released, not only dropped`() = runTest {
+        val registry = registry()
+        val descriptor = sqliteDescriptor()
+        val dead = registry.withConnection(descriptor, null) { it }
+        JdbcExecutor.withConnectionLock(dead) { } // the entry every DuckDB and Oracle statement leaves behind
+        dead.close()
+
+        val fresh = registry.withConnection(descriptor, null) { it }
+        assertNotSame(dead, fresh)
+        assertFalse(
+            "a dropped connection must not stay keyed in JdbcExecutor's per-connection lock map",
+            perConnectionLocks().containsKey(dead),
+        )
+        fresh.close()
+    }
 }

@@ -32,7 +32,7 @@ object DuckDbIntrospector : Introspector {
                 }
             }
         } catch (e: Exception) {
-            // duckdb_tables() unavailable on very old DuckDB builds; comments/estimates are enhancements only.
+            // duckdb_tables() is unavailable on very old DuckDB builds.
         }
 
         val tables = raw.map { t ->
@@ -55,7 +55,7 @@ object DuckDbIntrospector : Introspector {
         return SchemaCatalog(engine = EngineKind.DUCKDB, schemas = schemas, tables = tables)
     }
 
-    /** [DuckDbFileLoader] records every table/view it loads from a user file in its own marker table; absent entirely for a DuckDB database that was never used with the upload feature. */
+    /** [DuckDbFileLoader] records every table/view it loads from a user file in its own marker table. */
     private fun fileSourcedTableNames(connection: Connection): Set<String> {
         val names = mutableSetOf<String>()
         try {

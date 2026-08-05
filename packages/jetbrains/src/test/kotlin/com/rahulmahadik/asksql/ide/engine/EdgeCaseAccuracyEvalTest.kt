@@ -38,7 +38,8 @@ import kotlin.time.Duration.Companion.minutes
 class EdgeCaseAccuracyEvalTest {
 
     companion object {
-        private const val MODEL = "qwen2.5:14b-instruct"
+        /** Overridable so the eval runs on whatever model a machine has. */
+        private val MODEL: String = System.getenv("ASKSQL_OLLAMA_MODEL")?.substringBefore(",")?.trim()?.ifEmpty { null } ?: "qwen2.5-coder:7b"
         private const val OLLAMA_BASE_URL = "http://localhost:11434/v1"
         private val REPORT_DIR = System.getProperty("java.io.tmpdir")
     }

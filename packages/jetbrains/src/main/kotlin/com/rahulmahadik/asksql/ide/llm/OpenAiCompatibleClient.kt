@@ -28,10 +28,19 @@ internal class OpenAiCompatibleClient(
         BaseUrlGuard.assertBaseUrl(baseUrl, carriesSecret = !config.apiKey.isNullOrEmpty())
     }
 
-    override suspend fun chat(system: String, userPrompt: String, onToken: TokenListener?): LlmResult {
+    /** One re-send without `temperature` when the provider says it does not take one; core does the same in `callModel`. */
+    override suspend fun chat(system: String, userPrompt: String, onToken: TokenListener?): LlmResult =
+        try {
+            chatOnce(system, userPrompt, onToken, omitTemperature = false)
+        } catch (e: AskSqlException) {
+            if (LlmClients.isUnsupportedTemperatureError(e)) chatOnce(system, userPrompt, onToken, omitTemperature = true) else throw e
+        }
+
+    private suspend fun chatOnce(system: String, userPrompt: String, onToken: TokenListener?, omitTemperature: Boolean): LlmResult {
         val body = JsonObject().apply {
             addProperty("model", config.model)
             addProperty("stream", true)
+            if (!omitTemperature && LlmClients.acceptsTemperature(config.model)) addProperty("temperature", LlmClients.TEMPERATURE)
             add("messages", com.google.gson.JsonArray().apply {
                 add(JsonObject().apply { addProperty("role", "system"); addProperty("content", system) })
                 add(JsonObject().apply { addProperty("role", "user"); addProperty("content", userPrompt) })
@@ -48,14 +57,10 @@ internal class OpenAiCompatibleClient(
         val textBuilder = StringBuilder()
         var promptTokens = 0
         var completionTokens = 0
-        // Captured once here (a suspend call) so the non-suspend SSE callback
-        // below can cheaply re-check liveness per line via the plain
-        // CoroutineContext.ensureActive() extension.
+        // Captured here: the non-suspend SSE callback below cannot call currentCoroutineContext().
         val coroutineContext = currentCoroutineContext()
 
-        // The blocking line-by-line read loop needs its own IO hop too (not just opening the
-        // connection); otherwise it runs on whatever dispatcher the caller's coroutine is on
-        // (Dispatchers.Default for the chat UI), tying up a CPU-sized pool thread.
+        // The blocking line-by-line read loop needs its own IO hop, not just the connection open.
         LlmClients.onIo {
             reader.use { r ->
                 SseReader(r).forEachDataLine { payload ->

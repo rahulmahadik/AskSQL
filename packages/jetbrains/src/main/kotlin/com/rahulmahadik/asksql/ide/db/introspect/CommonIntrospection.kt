@@ -13,10 +13,7 @@ import java.sql.DatabaseMetaData
  */
 object CommonIntrospection {
 
-    /**
-     * `DatabaseMetaData` name arguments are LIKE patterns: an unescaped `_` in a table name can match
-     * an unrelated sibling (`foo_bar` matching `fooxbar`), silently corrupting the introspected schema.
-     */
+    /** `DatabaseMetaData` name arguments are LIKE patterns: an unescaped `_` matches an unrelated sibling (`foo_bar` matching `fooxbar`). */
     private fun DatabaseMetaData.escapePattern(literal: String): String {
         val esc = try { searchStringEscape } catch (e: Exception) { "\\" }
         return literal.replace(esc, esc + esc).replace("_", "${esc}_").replace("%", "${esc}%")
@@ -33,18 +30,12 @@ object CommonIntrospection {
         var indexes: List<IndexInfo> = emptyList(),
     )
 
-    /**
-     * @param schemaPattern an EXACT schema name (escaped internally, despite the pattern-shaped JDBC
-     *   parameter) so `_`/`%` can't match a sibling schema; null means every schema, not a literal wildcard.
-     */
+    /** @param schemaPattern an EXACT schema name, escaped internally despite the pattern-shaped JDBC parameter; null means every schema. */
     fun listTables(connection: Connection, catalog: String?, schemaPattern: String?): List<RawTable> {
         val meta = connection.metaData
         val result = mutableListOf<RawTable>()
         val escapedSchemaPattern = schemaPattern?.let { meta.escapePattern(it) }
-        // "PARTITIONED TABLE" is pgjdbc's own TABLE_TYPE for a declaratively partitioned table's
-        // PARENT row. Without it, the parent never appears in the catalog (only its partition
-        // children do, as ordinary "TABLE"), so PostgresIntrospector's partition-collapsing logic
-        // has nothing to collapse children into.
+        // "PARTITIONED TABLE" is pgjdbc's own TABLE_TYPE for a declaratively partitioned table's PARENT row; without it only its children appear, as ordinary "TABLE".
         meta.getTables(catalog, escapedSchemaPattern, "%", arrayOf("TABLE", "VIEW", "MATERIALIZED VIEW", "SYSTEM TABLE", "PARTITIONED TABLE")).use { rs ->
             while (rs.next()) {
                 val tableType = rs.getString("TABLE_TYPE")
@@ -61,10 +52,7 @@ object CommonIntrospection {
                 )
             }
         }
-        // One getColumns() call for the whole schema instead of one per table: its tableNamePattern
-        // is a genuine, portable JDBC wildcard, unlike getPrimaryKeys/getImportedKeys/getIndexInfo
-        // below, whose `table` parameter is not reliably a pattern across drivers (those stay
-        // per-table). This turns the most expensive part of introspection into 1 round-trip instead of N.
+        // One getColumns() call for the whole schema: its tableNamePattern is a portable JDBC wildcard, unlike the `table` parameter of the per-table calls below.
         val columnsByTable = loadAllColumns(meta, catalog, escapedSchemaPattern)
         for (table in result) {
             table.columns.addAll(columnsByTable[table.schema to table.name].orEmpty())
@@ -75,10 +63,7 @@ object CommonIntrospection {
         return result
     }
 
-    /**
-     * Keyed by the EXACT (schema, table) pair from each result row, not by pattern matching, so it's
-     * immune to the `_`/`%` collision [escapePattern]'s doc describes.
-     */
+    /** Keyed by the EXACT (schema, table) pair from each result row, not by pattern matching. */
     private fun loadAllColumns(meta: DatabaseMetaData, catalog: String?, schemaPattern: String?): Map<Pair<String?, String>, List<ColumnInfo>> {
         val byTable = linkedMapOf<Pair<String?, String>, MutableList<ColumnInfo>>()
         meta.getColumns(catalog, schemaPattern, "%", "%").use { rs ->

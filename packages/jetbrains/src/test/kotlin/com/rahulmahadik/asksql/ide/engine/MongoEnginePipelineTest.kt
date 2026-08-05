@@ -15,6 +15,7 @@ import com.rahulmahadik.asksql.ide.model.EngineKind
 import com.rahulmahadik.asksql.ide.test.IntegrationTest
 import com.rahulmahadik.asksql.ide.test.fakeProject
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.test.runTest
@@ -42,6 +43,12 @@ class MongoEnginePipelineTest {
     private lateinit var container: MongoDBContainer
     private val databaseName = "asksql_pipeline_test"
 
+    /**
+     * Every registry's scope, cancelled between tests. Left running, a connect attempt outlives
+     * the container @After stopped and fails an unrelated later test with a connection timeout.
+     */
+    private val scopes = mutableListOf<CoroutineScope>()
+
     @Before
     fun startContainer() {
         container = MongoDBContainer("mongo:7.0")
@@ -54,6 +61,8 @@ class MongoEnginePipelineTest {
 
     @After
     fun stopContainer() {
+        scopes.forEach { it.cancel() }
+        scopes.clear()
         container.stop()
     }
 
@@ -63,7 +72,9 @@ class MongoEnginePipelineTest {
     )
 
     private fun pipeline(): Pair<MongoEnginePipeline, InMemoryHistoryStore> {
-        val registry = MongoClientRegistry(fakeProject(), CoroutineScope(SupervisorJob() + Dispatchers.Default))
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        scopes += scope
+        val registry = MongoClientRegistry(fakeProject(), scope)
         val history = InMemoryHistoryStore()
         return MongoEnginePipeline(registry, history) to history
     }

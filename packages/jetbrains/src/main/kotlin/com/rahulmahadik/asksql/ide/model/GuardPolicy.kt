@@ -1,18 +1,12 @@
 package com.rahulmahadik.asksql.ide.model
 
-/**
- * The read-only floor is immovable in v1; there is no "read-write" mode.
- * Core's `GuardPolicy`, minus the `mode` field (core keeps it only to reject non-"read-only" values).
- */
+/** Core's `GuardPolicy` minus the `mode` field: the read-only floor is immovable, there is no read-write mode. */
 data class GuardPolicy(
     val maxRows: Int = 1000,
     val denyFunctions: Set<String> = emptySet(),
     val allowFileFunctions: Boolean = false,
     val maxSqlLength: Int = 100_000,
-    /**
-     * Generic walk-depth (objects + arrays), not statement nesting: long AND
-     * chains legitimately reach ~200. 400 still blocks pathological nesting.
-     */
+    /** Generic walk-depth (objects + arrays), not statement nesting: long AND chains legitimately reach ~200. */
     val maxDepth: Int = 400,
 ) {
     companion object {
@@ -20,10 +14,7 @@ data class GuardPolicy(
     }
 }
 
-/**
- * Result of validating (and possibly rewriting) one SQL statement. The guard
- * never throws for disallowed SQL; it returns a verdict.
- */
+/** Result of validating (and possibly rewriting) one SQL statement; disallowed SQL returns a verdict, never throws. */
 data class GuardVerdict(
     val allowed: Boolean,
     val sql: String,

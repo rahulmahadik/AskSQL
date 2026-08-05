@@ -34,6 +34,7 @@ internal class GeminiClient(
 
     override suspend fun chat(system: String, userPrompt: String, onToken: TokenListener?): LlmResult {
         val body = JsonObject().apply {
+            add("generationConfig", JsonObject().apply { addProperty("temperature", LlmClients.TEMPERATURE) })
             add("systemInstruction", JsonObject().apply { add("parts", JsonArray().apply { add(textPart(system)) }) })
             add("contents", JsonArray().apply {
                 add(JsonObject().apply {
@@ -43,8 +44,7 @@ internal class GeminiClient(
             })
         }
 
-        // Official docs (ai.google.dev/api) specify the x-goog-api-key header for auth, not the
-        // legacy ?key= query parameter; a header is far less likely to leak into access logs.
+        // Gemini takes auth in the x-goog-api-key header, not the legacy ?key= query parameter.
         val uri = URI.create("$baseUrl/v1beta/models/${config.model}:streamGenerateContent?alt=sse")
         val request = HttpRequest.newBuilder(uri)
             .timeout(Duration.ofSeconds(120))
@@ -59,8 +59,7 @@ internal class GeminiClient(
         var outputTokens = 0
         val coroutineContext = currentCoroutineContext()
 
-        // See OpenAiCompatibleClient.chat's identical hop: the blocking read loop, not just opening
-        // the connection, needs to run off the caller's (Dispatchers.Default) dispatcher.
+        // The blocking read loop, not just opening the connection, runs off the caller's dispatcher.
         LlmClients.onIo {
             reader.use { r ->
                 SseReader(r).forEachDataLine { payload ->

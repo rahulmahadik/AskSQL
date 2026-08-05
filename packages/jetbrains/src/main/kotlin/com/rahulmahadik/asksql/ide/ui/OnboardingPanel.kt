@@ -8,10 +8,7 @@ import java.awt.Font
 import javax.swing.JPanel
 import javax.swing.SwingConstants
 
-/**
- * First-run empty state, shown when there is no usable connection and/or no configured AI provider.
- * Every action here gets the user to a working chat without leaving the tool window.
- */
+/** First-run empty state, shown when there is no usable connection and/or no configured AI provider. */
 class OnboardingPanel(
     hasConnection: Boolean,
     hasProvider: Boolean,
@@ -47,7 +44,7 @@ class OnboardingPanel(
         border = JBUI.Borders.emptyBottom(6)
     }
 
-    /** A real, theme-colored, underlined-on-hover link (not a borderless JButton, which rendered as plain, unclickable-looking text). */
+    /** A theme-colored link that underlines on hover. */
     private fun actionLink(text: String, action: () -> Unit) = ActionLink(text) { action() }.apply {
         alignmentX = 0.5f
     }

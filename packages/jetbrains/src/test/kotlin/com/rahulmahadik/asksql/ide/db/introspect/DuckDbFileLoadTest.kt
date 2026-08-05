@@ -1,5 +1,6 @@
 package com.rahulmahadik.asksql.ide.db.introspect
 
+import com.rahulmahadik.asksql.ide.actions.UploadFileToDuckDbAction
 import com.rahulmahadik.asksql.ide.db.DriverProvisioner
 import com.rahulmahadik.asksql.ide.db.DuckDbFileLoader
 import com.rahulmahadik.asksql.ide.errors.AskSqlException
@@ -13,6 +14,7 @@ import org.junit.Assert.fail
 import org.junit.Test
 import org.junit.experimental.categories.Category
 import java.io.File
+import java.nio.file.Files
 import java.sql.Connection
 import java.util.Properties
 
@@ -118,6 +120,28 @@ class DuckDbFileLoadTest {
                 st.executeQuery("SELECT COUNT(*) AS n FROM ${expectedNames[0]}").use { rs -> rs.next(); assertEquals(2, rs.getInt("n")) }
                 st.executeQuery("SELECT COUNT(*) AS n FROM ${expectedNames[1]}").use { rs -> rs.next(); assertEquals(1, rs.getInt("n")) }
             }
+        }
+    }
+
+    @Test
+    fun `a second upload into the same database keeps the first upload's tables`() = runTest {
+        // The connection editor reuses a connection's existing database; a fresh one there would
+        // strand the tables already loaded into it.
+        val db = Files.createTempDirectory("reupload").resolve("set.duckdb")
+        val first = tempFile(".csv", "id,name\n1,Ava\n")
+        val second = tempFile(".csv", "id,price\n1,9.99\n")
+
+        val firstTables = UploadFileToDuckDbAction.loadFilesInto(db, listOf(first.path))
+        val secondTables = UploadFileToDuckDbAction.loadFilesInto(db, listOf(second.path))
+
+        DriverProvisioner.duckDbDriver().connect("jdbc:duckdb:$db", java.util.Properties())!!.use { connection ->
+            val names = mutableSetOf<String>()
+            connection.createStatement().use { st ->
+                st.executeQuery("SELECT table_name FROM information_schema.tables WHERE table_schema = 'main'").use { rs ->
+                    while (rs.next()) names += rs.getString(1)
+                }
+            }
+            assertTrue(names.toString(), names.containsAll(firstTables + secondTables))
         }
     }
 

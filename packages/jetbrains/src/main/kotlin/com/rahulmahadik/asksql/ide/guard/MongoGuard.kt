@@ -20,7 +20,7 @@ object MongoGuard {
     /** Accumulators building an unbounded array; a `$group` using one needs an earlier `$limit`/`$sample`. */
     private val ARRAY_ACCUMULATORS = setOf("\$push", "\$addToSet")
 
-    /** Re-parses an already-[guard]ed pipeline's [MongoGuardVerdict.pipelineJson] for execution; the single choke point so execution never reads a second, possibly-divergent parse. */
+    /** Re-parses an already-[guard]ed pipeline's [MongoGuardVerdict.pipelineJson] for execution; the single parse execution runs on. */
     fun parsePipeline(pipelineJson: String): List<Document> =
         Document.parse("{\"p\": ${pipelineJson.trim()}}").getList("p", Document::class.java)
 
@@ -29,8 +29,7 @@ object MongoGuard {
         if (trimmed.isEmpty()) return blocked(pipelineJson, "empty", "The pipeline is empty.")
 
         val stages: MutableList<Document> = try {
-            // The BSON extended-JSON parser only parses a single top-level object, not a bare
-            // array; wrapping it is the standard trick for parsing a raw JSON array with this API.
+            // The BSON extended-JSON parser only parses a single top-level object, not a bare array, so the array is wrapped in one.
             Document.parse("{\"p\": $trimmed}").getList("p", Document::class.java)
         } catch (e: JsonParseException) {
             return blocked(pipelineJson, "parse_failed", "The pipeline could not be parsed as a JSON array of stage documents.")
@@ -41,8 +40,6 @@ object MongoGuard {
             return blocked(pipelineJson, "parse_failed", "The pipeline could not be parsed as a JSON array of stage documents.")
         }
 
-        if (stages.isEmpty()) return blocked(pipelineJson, "empty", "The pipeline has no stages.")
-
         val collections = mutableListOf<String>()
         val violation = try {
             walkPipeline(stages, policy, depth = 0, collections)
@@ -51,28 +48,14 @@ object MongoGuard {
         }
         if (violation != null) return blocked(pipelineJson, violation.ruleId, violation.reason)
 
-        var autoLimited = false
-        var loweredLimit = false
-        when (val status = inspectLimit(stages, policy.maxRows)) {
-            is LimitStatus.None -> {
-                stages.add(Document(MongoDenyLists.LIMIT_STAGE, policy.maxRows.toLong()))
-                autoLimited = true
-            }
-            is LimitStatus.High -> {
-                stages[stages.size - 1] = Document(MongoDenyLists.LIMIT_STAGE, policy.maxRows.toLong())
-                loweredLimit = true
-            }
-            LimitStatus.Ok -> Unit
-        }
+        val cap = capPipeline(stages, policy.maxRows)
 
         return MongoGuardVerdict(
             allowed = true,
-            // A bare JSON array, matching the shape callers pass back in. Document("p",
-            // stages).toJson() would wrap it as {"p": [...]}, which every consumer
-            // (parsePipeline, guard() re-called) parses as a stage array, not a wrapper.
+            // A bare JSON array, matching the shape callers pass back in; Document("p", stages).toJson() would wrap it as {"p": [...]}.
             pipelineJson = stages.joinToString(",", prefix = "[", postfix = "]") { it.toJson() },
-            autoLimited = autoLimited,
-            loweredLimit = loweredLimit,
+            autoLimited = cap.autoLimited,
+            loweredLimit = cap.loweredLimit,
             collections = collections.distinct(),
         )
     }
@@ -85,8 +68,7 @@ object MongoGuard {
     private fun walkPipeline(stages: List<*>, policy: MongoGuardPolicy, depth: Int, collections: MutableList<String>): Violation? {
         if (depth > policy.maxDepth) return Violation("too_deep", "The pipeline is nested too deeply to verify safely.")
 
-        // A $push/$addToSet with no earlier bound collects the whole collection into one document,
-        // sliding past the row cap; require a preceding $limit/$sample.
+        // A $push/$addToSet with no earlier bound collects the whole collection into one document, so a preceding $limit/$sample is required.
         var bounded = false
         for (stage in stages) {
             if (stage !is Document) {
@@ -160,10 +142,7 @@ object MongoGuard {
         }
     }
 
-    /**
-     * Scans every key in the entire value tree for a denied operator: `$expr` can embed `$function`,
-     * `$redact` can embed either, and no exhaustive "safe positions" list exists to allowlist instead.
-     */
+    /** Scans every key in the entire value tree for a denied operator: `$expr` can embed `$function`, and `$redact` can embed either. */
     private fun walkForDeniedOperators(value: Any?, policy: MongoGuardPolicy, depth: Int): Violation? {
         if (depth > policy.maxDepth) return Violation("too_deep", "The pipeline is nested too deeply to verify safely.")
         // An EJSON $regularExpression parses to a BsonRegularExpression value (not a $regex key).
@@ -174,8 +153,7 @@ object MongoGuard {
                     if (key in MongoDenyLists.DENIED_OPERATORS_ANYWHERE) {
                         return Violation("operator_denied:$key", "The operator $key is not allowed.")
                     }
-                    // Bound every regex-pattern carrier, not just a `$regex` string: `$regex` in any
-                    // shape, and the `regex` field of $regexMatch/$regexFind/$regexFindAll.
+                    // Bounds every regex-pattern carrier: `$regex` in any shape, and the `regex` field of $regexMatch/$regexFind/$regexFindAll.
                     if (key == "\$regex") {
                         checkPattern(regexPatternOf(v), policy)?.let { return it }
                     } else if (key in REGEX_OPERATORS && v is Document && v.containsKey("regex")) {
@@ -215,9 +193,39 @@ object MongoGuard {
         data object High : LimitStatus
     }
 
-    /** Only the pipeline's FINAL stage governs the actual output row count; an earlier `$limit` (e.g. inside a `$lookup` sub-pipeline) caps something else entirely. */
-    private fun inspectLimit(stages: List<Document>, maxRows: Int): LimitStatus {
-        val last = stages.lastOrNull() ?: return LimitStatus.None
+    private data class CapResult(val autoLimited: Boolean, val loweredLimit: Boolean)
+
+    /** Caps a (sub)pipeline at [maxRows] with a trailing `$limit`, recursing into every `$facet` branch, which produces its rows inside a single output document. */
+    private fun capPipeline(pipeline: MutableList<in Document>, maxRows: Int): CapResult {
+        var autoLimited = false
+        var loweredLimit = false
+        for (stage in pipeline) {
+            val facet = (stage as? Document)?.get(MongoDenyLists.FACET_STAGE) as? Document ?: continue
+            for (branch in facet.values) {
+                if (branch !is MutableList<*>) continue
+                @Suppress("UNCHECKED_CAST")
+                val nested = capPipeline(branch as MutableList<in Document>, maxRows)
+                autoLimited = autoLimited || nested.autoLimited
+                loweredLimit = loweredLimit || nested.loweredLimit
+            }
+        }
+        when (inspectLimit(pipeline, maxRows)) {
+            LimitStatus.None -> {
+                pipeline.add(Document(MongoDenyLists.LIMIT_STAGE, maxRows.toLong()))
+                autoLimited = true
+            }
+            LimitStatus.High -> {
+                pipeline[pipeline.size - 1] = Document(MongoDenyLists.LIMIT_STAGE, maxRows.toLong())
+                loweredLimit = true
+            }
+            LimitStatus.Ok -> Unit
+        }
+        return CapResult(autoLimited, loweredLimit)
+    }
+
+    /** Only a (sub)pipeline's FINAL stage governs the row count it emits; an earlier `$limit` caps something else entirely. */
+    private fun inspectLimit(stages: List<*>, maxRows: Int): LimitStatus {
+        val last = stages.lastOrNull() as? Document ?: return LimitStatus.None
         if (last.size != 1 || !last.containsKey(MongoDenyLists.LIMIT_STAGE)) return LimitStatus.None
         val value = (last[MongoDenyLists.LIMIT_STAGE] as? Number)?.toLong() ?: return LimitStatus.None
         return if (value > maxRows) LimitStatus.High else LimitStatus.Ok

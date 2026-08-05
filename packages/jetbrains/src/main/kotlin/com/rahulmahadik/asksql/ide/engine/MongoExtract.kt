@@ -9,10 +9,7 @@ object MongoExtract {
 
     private val FENCE_RE = Regex("""```(?:js|javascript|json)?\s*\n?([\s\S]*?)```""")
 
-    /**
-     * `db.<name>.aggregate(` needs a valid JS identifier, so hyphen/dot collection names arrive as
-     * `db.getCollection("name").aggregate(` or `db["name"].aggregate(`; both must match too.
-     */
+    /** `db.<name>.aggregate(` needs a valid JS identifier, so hyphen/dot names also arrive as `db.getCollection("name")` or `db["name"]`. */
     private val AGGREGATE_CALL_RE = Regex(
         """db(?:\.getCollection\(\s*["']([^"']+)["']\s*\)|\[\s*["']([^"']+)["']\s*]|\.([A-Za-z_][A-Za-z0-9_]*))\.aggregate\s*\(""",
     )
@@ -46,10 +43,7 @@ object MongoExtract {
         return collection to inner
     }
 
-    /**
-     * Finds the index of the bracket matching `openIndex`, respecting JSON string literals so a
-     * bracket inside a string value (e.g. a `$regex` pattern) isn't miscounted as structural.
-     */
+    /** Index of the bracket matching `openIndex`, skipping brackets inside JSON string literals. */
     private fun findMatchingClose(text: String, openIndex: Int): Int? {
         val open = text[openIndex]
         val close = when (open) {
