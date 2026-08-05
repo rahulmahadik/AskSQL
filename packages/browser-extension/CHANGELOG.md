@@ -2,10 +2,12 @@
 
 All notable changes to the browser extension. Versions match `manifest.json`.
 
-## 0.1.1 — unreleased
+## 0.2.0 — unreleased
 
 ### Added
 
+- **Azure OpenAI** as a provider. Set the base URL to your resource endpoint
+  (`https://<resource>.openai.azure.com`), and use your deployment name as the model.
 - **Refresh schema** in the side panel. A table or column added elsewhere was invisible until the
   connection was disconnected and remade; the button re-reads it in place and says how many tables
   came back. For a server-backed connection this asks the sidecar for a fresh read, not its cache.
