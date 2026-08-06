@@ -32,14 +32,17 @@ beforeAll(async () => {
     try {
       const r = await fetch('http://localhost:11434/api/tags', { signal: AbortSignal.timeout(1500) });
       if (r.ok) {
-        model = await resolveModel({
-          provider: 'ollama',
-          // Overridable like the other live suites: a hardcoded tag fails the whole file on a
-          // machine that has a perfectly good local model under a different name.
-          model: process.env['ASKSQL_OLLAMA_MODEL'] ?? 'qwen2.5-coder:7b',
-          baseURL: 'http://localhost:11434/v1',
-        });
-        label = 'ollama';
+        // These assertions grade the model, so the default names one that meets the bar rather than
+        // the smallest one installed. A model too small to write valid SQL would otherwise report
+        // itself as a failure of this codebase. Skipped (loudly) when it is not pulled locally.
+        const wanted = process.env['ASKSQL_OLLAMA_MODEL'] ?? 'qwen3-coder:30b-a3b-q8_0';
+        const installed = ((await r.json()) as { models?: { name?: string }[] }).models ?? [];
+        if (!installed.some((m) => m.name === wanted)) {
+          console.warn(`[skip] gen-quality - ${wanted} is not pulled; set ASKSQL_OLLAMA_MODEL to grade another`);
+        } else {
+          model = await resolveModel({ provider: 'ollama', model: wanted, baseURL: 'http://localhost:11434/v1' });
+          label = `ollama ${wanted}`;
+        }
       }
     } catch {
       /* none */

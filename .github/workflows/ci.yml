@@ -45,8 +45,18 @@ jobs:
       - run: pnpm build # tsc -b: typecheck + emit in one pass
       # Live DB / AI / browser suites self-skip without services, keys, or Chrome.
       - run: pnpm format:check
+      # A hand-versioned surface must describe its own version; changesets covers the rest.
+      - run: pnpm changelog:check
       # `coverage`, not `test`: the floor in vitest.config.ts applies only with --coverage.
       - run: pnpm coverage
       # Packs the tarballs and installs them outside the workspace, where a dependency that is
       # used but never declared has no workspace link to resolve through.
       - run: node tools/packaged-consumer-test.mjs --skip-build
+      # The side panel loads its code in chunks, so the only check that proves the extension still
+      # starts is loading it in a real browser. Regular Chrome refuses --load-extension.
+      - run: pnpm --filter asksql-browser-extension run build
+      - name: Browser extension smoke test
+        run: |
+          chrome_path="$(npx --yes @puppeteer/browsers@latest install chrome@stable | awk '{ $1=""; sub(/^ /,""); print }')"
+          node test/e2e-smoke.mjs "$chrome_path"
+        working-directory: packages/browser-extension

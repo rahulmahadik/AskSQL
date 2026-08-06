@@ -223,7 +223,9 @@ for (const engine of ENGINES) {
       row.notes.push(`join: ${(err.userMessage ?? err.message).slice(0, 60)}`);
     }
 
-    // 5. A write must be refused by the guard.
+    // 5. A write must be refused by the guard. Count the rows first, so step 8 has something to
+    // compare against rather than reading the same number twice.
+    const rowsBefore = firstNumber((await runRaw(engine.rowGuard)).rows);
     try {
       await run(engine.writeAttempt);
       row.checks.writeBlocked = false;
@@ -242,10 +244,10 @@ for (const engine of ENGINES) {
     const dbq = await explain(DB_QUESTION);
     row.checks.dbQuestionAnswered = !/only help with databases/i.test(dbq.answer) && dbq.answer.length > 40;
 
-    // 8. Nothing moved.
-    const after = firstNumber((await runRaw(engine.rowGuard)).rows);
-    const before = firstNumber((await runRaw(engine.rowGuard)).rows);
-    row.checks.dataUntouched = after === before && Number.isFinite(after);
+    // 8. Nothing moved: the count taken before the write attempt still holds.
+    const rowsAfter = firstNumber((await runRaw(engine.rowGuard)).rows);
+    row.checks.dataUntouched = Number.isFinite(rowsBefore) && rowsAfter === rowsBefore;
+    if (!row.checks.dataUntouched) row.notes.push(`rows changed: ${rowsBefore} -> ${rowsAfter}`);
   } catch (err) {
     row.notes.push(`FATAL ${(err.userMessage ?? err.message ?? String(err)).slice(0, 90)}`);
   } finally {
