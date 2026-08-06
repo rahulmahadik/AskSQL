@@ -73,6 +73,18 @@ let turnSeq = 0;
 
 /** Prior answered turns sent with a question for follow-up context. */
 const CONTEXT_TURNS = 4;
+/** Older turns keep their text but drop their rows: a long session otherwise retains every result set. */
+const MAX_TURNS_WITH_ROWS = 20;
+const MAX_TURNS = 200;
+
+function trimTranscript(turns: Turn[]): Turn[] {
+  const kept = turns.length > MAX_TURNS ? turns.slice(-MAX_TURNS) : turns;
+  const cutoff = kept.length - MAX_TURNS_WITH_ROWS;
+  if (cutoff <= 0) return kept;
+  return kept.map((t, i) =>
+    i < cutoff && t.result && t.result.rows.length > 0 ? { ...t, result: { ...t.result, rows: [] } } : t,
+  );
+}
 
 export interface UseAskSqlResult {
   readonly turns: readonly Turn[];
@@ -178,7 +190,7 @@ export function useAskSql(opts: UseAskSqlOptions): UseAskSqlResult {
         .filter((t) => t.sql)
         .slice(-CONTEXT_TURNS)
         .map((t) => ({ question: t.question, sql: t.sql! }));
-      setTurns((prev) => [...prev, { id, question: q, phase: 'thinking' }]);
+      setTurns((prev) => trimTranscript([...prev, { id, question: q, phase: 'thinking' }]));
       setBusy(true);
       const controller = new AbortController();
       abortRef.current = controller;

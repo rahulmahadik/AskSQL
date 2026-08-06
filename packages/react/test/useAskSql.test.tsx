@@ -12,6 +12,20 @@ import { chatOf, deferred, makeTransport, resultOf } from './helpers.js';
 afterEach(cleanup);
 
 describe('useAskSql', () => {
+  it('drops rows from old turns so a long session does not retain every result set', async () => {
+    const rows = Array.from({ length: 50 }, (_, i) => [i]);
+    const transport = makeTransport({ execute: async () => resultOf(rows) });
+    const { result } = renderHook(() => useAskSql({ transport }));
+    for (let i = 0; i < 25; i++) {
+      await act(async () => {
+        await result.current.ask(`q${i}`);
+      });
+    }
+    const withRows = result.current.turns.filter((t) => (t.result?.rows.length ?? 0) > 0).length;
+    expect(result.current.turns.length).toBe(25);
+    expect(withRows).toBeLessThanOrEqual(20);
+  });
+
   it('ask auto-runs: thinking -> sql_ready -> done with result', async () => {
     const transport = makeTransport({
       chat: chatOf({ type: 'stage', stage: 'llm' }, { type: 'sql', sql: 'SELECT 1' }, { type: 'done' }),

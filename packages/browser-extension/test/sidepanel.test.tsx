@@ -8,6 +8,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, waitFor } from '@testing-library/react';
 import { installChromeMock, uninstallChromeMock } from './chromeMock.js';
+import { DUCKDB_DIALECT } from '@asksql/core';
 
 const { state, deferConnector } = vi.hoisted(() => {
   const shared = {
@@ -49,6 +50,8 @@ vi.mock('../src/fileConnections.js', () => ({
     return {
       id: 'file_1',
       name: 'Files',
+      // The real file connector is DuckDB-backed; a connector without a dialect cannot answer SQL.
+      dialect: DUCKDB_DIALECT,
       introspect: async () => ({ tables: [{ name: 't', columns: [] }] }),
       close: async () => {},
     };
