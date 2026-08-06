@@ -89,6 +89,7 @@ function App() {
           <AskSqlChat
             transport={transport}
             showConnectionPicker={false}
+            answerSchemaQuestions
             suggestions={['How many rows are there?', 'Show the first few rows']}
           />
         ) : (

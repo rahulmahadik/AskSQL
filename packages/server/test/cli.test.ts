@@ -96,12 +96,37 @@ describe('buildServer', () => {
       method: 'GET',
       path: '/connections',
       query: {},
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', host: '127.0.0.1:3000' },
       json: async () => ({}),
     })) as { status: number; body: { connections: unknown[] } };
 
     expect(res.status).toBe(200);
     expect(res.body.connections).toEqual([]);
+  });
+
+  // Omitting Host used to skip the loopback check entirely, which is the bypass it exists to stop.
+  it('refuses a request that sends no Host header', async () => {
+    const server = await buildServer(parseArgs(base));
+    const res = (await server.handle({
+      method: 'GET',
+      path: '/connections',
+      query: {},
+      headers: { 'content-type': 'application/json' },
+      json: async () => ({}),
+    })) as { status: number };
+    expect(res.status).toBe(403);
+  });
+
+  it('refuses a Host of 0.0.0.0, which is not loopback', async () => {
+    const server = await buildServer(parseArgs(base));
+    const res = (await server.handle({
+      method: 'GET',
+      path: '/connections',
+      query: {},
+      headers: { 'content-type': 'application/json', host: '0.0.0.0:3000' },
+      json: async () => ({}),
+    })) as { status: number };
+    expect(res.status).toBe(403);
   });
 
   it('passes the host allowlist through, so the server refuses databases outside it', async () => {

@@ -34,9 +34,10 @@ client-supplied file path is refused. `asksql serve --help` lists every flag.
 
 Opening a database needs that engine's connector next to the server - with npx,
 chain packages (`npx --package=@asksql/server --package=@asksql/postgres --package=pg asksql serve ...`);
-with a global install, `npm i -g @asksql/postgres pg` once. The model side needs
-nothing extra: the OpenAI-compatible SDK (Ollama, LM Studio, gateways) ships with
-the server.
+with a global install, `npm i -g @asksql/postgres pg` once. The OpenAI-compatible SDK
+ships with the server, so `--provider ollama`, `nvidia` or `openai-compatible` (LM
+Studio, gateways) needs nothing extra; `openai`, `anthropic`, `google`, `azure` and
+`groq` need their own `@ai-sdk/*` package installed alongside, plus `--api-key`.
 
 To embed the server instead, construct `AskSqlServer` yourself and pass
 `dynamicConnections: { enabled: true }` only if you want that same behaviour.
@@ -110,6 +111,13 @@ true` **or** a non-empty `allowedFileRoots`. Setting only `allowFileEngines` all
 server process can read, so pair it with `allowedFileRoots` unless the server is single-user on
 loopback. `asksql serve` sets `allowFileEngines` only when it binds a loopback address.
 
+With `suggestFixOnError` on, a SQL query that fails at the database gets a second model call for
+a corrected query, returned as `suggestedSql` for the user to review and re-run; it never
+auto-runs. The request must carry the original `question` - without the intent a repair is
+guesswork - and the MongoDB path does not offer one. The driver's error text is redacted before
+that call: row values are stripped out, the column, table and constraint names the model needs
+are kept.
+
 The wire response never includes internal error detail (hostnames, driver text); only a `code` and a
 safe `userMessage`. Use `onError` if you need the full error server-side.
 
@@ -128,10 +136,12 @@ Every endpoint runs your auth hook first and checks the caller's connection scop
   suggestions as never-executed proposals. A question unrelated to data is declined.
 - `GET /schema` - cached catalog; `refresh=1` re-introspects.
 - `GET /history` - the caller's query history, paginated (`page`, `per_page`).
-- `POST /feedback` - marks a question/SQL pair good; stored per user as a few-shot example.
+- `POST /feedback` - marks a question/SQL pair good; stored per user as a few-shot example
+  when `engine.fewShots` is configured.
 - `GET /health` - liveness plus the connections this caller may reach.
 - `POST /connections` / `GET /connections` / `DELETE /connections/:id` - runtime
-  connection management (404 unless `dynamicConnections` is enabled). Creating one needs the
+  connection management. `POST` and `DELETE` return 404 unless `dynamicConnections` is
+  enabled; `GET` always lists the connections this caller may reach. Creating one needs the
   wildcard scope: `auth` must return `allowedConnectionIds: ['*']` (`ANY_CONNECTION`), the same
   authorization that lets a caller reach every connection. `DELETE` uses the ordinary per-id check.
 
@@ -153,9 +163,10 @@ the database rather than leaving it to finish unread.
   `@asksql/sqlite`, `@asksql/duckdb`).
 - Every request other than `GET`/`HEAD`/`OPTIONS` must be `application/json` (else 415). This is
   in the framework-agnostic handler, so every adapter gets it. The requirement forces a CORS
-  preflight, so a cross-site "simple request" can never reach `/execute`. The Express adapter takes
-  `{ cors: ['https://app.example.com'] }` and keeps SSE alive behind proxies
-  (heartbeats, anti-buffering headers).
+  preflight, so a cross-site "simple request" can never reach `/execute`. The Express adapter
+  takes its own options as a second argument -
+  `asksqlMiddleware(config, { cors: ['https://app.example.com'] })` - and keeps SSE alive behind
+  proxies (heartbeats, anti-buffering headers).
 - The content-type gate and the `requireLoopbackHost` check both run **before** your `auth` hook,
   so a rejected request never reaches it.
 

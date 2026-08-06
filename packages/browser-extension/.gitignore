@@ -6,5 +6,6 @@ node_modules/
 *.tsbuildinfo
 .devkey/
 .chrome-for-testing/
+chrome/
 public/duckdb-extensions/*
 !public/duckdb-extensions/.gitkeep

@@ -91,6 +91,7 @@ async function loadFiles(
   }
   const claimed = new Set<string>();
   const renamed: string[] = [];
+  const emptySheets: string[] = [];
   const claim = (base: string): string => {
     const table = uniqueTableName(base, claimed);
     claimed.add(table);
@@ -113,9 +114,17 @@ async function loadFiles(
       continue;
     }
     for (const sheet of sheets) {
-      await registerAndMaterialize(connector, claim(sanitizeTableName(`${baseTable}_${sheet}`)), file, sheet);
+      try {
+        await registerAndMaterialize(connector, claim(sanitizeTableName(`${baseTable}_${sheet}`)), file, sheet);
+      } catch (err) {
+        // An empty sheet cannot be read. Skipping it keeps the sheets after it, and it is reported
+        // rather than dropped quietly.
+        if (!/no rows found/i.test(err instanceof Error ? err.message : String(err))) throw err;
+        emptySheets.push(`${file.name}: ${sheet}`);
+      }
     }
   }
+  if (emptySheets.length > 0) onStatus(`Skipped empty sheet(s): ${emptySheets.join(', ')}`);
   return renamed;
 }
 

@@ -103,3 +103,72 @@ describe('opening a connection at runtime', () => {
     expect(JSON.stringify(res.body)).toMatch(/Unknown database connection/);
   });
 });
+
+/**
+ * Malformed input at the POST /connections boundary. Every other endpoint reads its body
+ * through readBody() and answers 400 INVALID_INPUT for junk; this endpoint must not answer
+ * 500 CONFIG_ERROR ("check the server logs") for a client-side mistake.
+ */
+describe('malformed POST /connections bodies', () => {
+  it('malformed JSON is a 400 invalid-input, not a 500 misconfiguration', async () => {
+    const srv = server();
+    const res = await srv.handle({
+      method: 'POST',
+      path: '/connections',
+      query: {},
+      headers: { 'content-type': 'application/json' },
+      json: async () => {
+        throw new SyntaxError('Unexpected token < in JSON at position 0');
+      },
+    });
+    expect(res.status).toBe(400);
+    expect((res.body as { error: { code: string } }).error.code).toBe('INVALID_INPUT');
+  });
+
+  it('a JSON body of literal null is a 400, not an unhandled TypeError', async () => {
+    const srv = server();
+    // Not through the req() helper: its `body ?? {}` would silently replace the null.
+    const res = await srv.handle({
+      method: 'POST',
+      path: '/connections',
+      query: {},
+      headers: { 'content-type': 'application/json' },
+      json: async () => null,
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it('a non-string id or name is a 400, not an unhandled TypeError', async () => {
+    const srv = server();
+    const badId = await srv.handle(
+      req('POST', '/connections', { id: 123, name: 'x', engine: 'sqlite', database: file }),
+    );
+    expect(badId.status).toBe(400);
+    const badName = await srv.handle(
+      req('POST', '/connections', { name: { nested: true }, engine: 'sqlite', database: file }),
+    );
+    expect(badName.status).toBe(400);
+  });
+});
+
+// Deleting removes a connection for everyone, so it needs the standing that creating one needs.
+// It used to gate only on permission to *use* the connection, and nothing recorded which
+// connections the operator had configured, so a static one could be torn down through the API.
+describe('DELETE /connections/:id scope', () => {
+  it('removes what it created, and nothing else', async () => {
+    // A connection created through the API can be removed through it.
+    const s = server(true);
+    const created = (await s.handle(
+      req('POST', '/connections', { name: 'runtime', engine: 'sqlite', database: file }),
+    )) as { status: number; body: { connection: { id: string } } };
+    expect(created.status).toBe(201);
+    const id = created.body.connection.id;
+
+    const ok = (await s.handle(req('DELETE', `/connections/${id}`))) as { status: number };
+    expect(ok.status).toBe(200);
+
+    // One that was never created through the API is not this endpoint's to remove.
+    const again = (await s.handle(req('DELETE', `/connections/${id}`))) as { status: number };
+    expect(again.status).not.toBe(200);
+  });
+});

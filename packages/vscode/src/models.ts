@@ -19,7 +19,7 @@ const LISTABLE_HOSTED: ReadonlySet<ProviderName> = new Set(['openai', 'groq', 'n
  * Embedding models are listed next to chat models but cannot write SQL; the
  * name is the only signal these APIs give.
  */
-const isEmbedding = (name: string): boolean => /embed|embedding/i.test(name);
+const isNotChatModel = (name: string): boolean => /embed|embedding|rerank|retriever|[-/]parse$|\bocr\b/i.test(name);
 
 async function listOllama(baseURL: string, signal: AbortSignal): Promise<string[]> {
   assertBaseUrl(baseURL);
@@ -28,7 +28,7 @@ async function listOllama(baseURL: string, signal: AbortSignal): Promise<string[
   const res = await fetch(`${root}/api/tags`, { signal });
   if (!res.ok) throw new UserFacingError(`Ollama replied ${res.status}. Is it running?`);
   const body = (await res.json().catch(() => null)) as { models?: { name?: string }[] } | null;
-  return (body?.models ?? []).map((m) => m.name).filter((n): n is string => !!n && !isEmbedding(n));
+  return (body?.models ?? []).map((m) => m.name).filter((n): n is string => !!n && !isNotChatModel(n));
 }
 
 /** A model-listing failure that carries the HTTP status, so an auth failure (401/403) can offer to re-enter the key. */
@@ -61,7 +61,7 @@ async function listOpenAICompatible(
     throw new ModelListError(msg, res.status);
   }
   const body = (await res.json().catch(() => null)) as { data?: { id?: string }[] } | null;
-  return (body?.data ?? []).map((m) => m.id).filter((id): id is string => !!id && !isEmbedding(id));
+  return (body?.data ?? []).map((m) => m.id).filter((id): id is string => !!id && !isNotChatModel(id));
 }
 
 /** The endpoint we can list from, if any. */
