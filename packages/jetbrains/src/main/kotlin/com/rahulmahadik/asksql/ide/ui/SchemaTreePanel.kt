@@ -165,10 +165,11 @@ class SchemaTreePanel(private val project: Project) : Disposable {
         } else {
             project.getService(ConnectionRegistry::class.java).invalidate(descriptor.id)
         }
-        // Drops the pipelines' schema caches, which hold the old target for up to 300s.
+        // Drops only this connection's schema cache (both pipelines, since an edit can move the id
+        // between engines). Clearing every id would make the reload below re-introspect all of them.
         AskSqlEngineService.getInstance(project).let {
-            it.pipeline.invalidateCatalogCache()
-            it.mongoPipeline.invalidateCatalogCache()
+            it.pipeline.invalidateCatalogCache(descriptor.id)
+            it.mongoPipeline.invalidateCatalogCache(descriptor.id)
         }
         ApplicationManager.getApplication().messageBus.syncPublisher(AskSqlSettingsListener.TOPIC).settingsChanged()
     }

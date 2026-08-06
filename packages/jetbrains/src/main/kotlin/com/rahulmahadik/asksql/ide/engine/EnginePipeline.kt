@@ -235,9 +235,16 @@ class EnginePipeline(
         catalogCache.clear()
     }
 
-    // -----------------------------------------------------------------
+    /**
+     * Drops one connection's cached catalog. Editing or deleting a single connection must not
+     * throw away (and immediately re-introspect) every other connection's schema.
+     */
+    fun invalidateCatalogCache(connectionId: String) {
+        catalogGeneration.incrementAndGet()
+        catalogCache.remove(connectionId)
+    }
+
     // Catalog (300s TTL, single in-flight fetch per connection)
-    // -----------------------------------------------------------------
 
     suspend fun catalog(descriptor: ConnectionDescriptor, password: String?, refresh: Boolean = false): SchemaCatalog {
         val cached = catalogCache[descriptor.id]
@@ -263,10 +270,7 @@ class EnginePipeline(
         }
     }
 
-    // -----------------------------------------------------------------
-    // ask(): question -> catalog -> prune -> prompt -> LLM -> extract ->
-    //        guard -> hallucination floors -> repair loop
-    // -----------------------------------------------------------------
+    // ask(): question -> catalog -> prune -> prompt -> LLM -> extract -> guard -> hallucination floors -> repair loop
 
     suspend fun ask(
         question: String,
@@ -546,9 +550,7 @@ class EnginePipeline(
         }
     }
 
-    // -----------------------------------------------------------------
     // execute(): guard EVERY sql, even one the caller already saw guarded once.
-    // -----------------------------------------------------------------
 
     suspend fun execute(
         sql: String,
