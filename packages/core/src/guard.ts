@@ -7,7 +7,7 @@
 
 import pkg from 'node-sql-parser';
 import { AskSqlError } from './errors.js';
-import { hasMultipleStatements, stripCommentsAndStrings, trimTrailingNoise } from './strip.js';
+import { hasMultipleStatements, maskCommentsAndStrings, stripCommentsAndStrings, trimTrailingNoise } from './strip.js';
 import type { DialectInfo, EngineKind, GuardPolicy, GuardVerdict } from './types.js';
 
 const { Parser } = pkg;
@@ -292,8 +292,40 @@ const PG_DENY_PREFIXES = ['pg_ls_', 'pg_read_'];
 
 /** DuckDB prefixes that are always a file/data reader (read_csv, read_parquet, scan_arrow_ipc, ...). */
 /** Oracle's row-limiting clause in every legal spelling; node-sql-parser reads none of them. */
-const ORACLE_FETCH_TAIL =
-  /\s+(?:OFFSET\s+\d+\s+ROWS?\s+)?FETCH\s+(?:FIRST|NEXT)\s+(?:(\d+)\s+)?(PERCENT\s+)?ROWS?\s+(?:ONLY|WITH\s+TIES)\s*$/i;
+// Anchored at the FETCH keyword: a leading \s+ would make the regex retry inside every whitespace
+// run of a non-matching statement, which is quadratic (seconds of CPU at the 100k length cap).
+const ORACLE_FETCH_CLAUSE = /\bFETCH\s+(?:FIRST|NEXT)\s+(?:(\d+)\s+)?(PERCENT\s+)?ROWS?\s+(?:ONLY|WITH\s+TIES)\s*$/i;
+/** An `OFFSET n ROWS` ending exactly where the FETCH clause's leading whitespace starts. */
+const ORACLE_OFFSET_BEFORE = /\bOFFSET\s+\d+\s+ROWS?$/i;
+
+interface OracleFetchTail {
+  /** The full tail (leading whitespace, optional OFFSET clause, FETCH clause). */
+  readonly text: string;
+  /** Where the tail starts in the input. */
+  readonly index: number;
+  /** The literal row count, or null for FETCH FIRST ROW ONLY / a PERCENT clause. */
+  readonly count: number | null;
+}
+
+/** Locate the trailing OFFSET/FETCH clause, matching what a `\s+(?:OFFSET...)?FETCH...$` regex would. */
+function oracleFetchTail(inner: string): OracleFetchTail | null {
+  const m = ORACLE_FETCH_CLAUSE.exec(inner);
+  if (!m) return null;
+  // The clause must be preceded by whitespace; take the whole run, as the old leading \s+ did.
+  let ws = m.index;
+  while (ws > 0 && /\s/.test(inner[ws - 1]!)) ws--;
+  if (ws === m.index) return null;
+  let start = ws;
+  // An optional `OFFSET n ROWS` directly before, itself preceded by whitespace, joins the tail.
+  const off = ORACLE_OFFSET_BEFORE.exec(inner.slice(0, ws));
+  if (off) {
+    let ows = off.index;
+    while (ows > 0 && /\s/.test(inner[ows - 1]!)) ows--;
+    if (ows < off.index) start = ows;
+  }
+  const count = m[1] && !m[2] ? Number(m[1]) : null;
+  return { text: inner.slice(start), index: start, count };
+}
 
 const DUCKDB_DENY_PREFIXES = ['read_', 'scan_'];
 
@@ -418,6 +450,15 @@ function hasMysqlExecutableComment(sql: string): boolean {
   const n = sql.length;
   while (i < n) {
     const c = sql[i]!;
+    // Block comments are handled before quotes: an apostrophe inside a plain one would otherwise
+    // open a string scan that runs past, and hides, a following `/*!`.
+    if (c === '/' && sql[i + 1] === '*') {
+      if (sql[i + 2] === '!') return true;
+      i += 2;
+      while (i < n && !(sql[i] === '*' && sql[i + 1] === '/')) i++;
+      i += 2;
+      continue;
+    }
     if (c === "'" || c === '"' || c === '`') {
       const quote = c;
       i++;
@@ -631,15 +672,23 @@ interface LimitNode {
   value: LimitValueNode[];
 }
 
-type LimitStatus = { kind: 'none' } | { kind: 'ok' } | { kind: 'nonliteral' } | { kind: 'high'; lower: () => void };
+type LimitStatus =
+  | { kind: 'none' }
+  | { kind: 'ok' }
+  /** `at` is the offset of the LIMIT keyword when it was located textually, so the rewrite can be anchored. */
+  | { kind: 'unbounded'; at?: number }
+  | { kind: 'nonliteral' }
+  | { kind: 'high' };
 
-/** Inspect (without mutating) the row limit on the effective final SELECT; `high` carries a `lower` mutator. */
+/** Inspect (without mutating) the row limit on the effective final SELECT. */
 /**
  * Replace the count in the last LIMIT clause, leaving every other character alone. Returns null
  * when the clause cannot be located textually, in which case the caller keeps the original.
  */
-function lowerLimitInText(sql: string, maxRows: number): string | null {
-  const stripped = stripCommentsAndStrings(sql);
+function lowerLimitInText(sql: string, maxRows: number, engine?: string): string | null {
+  // Masked, not stripped: the offsets below index into `sql`, so lengths must match. The engine
+  // matters: without it a MySQL `\'` escape desyncs the scan and hides the real LIMIT.
+  const stripped = maskCommentsAndStrings(sql, engine);
   // The final LIMIT is the one that binds the result set; earlier ones sit inside subqueries.
   const re = /\blimit\s+(\d+)\s*(,\s*(\d+))?/gi;
   let last: RegExpExecArray | null = null;
@@ -649,13 +698,54 @@ function lowerLimitInText(sql: string, maxRows: number): string | null {
   const countText = last[3] ?? last[1]!;
   const countStart = last.index + last[0].lastIndexOf(countText);
   if (Number(countText) <= maxRows) return null;
+  // Fail closed rather than splice blind: the original must hold the same digits at that offset.
+  if (sql.slice(countStart, countStart + countText.length) !== countText) return null;
   return sql.slice(0, countStart) + String(maxRows) + sql.slice(countStart + countText.length);
 }
 
-function inspectLimit(ast: Record<string, unknown>, maxRows: number): LimitStatus {
+/**
+ * The LIMIT written outside every parenthesised branch, or null when there is none. Scanned on the
+ * masked text so a parenthesis inside a string or quoted identifier cannot shift the nesting depth.
+ * A clause that is present but not a plain number is `nonliteral`, never null: the two mean
+ * opposite things to the caller.
+ */
+function statementLevelLimit(
+  sql: string,
+  engine?: string,
+): { kind: 'number'; value: number } | { kind: 'all'; at: number } | { kind: 'nonliteral' } | null {
+  const masked = maskCommentsAndStrings(sql, engine);
+  let depth = 0;
+  let at = -1;
+  for (let i = 0; i < masked.length; i++) {
+    const ch = masked[i];
+    if (ch === '(') depth++;
+    else if (ch === ')') depth--;
+    else if (depth === 0 && (ch === 'l' || ch === 'L') && /^limit\b/iu.test(masked.slice(i, i + 6))) {
+      if (i === 0 || /[\s)]/u.test(masked[i - 1] ?? '')) at = i;
+    }
+  }
+  if (at < 0) return null;
+  const tail = masked.slice(at);
+  if (/^limit\s+all\b/iu.test(tail)) return { kind: 'all', at };
+  // MySQL's `LIMIT offset, count` puts the count second; every other form puts it first.
+  const m = /^limit\s+(\d+)\s*(?:,\s*(\d+))?/iu.exec(tail);
+  // A parameter or subquery count cannot be read here, and must not be mistaken for no limit at all.
+  return m ? { kind: 'number', value: Number(m[2] ?? m[1]) } : { kind: 'nonliteral' };
+}
+
+function inspectLimit(ast: Record<string, unknown>, maxRows: number, sql?: string, engine?: string): LimitStatus {
   let target = ast;
   while (target['_next'] && typeof target['_next'] === 'object') {
     target = target['_next'] as Record<string, unknown>;
+  }
+  // A branch's LIMIT caps that branch alone, and the parser both misplaces it and drops a
+  // trailing statement-level one, so the text is the only reliable source here.
+  if (target !== ast && target['parentheses_symbol'] === true && sql !== undefined) {
+    const statementLimit = statementLevelLimit(sql, engine);
+    if (statementLimit === null) return { kind: 'none' };
+    if (statementLimit.kind === 'all') return { kind: 'unbounded', at: statementLimit.at };
+    if (statementLimit.kind === 'nonliteral') return { kind: 'nonliteral' };
+    return statementLimit.value > maxRows ? { kind: 'high' } : { kind: 'ok' };
   }
   const existing = target['limit'] as LimitNode | null | undefined;
   if (!existing || !Array.isArray(existing.value) || existing.value.length === 0) {
@@ -668,17 +758,13 @@ function inspectLimit(ast: Record<string, unknown>, maxRows: number): LimitStatu
   // MySQL `LIMIT offset, count` -> count is value[1]; else value[0] (incl. `LIMIT n OFFSET m`).
   const countIndex = existing.seperator === ',' && existing.value.length === 2 ? 1 : 0;
   const countNode = existing.value[countIndex];
+  if (countNode && countNode.type === 'origin' && String(countNode.value).toLowerCase() === 'all') {
+    return { kind: 'unbounded' };
+  }
   if (!countNode || countNode.type !== 'number' || typeof countNode.value !== 'number') {
     return { kind: 'nonliteral' };
   }
-  if (countNode.value > maxRows) {
-    return {
-      kind: 'high',
-      lower: () => {
-        countNode.value = maxRows;
-      },
-    };
-  }
+  if (countNode.value > maxRows) return { kind: 'high' };
   return { kind: 'ok' };
 }
 
@@ -793,11 +879,11 @@ export function guardSql(input: GuardInput): GuardVerdict {
         `${dialect.promptLabel} has no LIMIT clause. Remove it and order the results instead; the row cap is applied when the query runs.`,
       );
     }
-    const fetchTail = ORACLE_FETCH_TAIL.exec(inner);
+    const fetchTail = oracleFetchTail(inner);
     if (fetchTail) {
-      fetchTailText = fetchTail[0];
+      fetchTailText = fetchTail.text;
       // `FETCH FIRST ROW ONLY` and a PERCENT clause carry no row count to lower.
-      strippedFetchLimit = fetchTail[1] && !fetchTail[2] ? Number(fetchTail[1]) : null;
+      strippedFetchLimit = fetchTail.count;
       inner = inner.slice(0, fetchTail.index);
     }
   }
@@ -899,12 +985,15 @@ export function guardSql(input: GuardInput): GuardVerdict {
   let loweredLimit = false;
   let finalSql = body;
   if (!explainPrefix) {
-    const status = inspectLimit(root, policy.maxRows);
+    const status = inspectLimit(root, policy.maxRows, body, dialect.engine);
     if (fetchTailText !== null) {
       // The count is lowered inside the original clause. Wrapping in an inline view instead would
       // make duplicate output column names an ORA-00918, though they are legal at top level.
       if (strippedFetchLimit !== null && strippedFetchLimit > policy.maxRows) {
-        finalSql = inner + fetchTailText.replace(String(strippedFetchLimit), String(policy.maxRows));
+        // Anchored to the FETCH count: a plain replace rewrites an equal OFFSET that precedes it.
+        finalSql =
+          inner +
+          fetchTailText.replace(/(FETCH\s+(?:FIRST|NEXT)\s+)(\d+)/i, (_m, head: string) => `${head}${policy.maxRows}`);
         loweredLimit = true;
       } else {
         finalSql = inner + fetchTailText;
@@ -918,7 +1007,7 @@ export function guardSql(input: GuardInput): GuardVerdict {
     } else if (status.kind === 'high') {
       // The number is edited in the original text. Re-serializing the AST quotes every identifier,
       // which changes what `Orders` and `AS Total` mean on a case-folding engine.
-      const edited = lowerLimitInText(body, policy.maxRows);
+      const edited = lowerLimitInText(body, policy.maxRows, dialect.engine);
       if (edited) {
         finalSql = edited;
         loweredLimit = true;
@@ -926,8 +1015,31 @@ export function guardSql(input: GuardInput): GuardVerdict {
         // Keep original; the connector-level maxRows slice is the backstop.
         warnings.push('The row limit is higher than allowed; it is enforced at execution time.');
       }
+    } else if (status.kind === 'unbounded') {
+      // LIMIT ALL is no bound; swap it for the cap. Anchored, because rewriting a branch's own
+      // LIMIT ALL instead would leave the statement unbounded.
+      const replaced =
+        status.at === undefined
+          ? body.replace(/(\blimit\s+)all\b/i, (_m, head: string) => `${head}${policy.maxRows}`)
+          : body.slice(0, status.at) +
+            body.slice(status.at).replace(/^(limit\s+)all\b/i, (_m, head: string) => `${head}${policy.maxRows}`);
+      if (replaced === body) {
+        return blocked(
+          original,
+          'limit_unbounded',
+          'A row limit of ALL cannot be capped; ask for a specific number of rows.',
+        );
+      }
+      finalSql = replaced;
+      loweredLimit = true;
     } else if (status.kind === 'nonliteral') {
-      warnings.push('Row limit uses a non-literal value; the row cap is enforced at execution time instead.');
+      // A parameter or subquery cannot be rewritten to the cap, and the statement would otherwise
+      // leave the guard unbounded.
+      return blocked(
+        original,
+        'limit_nonliteral',
+        'The row limit must be a plain number so the row cap can be applied.',
+      );
     }
   } else {
     finalSql = explainPrefix + inner;

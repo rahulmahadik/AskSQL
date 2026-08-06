@@ -2,8 +2,20 @@
  * Lexical pre-processing for the SQL guard. `stripCommentsAndStrings` replaces the content of
  * string literals, quoted identifiers and comments with a single space, so a lexical safety check
  * cannot be fooled by a keyword - or a second statement - hidden inside a literal.
+ *
+ * `maskCommentsAndStrings` hides the same spans but keeps every offset, for callers that locate
+ * something in the masked text and then edit the original at that index.
  */
 export function stripCommentsAndStrings(sql: string, engine?: string): string {
+  return scan(sql, engine, false);
+}
+
+/** Same spans hidden as `stripCommentsAndStrings`, but character-for-character the same length. */
+export function maskCommentsAndStrings(sql: string, engine?: string): string {
+  return scan(sql, engine, true);
+}
+
+function scan(sql: string, engine: string | undefined, preserveLength: boolean): string {
   const hashIsComment = engine === undefined || engine === 'mysql';
   // MySQL honours \' inside a plain literal; PostgreSQL with standard_conforming_strings does not.
   const backslashEscapes = engine === 'mysql';
@@ -12,21 +24,25 @@ export function stripCommentsAndStrings(sql: string, engine?: string): string {
   let i = 0;
 
   const isTagChar = (c: string) => /[A-Za-z0-9_]/.test(c);
+  /** `text` is what strip mode emits; mask mode emits blanks matching the span it consumed. */
+  // Clamp to n: an unterminated literal can leave i past the end, which would pad too far.
+  const hide = (start: number, text: string) => out.push(preserveLength ? ' '.repeat(Math.min(i, n) - start) : text);
 
   while (i < n) {
+    const spanStart = i;
     const c = sql[i]!;
     const next = i + 1 < n ? sql[i + 1]! : '';
 
     // -- line comment (ends at CR or LF; a lone CR must not hide trailing text)
     if (c === '-' && next === '-') {
       while (i < n && sql[i] !== '\n' && sql[i] !== '\r') i++;
-      out.push(' ');
+      hide(spanStart, ' ');
       continue;
     }
     // # line comment (MySQL)
     if (c === '#' && hashIsComment) {
       while (i < n && sql[i] !== '\n' && sql[i] !== '\r') i++;
-      out.push(' ');
+      hide(spanStart, ' ');
       continue;
     }
     // /* block comment */ with nesting
@@ -44,7 +60,7 @@ export function stripCommentsAndStrings(sql: string, engine?: string): string {
           i++;
         }
       }
-      out.push(' ');
+      hide(spanStart, ' ');
       continue;
     }
     // Dollar-quoted string: $$...$$ or $tag$...$tag$
@@ -55,7 +71,7 @@ export function stripCommentsAndStrings(sql: string, engine?: string): string {
         const tag = sql.slice(i, j + 1); // e.g. "$$" or "$fn$"
         const close = sql.indexOf(tag, j + 1);
         i = close === -1 ? n : close + tag.length;
-        out.push(' ');
+        hide(spanStart, ' ');
         continue;
       }
     }
@@ -70,7 +86,7 @@ export function stripCommentsAndStrings(sql: string, engine?: string): string {
           break;
         } else i++;
       }
-      out.push(' ');
+      hide(spanStart, ' ');
       continue;
     }
     // 'string' with '' escape, plus \' on MySQL where a backslash escapes inside a plain literal.
@@ -84,7 +100,7 @@ export function stripCommentsAndStrings(sql: string, engine?: string): string {
           break;
         } else i++;
       }
-      out.push(' ');
+      hide(spanStart, ' ');
       continue;
     }
     // "quoted identifier" ("" escape)
@@ -97,7 +113,7 @@ export function stripCommentsAndStrings(sql: string, engine?: string): string {
           break;
         } else i++;
       }
-      out.push(' " '); // keep a marker so identifier positions stay visible
+      hide(spanStart, ' " '); // keep a marker so identifier positions stay visible
       continue;
     }
     // `backtick identifier`
@@ -105,7 +121,7 @@ export function stripCommentsAndStrings(sql: string, engine?: string): string {
       i++;
       while (i < n && sql[i] !== '`') i++;
       i++;
-      out.push(' ` ');
+      hide(spanStart, ' ` ');
       continue;
     }
     // [bracket identifier]
@@ -113,7 +129,7 @@ export function stripCommentsAndStrings(sql: string, engine?: string): string {
       const close = sql.indexOf(']', i + 1);
       if (close !== -1) {
         i = close + 1;
-        out.push(' ');
+        hide(spanStart, ' ');
         continue;
       }
     }
@@ -123,10 +139,20 @@ export function stripCommentsAndStrings(sql: string, engine?: string): string {
   return out.join('');
 }
 
+/** Single-character whitespace test (Unicode, matching what /[;\s]+$/u used to trim). */
+const TRAILING_WS = /\s/u;
+
 /** True when the stripped SQL contains an internal statement separator. */
 export function hasMultipleStatements(strippedSql: string): boolean {
-  const body = strippedSql.replace(/[;\s]+$/u, '');
-  return body.includes(';');
+  // Trailing `;`/whitespace is skipped by hand: an end-anchored /[;\s]+$/ backtracks at every
+  // position of a long whitespace run, which is quadratic in the statement length.
+  let end = strippedSql.length;
+  while (end > 0) {
+    const c = strippedSql[end - 1]!;
+    if (c === ';' || TRAILING_WS.test(c)) end--;
+    else break;
+  }
+  return strippedSql.lastIndexOf(';', end - 1) !== -1;
 }
 
 /** Trim trailing whitespace, semicolons and comments, preserving string literals and earlier comments. */

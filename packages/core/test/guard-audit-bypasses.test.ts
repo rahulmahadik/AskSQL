@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { guardSql } from '../src/guard.js';
-import { POSTGRES_DIALECT, MYSQL_DIALECT, DUCKDB_DIALECT, SQLITE_DIALECT } from '../src/dialects.js';
+import { POSTGRES_DIALECT, MYSQL_DIALECT, DUCKDB_DIALECT, SQLITE_DIALECT, ORACLE_DIALECT } from '../src/dialects.js';
 
 const block = (sql: string, d = POSTGRES_DIALECT) => expect(guardSql({ sql, dialect: d }).allowed).toBe(false);
 const allow = (sql: string, d = POSTGRES_DIALECT) => expect(guardSql({ sql, dialect: d }).allowed).toBe(true);
@@ -100,6 +100,13 @@ describe('DuckDB network / external-read functions (high/medium)', () => {
 describe('MySQL executable-comment false positive fixed', () => {
   it('allows /*! inside a -- line comment', () => allow('SELECT * FROM users -- /*! INTO OUTFILE', MYSQL_DIALECT));
   it('allows /*! inside a # line comment', () => allow('SELECT * FROM users # /*! x', MYSQL_DIALECT));
+  // The quote branch ran before any block-comment skip, so an apostrophe inside a plain comment
+  // opened a string scan that swallowed the `/*!` after it.
+  it('an apostrophe in a plain block comment does not hide a following executable comment', () =>
+    block("SELECT 1 /* don't */ /*!00000 ,(SELECT sleep(10)) */ FROM t", MYSQL_DIALECT));
+  it('an unterminated quote in a block comment does not hide one either', () =>
+    block("SELECT 1 /* it's fine\n*/ /*!00000 ,(SELECT sleep(10)) */ FROM t", MYSQL_DIALECT));
+
   it('still blocks a real executable comment', () =>
     block("SELECT * FROM t /*!INTO OUTFILE '/tmp/x'*/", MYSQL_DIALECT));
 });
@@ -167,4 +174,37 @@ describe('round 5: prefix rules + dialect-scoped denials', () => {
     allow("SELECT current_setting('search_path')");
     allow('SELECT current_database()');
   });
+});
+
+describe('Oracle FETCH lowering (high)', () => {
+  const ora = (sql: string, maxRows = 1000) => guardSql({ sql, dialect: ORACLE_DIALECT, policy: { maxRows } as never });
+
+  // The count was lowered with a first-occurrence string replace, so an equal OFFSET ahead of it
+  // was rewritten instead: the page moved and the cap never applied.
+  it('lowers the fetch count and leaves an equal OFFSET alone', () => {
+    const v = ora('SELECT id FROM orders ORDER BY id OFFSET 5000 ROWS FETCH NEXT 5000 ROWS ONLY');
+    expect(v.sql).toContain('OFFSET 5000 ROWS');
+    expect(v.sql).toMatch(/FETCH NEXT 1000 ROWS/i);
+  });
+  it('lowers a bare FETCH FIRST', () =>
+    expect(ora('SELECT id FROM orders FETCH FIRST 9999 ROWS ONLY').sql).toMatch(/FETCH FIRST 1000 ROWS/i));
+  it('leaves a fetch under the cap untouched', () => {
+    const v = ora('SELECT id FROM orders ORDER BY id OFFSET 20 ROWS FETCH NEXT 50 ROWS ONLY');
+    expect(v.sql).toContain('OFFSET 20 ROWS');
+    expect(v.sql).toMatch(/FETCH NEXT 50 ROWS/i);
+  });
+});
+
+// LIMIT ALL means no bound at all, and a parameter or subquery cannot be rewritten to the cap, so
+// the returned SQL was unbounded on its own and relied entirely on the connector slicing.
+describe('unbounded and non-literal row limits (high)', () => {
+  const pgv = (sql: string, maxRows = 5) => guardSql({ sql, dialect: POSTGRES_DIALECT, policy: { maxRows } as never });
+
+  it('rewrites LIMIT ALL to the cap', () => expect(pgv('SELECT id FROM t LIMIT ALL').sql).toMatch(/limit\s+5\b/i));
+  it('refuses a parameter limit', () => expect(pgv('SELECT id FROM t LIMIT $1').allowed).toBe(false));
+  it('refuses a subquery limit', () => expect(pgv('SELECT id FROM t LIMIT (SELECT 9)').allowed).toBe(false));
+  it('still allows a plain limit under the cap', () =>
+    expect(pgv('SELECT id FROM t LIMIT 3').sql).toMatch(/limit\s+3\b/i));
+  it('still lowers a plain limit over the cap', () =>
+    expect(pgv('SELECT id FROM t LIMIT 99').sql).toMatch(/limit\s+5\b/i));
 });

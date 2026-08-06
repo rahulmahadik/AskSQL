@@ -322,5 +322,140 @@
     "finalSql": "SELECT * FROM users WHERE id IN (SELECT user_id FROM orders)\nLIMIT 1000",
     "autoLimited": true,
     "loweredLimit": false
+  },
+  {
+    "sql": "SHOW TABLES WHERE (SELECT 1)",
+    "engine": "mysql",
+    "allowed": false,
+    "ruleId": "show_expression",
+    "finalSql": null,
+    "autoLimited": null,
+    "loweredLimit": null
+  },
+  {
+    "sql": "SHOW TABLES LIKE concat('a','b')",
+    "engine": "mysql",
+    "allowed": false,
+    "ruleId": "show_expression",
+    "finalSql": null,
+    "autoLimited": null,
+    "loweredLimit": null
+  },
+  {
+    "sql": "SHOW COLUMNS FROM orders WHERE Field = version()",
+    "engine": "mysql",
+    "allowed": false,
+    "ruleId": "show_expression",
+    "finalSql": null,
+    "autoLimited": null,
+    "loweredLimit": null
+  },
+  {
+    "sql": "(SELECT a FROM t LIMIT 900) UNION ALL (SELECT b FROM u LIMIT 900)",
+    "engine": "postgres",
+    "allowed": true,
+    "ruleId": null,
+    "finalSql": "(SELECT a FROM t LIMIT 900) UNION ALL (SELECT b FROM u LIMIT 900)\nLIMIT 1000",
+    "autoLimited": true,
+    "loweredLimit": false
+  },
+  {
+    "sql": "(SELECT a FROM t LIMIT 5000) UNION ALL (SELECT b FROM u LIMIT 5000)",
+    "engine": "postgres",
+    "allowed": true,
+    "ruleId": null,
+    "finalSql": "(SELECT a FROM t LIMIT 5000) UNION ALL (SELECT b FROM u LIMIT 5000)\nLIMIT 1000",
+    "autoLimited": true,
+    "loweredLimit": false
+  },
+  {
+    "sql": "(SELECT a FROM t LIMIT 900) UNION ALL (SELECT b FROM u LIMIT 900) LIMIT 100",
+    "engine": "postgres",
+    "allowed": true,
+    "ruleId": null,
+    "finalSql": "(SELECT a FROM t LIMIT 900) UNION ALL (SELECT b FROM u LIMIT 900) LIMIT 100",
+    "autoLimited": false,
+    "loweredLimit": false
+  },
+  {
+    "sql": "SELECT a FROM t UNION ALL SELECT b FROM u",
+    "engine": "postgres",
+    "allowed": true,
+    "ruleId": null,
+    "finalSql": "SELECT a FROM t UNION ALL SELECT b FROM u\nLIMIT 1000",
+    "autoLimited": true,
+    "loweredLimit": false
+  },
+  {
+    "sql": "SELECT a FROM t UNION ALL SELECT b FROM u LIMIT 999999",
+    "engine": "postgres",
+    "allowed": true,
+    "ruleId": null,
+    "finalSql": "SELECT a FROM t UNION ALL SELECT b FROM u LIMIT 1000",
+    "autoLimited": false,
+    "loweredLimit": true
+  },
+  {
+    "sql": "SELECT a FROM t INTERSECT SELECT b FROM u",
+    "engine": "postgres",
+    "allowed": true,
+    "ruleId": null,
+    "finalSql": "SELECT a FROM t INTERSECT SELECT b FROM u\nLIMIT 1000",
+    "autoLimited": true,
+    "loweredLimit": false
+  },
+  {
+    "sql": "SELECT a FROM t EXCEPT SELECT b FROM u",
+    "engine": "postgres",
+    "allowed": true,
+    "ruleId": null,
+    "finalSql": "SELECT a FROM t EXCEPT SELECT b FROM u\nLIMIT 1000",
+    "autoLimited": true,
+    "loweredLimit": false
+  },
+  {
+    "sql": "(SELECT a FROM t LIMIT 900) UNION ALL (SELECT b FROM u LIMIT 900)",
+    "engine": "mysql",
+    "allowed": true,
+    "ruleId": null,
+    "finalSql": "(SELECT a FROM t LIMIT 900) UNION ALL (SELECT b FROM u LIMIT 900)\nLIMIT 1000",
+    "autoLimited": true,
+    "loweredLimit": false
+  },
+  {
+    "sql": "SELECT id FROM users LIMIT ALL",
+    "engine": "postgres",
+    "allowed": true,
+    "ruleId": null,
+    "finalSql": "SELECT id FROM users LIMIT 1000",
+    "autoLimited": false,
+    "loweredLimit": true
+  },
+  {
+    "sql": "(SELECT id FROM users) UNION (SELECT id FROM admins) LIMIT ALL",
+    "engine": "postgres",
+    "allowed": true,
+    "ruleId": null,
+    "finalSql": "(SELECT id FROM users) UNION (SELECT id FROM admins) LIMIT 1000",
+    "autoLimited": false,
+    "loweredLimit": true
+  },
+  {
+    "sql": "(SELECT id FROM users LIMIT ALL) UNION (SELECT id FROM admins) LIMIT ALL",
+    "engine": "postgres",
+    "allowed": true,
+    "ruleId": null,
+    "finalSql": "(SELECT id FROM users LIMIT ALL) UNION (SELECT id FROM admins) LIMIT 1000",
+    "autoLimited": false,
+    "loweredLimit": true
+  },
+  {
+    "sql": "(SELECT id FROM users) UNION (SELECT id FROM admins) LIMIT (SELECT 5)",
+    "engine": "postgres",
+    "allowed": false,
+    "ruleId": "limit_nonliteral",
+    "finalSql": null,
+    "autoLimited": null,
+    "loweredLimit": null
   }
 ]

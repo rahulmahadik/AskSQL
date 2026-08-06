@@ -50,6 +50,9 @@ object SqlGuard {
     private val MYSQL_SHOW_OR_DESCRIBE = Regex("""^\s*(show|desc|describe)\b""", RegexOption.IGNORE_CASE)
     private val MYSQL_DESCRIBE_TABLE = Regex("""^\s*(desc|describe)\s+[A-Za-z0-9_.`"]+\s*$""", RegexOption.IGNORE_CASE)
 
+    /** Core's `show_expression` rule: a SHOW tail may not carry a subquery or a function call. */
+    private val SHOW_TAIL_EXECUTES = Regex("""\(\s*select\b|\b[a-z_][a-z0-9_]*\s*\(""", RegexOption.IGNORE_CASE)
+
     fun guard(sql: String, dialect: DialectInfo, policy: GuardPolicy = GuardPolicy.DEFAULT): GuardVerdict {
         val original = sql
         val trimmed = original.trim()
@@ -83,6 +86,11 @@ object SqlGuard {
 
         if (dialect.engine == EngineKind.MYSQL && MYSQL_SHOW_OR_DESCRIBE.containsMatchIn(strippedTrim)) {
             return when {
+                SHOW_TAIL_EXECUTES.containsMatchIn(strippedTrim) -> blocked(
+                    original,
+                    "show_expression",
+                    "A SHOW command may not carry a subquery or function call. Use a plain SHOW, or a SELECT against information_schema.",
+                )
                 DenyLists.MYSQL_SHOW_ALLOW.containsMatchIn(strippedTrim) -> GuardVerdict(allowed = true, sql = body)
                 MYSQL_DESCRIBE_TABLE.containsMatchIn(body) -> GuardVerdict(allowed = true, sql = body)
                 else -> blocked(original, "show_denied", "Only read-only SHOW/DESCRIBE commands are allowed.")
@@ -193,9 +201,21 @@ object SqlGuard {
                     }
                     loweredLimit = true
                 }
-                is LimitStatus.NonLiteral -> {
-                    warnings += "Row limit uses a non-literal value; the row cap is enforced at execution time instead."
+                is LimitStatus.Unbounded -> {
+                    status.apply()
+                    finalSql = try {
+                        statement.toString()
+                    } catch (e: Exception) {
+                        body
+                    }
+                    loweredLimit = true
                 }
+                // Core blocks this rather than warning; a strict subset may over-block, never under-block.
+                is LimitStatus.NonLiteral -> return blocked(
+                    sql,
+                    "limit_nonliteral",
+                    "The row limit must be a plain number so the row cap can be applied.",
+                )
                 is LimitStatus.Ok -> Unit
             }
         } else {
@@ -221,6 +241,15 @@ object SqlGuard {
         val n = sql.length
         while (i < n) {
             val c = sql[i]
+            // Block comments before quotes: an apostrophe inside a plain one would otherwise open a
+            // string scan that runs past, and hides, a following `/*!`.
+            if (c == '/' && i + 1 < n && sql[i + 1] == '*') {
+                if (i + 2 < n && sql[i + 2] == '!') return true
+                i += 2
+                while (i < n && !(sql[i] == '*' && i + 1 < n && sql[i + 1] == '/')) i++
+                i += 2
+                continue
+            }
             if (c == '\'' || c == '"' || c == '`') {
                 val quote = c
                 i++
@@ -242,9 +271,7 @@ object SqlGuard {
         return false
     }
 
-    // -------------------------------------------------------------------
     // AST walk
-    // -------------------------------------------------------------------
 
     private data class Violation(val ruleId: String, val reason: String)
 
@@ -451,35 +478,52 @@ object SqlGuard {
 
     private val SEQUENCE_PSEUDO_COLUMNS = setOf("nextval", "currval")
 
+    // Hoisted: looksLikeFileOrUrl runs once per relation name on every guard() call, and an
+    // inline Regex(...) recompiles its Pattern each time.
+    private val PATH_SEPARATOR_RE = Regex("""[/\\]""")
+    private val URL_SCHEME_RE = Regex("""^[a-zA-Z][a-zA-Z0-9+.-]*://""")
+    private val DRIVE_LETTER_RE = Regex("""^[a-zA-Z]:[\\/]""")
+    private val DATA_FILE_SUFFIX_RE =
+        Regex(""".*\.(csv|tsv|txt|parquet|json|ndjson|jsonl|xlsx|xls|arrow|avro|orc|feather|db|duckdb|sqlite)$""", RegexOption.IGNORE_CASE)
+
     /** True when a relation name is really a path/URL/data-file name, which DuckDB's replacement scan reads as a file. */
     private fun looksLikeFileOrUrl(name: String): Boolean {
-        return Regex("""[/\\]""").containsMatchIn(name) ||
-            Regex("""^[a-zA-Z][a-zA-Z0-9+.-]*://""").containsMatchIn(name) ||
+        return PATH_SEPARATOR_RE.containsMatchIn(name) ||
+            URL_SCHEME_RE.containsMatchIn(name) ||
             name.startsWith("~") ||
-            Regex("""^[a-zA-Z]:[\\/]""").containsMatchIn(name) ||
-            Regex(""".*\.(csv|tsv|txt|parquet|json|ndjson|jsonl|xlsx|xls|arrow|avro|orc|feather|db|duckdb|sqlite)$""", RegexOption.IGNORE_CASE).matches(name)
+            DRIVE_LETTER_RE.containsMatchIn(name) ||
+            DATA_FILE_SUFFIX_RE.matches(name)
     }
 
-    // -------------------------------------------------------------------
     // Row-limit inspection / injection / lowering
-    // -------------------------------------------------------------------
 
     private sealed interface LimitStatus {
         data object None : LimitStatus
         data object Ok : LimitStatus
         data object NonLiteral : LimitStatus
+        /** `LIMIT ALL` is no bound at all, so it is replaced by the cap rather than left alone. */
+        class Unbounded(val apply: () -> Unit) : LimitStatus
         class High(val apply: () -> Unit) : LimitStatus
     }
 
     /** The final SELECT of a set-operation chain (or the plain select itself) is where a trailing LIMIT binds. */
-    private fun effectiveLimitTarget(select: Select): PlainSelect? = when (select) {
+    /**
+     * The node whose LIMIT bounds the whole statement. A set operation carries its own; a LIMIT
+     * written inside one of its branches caps that branch alone and is not the statement's bound.
+     */
+    private fun effectiveLimitTarget(select: Select): Select? = when (select) {
         is PlainSelect -> select
-        is SetOperationList -> select.selects.lastOrNull() as? PlainSelect
+        // A trailing LIMIT parses onto the list when the branches are parenthesised and onto the
+        // last branch when they are not. A LIMIT inside a parenthesised branch bounds that branch
+        // alone, so it is not the statement's bound and the statement still needs its own.
+        is SetOperationList ->
+            if (select.limit != null || select.fetch != null) select
+            else select.selects.lastOrNull()?.takeIf { it !is ParenthesedSelect } as? PlainSelect
         is ParenthesedSelect -> effectiveLimitTarget(select.select)
         else -> null
     }
 
-    private fun inspectLimit(target: PlainSelect?, maxRows: Int, style: LimitStyle): LimitStatus {
+    private fun inspectLimit(target: Select?, maxRows: Int, style: LimitStyle): LimitStatus {
         // FETCH FIRST (Oracle) is a distinct JSqlParser node from LIMIT: getFetch() vs. getLimit(), read via getExpression().
         if (style == LimitStyle.FETCH) {
             val fetch = target?.fetch ?: return LimitStatus.None
@@ -491,6 +535,14 @@ object SqlGuard {
             return LimitStatus.Ok
         }
         val limit = target?.limit ?: return LimitStatus.None
+        // `LIMIT ALL` parses to a Limit with no row count. Reading that as "no limit present" left
+        // the statement uncapped, since the clause is already there for an append to bind to.
+        if (limit.isLimitAll) {
+            return LimitStatus.Unbounded {
+                limit.isLimitAll = false
+                limit.rowCount = LongValue(maxRows.toLong())
+            }
+        }
         val rowCount: Expression = limit.rowCount ?: return LimitStatus.None
         val value = (rowCount as? LongValue)?.value ?: return LimitStatus.NonLiteral
         if (value > maxRows) {

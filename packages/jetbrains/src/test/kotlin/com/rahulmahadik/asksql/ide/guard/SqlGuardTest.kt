@@ -430,12 +430,12 @@ class SqlGuardTest {
 
     // ---- Non-literal LIMIT ----
 
-    @Test fun `warns instead of blocking on a non-literal limit`() {
+    // Previously a warning here, which let this guard allow SQL core blocks. A parameter cannot be
+    // rewritten to the cap, so the statement would reach the database unbounded.
+    @Test fun `blocks a non-literal limit, as core does`() {
         val v = guard("SELECT * FROM users LIMIT ?")
-        assertTrue(v.allowed)
-        assertFalse(v.autoLimited)
-        assertFalse(v.loweredLimit)
-        assertTrue("expected a non-literal-limit warning", v.warnings.any { it.contains("non-literal") })
+        assertFalse(v.allowed)
+        assertEquals("limit_nonliteral", v.ruleId)
     }
 
     // ---- MySQL DESCRIBE ----
@@ -570,5 +570,47 @@ class SqlGuardTest {
 
     @Test fun `does not over-block a column or table that merely starts with a prefix word`() {
         assertTrue(guard("SELECT read_count, scan_id FROM utl_readings", Dialects.POSTGRES).allowed)
+    }
+
+    /**
+     * Each branch of a set operation may carry its own LIMIT, which caps that branch and not the
+     * statement: two branches of 900 can return 1800 rows. The guard-vector replay only compares
+     * allowed/blocked, so the rewritten SQL is asserted here.
+     */
+    @Test fun `a set operation is capped at the statement level, not per branch`() {
+        val policy = GuardPolicy.DEFAULT.copy(maxRows = 1000)
+        val v = guard("(SELECT a FROM t LIMIT 900) UNION ALL (SELECT b FROM u LIMIT 900)", policy = policy)
+        assertTrue(v.allowed)
+        assertTrue("a branch LIMIT does not bound the statement", v.autoLimited)
+        assertTrue("branches must be left as written", v.sql.contains("(SELECT a FROM t LIMIT 900)"))
+        assertTrue(v.sql.uppercase().trimEnd().endsWith("LIMIT 1000"))
+    }
+
+    @Test fun `a statement-level LIMIT on a set operation is not duplicated`() {
+        val policy = GuardPolicy.DEFAULT.copy(maxRows = 1000)
+        val v = guard("(SELECT a FROM t LIMIT 900) UNION ALL (SELECT b FROM u LIMIT 900) LIMIT 100", policy = policy)
+        assertTrue(v.allowed)
+        assertFalse("a bound statement must not gain a second LIMIT", v.autoLimited)
+        assertEquals(3, Regex("(?i)\\bLIMIT\\b").findAll(v.sql).count())
+    }
+
+    /** Core blocks a non-literal limit; a strict subset may over-block but never under-block. */
+    @Test fun `a parameter limit is blocked, matching core`() {
+        val v = guard("SELECT id FROM users LIMIT ?", policy = GuardPolicy.DEFAULT.copy(maxRows = 1000))
+        assertFalse("core blocks limit_nonliteral, so this guard must too", v.allowed)
+    }
+
+    /** LIMIT ALL is no bound at all; appending a second LIMIT would be a syntax error. */
+    @Test fun `LIMIT ALL is capped rather than given a second LIMIT clause`() {
+        for (sql in listOf(
+            "SELECT id FROM users LIMIT ALL",
+            "(SELECT id FROM users) UNION (SELECT id FROM admins) LIMIT ALL",
+        )) {
+            val v = guard(sql, policy = GuardPolicy.DEFAULT.copy(maxRows = 1000))
+            println("LIMITALL allowed=${v.allowed} rule=${v.ruleId} sql=${v.sql.replace("\n", " | ")}")
+            if (v.allowed) {
+                assertEquals(sql, 1, Regex("(?i)\\bLIMIT\\b").findAll(v.sql).count())
+            }
+        }
     }
 }
