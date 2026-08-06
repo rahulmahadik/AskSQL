@@ -40,6 +40,8 @@ interface MysqlConn {
   query(sql: string, params?: unknown[]): Promise<[unknown, unknown]>;
   query(options: { sql: string; rowsAsArray?: boolean }): Promise<[unknown, unknown]>;
   release(): void;
+  /** Drops the connection instead of returning it to the pool. */
+  destroy?(): void;
   threadId?: number;
   connection?: { connectionId?: number };
 }
@@ -245,7 +247,11 @@ export class MysqlConnector implements Connector {
         warnings: [],
       };
     } catch (err) {
-      await conn.query('ROLLBACK').catch(() => {});
+      // Not on a connection that timed out or was cancelled: the statement may still be running on
+      // it, so this await can block forever. It is dropped below instead, which ends the
+      // transaction with it.
+      const discarding = timedOut || cancelled || Boolean(opts?.signal?.aborted);
+      if (!discarding) await conn.query('ROLLBACK').catch(() => {});
       if (cancelled || opts?.signal?.aborted) throw new AskSqlError('CANCELLED');
       if (timedOut)
         throw new AskSqlError('DB_TIMEOUT', {
@@ -256,7 +262,9 @@ export class MysqlConnector implements Connector {
     } finally {
       if (timer) clearTimeout(timer);
       if (onAbort && opts?.signal) opts.signal.removeEventListener('abort', onAbort);
-      conn.release();
+      // A connection whose statement may still be running must not serve the next query.
+      if (timedOut || cancelled || opts?.signal?.aborted) (conn.destroy ?? conn.release).call(conn);
+      else conn.release();
     }
   }
 
@@ -281,6 +289,10 @@ function mapConnectError(err: unknown): AskSqlError {
   const msg = err instanceof Error ? err.message : String(err);
   if (code === 'ER_ACCESS_DENIED_ERROR' || code === 'ER_DBACCESS_DENIED_ERROR' || /access denied/i.test(msg)) {
     return new AskSqlError('DB_AUTH', { detail: msg, cause: err });
+  }
+  // The server answered; it just has no such database. Telling the user to check the host is wrong.
+  if (code === 'ER_BAD_DB_ERROR' || /unknown database/i.test(msg)) {
+    return new AskSqlError('DB_NOT_FOUND', { detail: msg, cause: err });
   }
   if (code === 'ECONNREFUSED' || code === 'ENOTFOUND' || code === 'ETIMEDOUT' || /connect|getaddrinfo/i.test(msg)) {
     return new AskSqlError('DB_UNREACHABLE', { detail: msg, cause: err });

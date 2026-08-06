@@ -27,6 +27,14 @@ function connector(): PostgresConnector {
 }
 
 describe('connect error mapping', () => {
+  // The server answered and named the missing database; advising a host/port check would be wrong.
+  it('maps 3D000 to DB_NOT_FOUND, not DB_UNREACHABLE', async () => {
+    state.connect = async () => {
+      throw Object.assign(new Error('database "nope" does not exist'), { code: '3D000' });
+    };
+    await expect(connector().connect()).rejects.toMatchObject({ name: 'AskSqlError', code: 'DB_NOT_FOUND' });
+  });
+
   it('maps 28P01 (invalid password) to DB_AUTH', async () => {
     state.connect = () =>
       Promise.reject(Object.assign(new Error('password authentication failed for user "app"'), { code: '28P01' }));

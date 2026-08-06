@@ -87,7 +87,7 @@ object JdbcConnectionFactory {
                 )
             } catch (e: SQLException) {
                 LOG.info("AskSQL: driver.connect() threw after ${(System.nanoTime() - startNanos) / 1_000_000}ms total: ${e.message}")
-                throw AskSqlException(AskSqlErrorCode.DB_UNREACHABLE, detail = e.message, cause = e)
+                throw mapConnectException(e)
             }
             LOG.info("AskSQL: driver.connect() returned after ${(System.nanoTime() - startNanos) / 1_000_000}ms total, enforcing read-only")
             ReadOnlySession.enforce(connection, descriptor.engine)
@@ -171,4 +171,41 @@ object JdbcConnectionFactory {
             EngineKind.MONGODB -> error("MongoDB has no JDBC URL - see MongoClientFactory")
         }
     }
+}
+
+/** A refused password is not an unreachable server, and only the second is worth retrying. */
+internal fun mapConnectException(e: SQLException): AskSqlException {
+    val state = e.sqlState.orEmpty()
+    val vendor = e.errorCode
+    val text = generateSequence(e as Throwable) { it.cause }.mapNotNull { it.message }.joinToString(" ")
+
+    val authenticationRefused = state.startsWith("28") ||
+        vendor == 1045 || vendor == 1044 ||
+        vendor == 1017 || vendor == 28000 || vendor == 28001 || vendor == 28003 ||
+        Regex("ORA-0*(1017|28000|28001|28003)\\b").containsMatchIn(text) ||
+        Regex("(?i)access denied for user|password authentication failed|invalid username/password").containsMatchIn(text)
+
+    if (authenticationRefused) {
+        return AskSqlException(
+            AskSqlErrorCode.DB_AUTH,
+            userMessage = "The database refused those credentials. Check the username and password.",
+            detail = e.message,
+            cause = e,
+        )
+    }
+
+    val databaseMissing = state == "3D000" || vendor == 1049 ||
+        Regex("ORA-12514\\b").containsMatchIn(text) ||
+        Regex("(?i)unknown database|database .* does not exist").containsMatchIn(text)
+
+    if (databaseMissing) {
+        return AskSqlException(
+            AskSqlErrorCode.DB_NOT_FOUND,
+            userMessage = "The server answered, but there is no database with that name on it. Check the database name.",
+            detail = e.message,
+            cause = e,
+        )
+    }
+
+    return AskSqlException(AskSqlErrorCode.DB_UNREACHABLE, detail = e.message, cause = e)
 }

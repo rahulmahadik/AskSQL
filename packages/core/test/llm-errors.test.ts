@@ -169,8 +169,9 @@ describe('token telemetry surfaced', () => {
   it('usage is present on the result (zero for custom models, shape intact)', async () => {
     const engine = createAskSql({ connectors: [new Fake()], model: async () => '```sql\nSELECT id FROM users\n```' });
     const ans = await engine.ask('ids');
-    expect(ans.usage).toBeDefined();
-    expect(typeof ans.usage.inputTokens === 'number' || ans.usage.inputTokens === undefined).toBe(true);
+    // Custom models report no usage, and the engine sums `?? 0`, so the result is exactly zero.
+    expect(ans.usage.inputTokens).toBe(0);
+    expect(ans.usage.outputTokens).toBe(0);
   });
 });
 

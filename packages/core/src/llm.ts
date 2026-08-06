@@ -153,7 +153,7 @@ export function classifyLlmError(err: unknown, callerAborted: boolean): AskSqlEr
     return new AskSqlError('CONFIG_ERROR', {
       detail: `model not found: ${msg.slice(0, 300)}`,
       userMessage:
-        'That AI model was not found at this provider. Check the model name in your AskSQL configuration - the id must match exactly (for a local model, pull it first).',
+        'This provider has no chat model with that name. It may be an embedding or reranking model, or one your API key has no access to - pick a different model in your AskSQL configuration (for a local model, pull it first).',
       cause: err,
     });
   }
@@ -263,6 +263,9 @@ export async function callModel(input: LlmCallInput): Promise<LlmCallResult> {
   let omitTemperature = false;
   // Attempts = 1 initial + maxRetries retries.
   for (;;) {
+    // A call must never start after cancellation: with a custom model that would fire the
+    // provider request (a visible side effect) even though the result can only be CANCELLED.
+    if (input.signal?.aborted) throw new AskSqlError('CANCELLED');
     const controller = new AbortController();
     let timedOut = false;
     const timer = setTimeout(() => {

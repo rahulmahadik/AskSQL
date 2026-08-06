@@ -265,7 +265,11 @@ export class PostgresConnector implements Connector {
         warnings: [],
       };
     } catch (err) {
-      await client.query('ROLLBACK').catch(() => {});
+      // Not on a connection that timed out or was cancelled: the statement may still be running on
+      // it, so this await can block forever. It is destroyed below instead, which ends the
+      // transaction with it.
+      const discarding = timedOut || cancelled || Boolean(opts?.signal?.aborted);
+      if (!discarding) await client.query('ROLLBACK').catch(() => {});
       if (cancelled || opts?.signal?.aborted) throw new AskSqlError('CANCELLED');
       if (timedOut)
         throw err instanceof AskSqlError && err.code === 'DB_TIMEOUT'
@@ -278,8 +282,10 @@ export class PostgresConnector implements Connector {
     } finally {
       if (timer) clearTimeout(timer);
       if (onAbort && opts?.signal) opts.signal.removeEventListener('abort', onAbort);
-      // Destroy a timed-out client so the pool replaces it instead of reusing a wedged connection.
-      client.release(timedOut ? new Error('asksql: query timed out') : undefined);
+      // Destroy a timed-out or cancelled client so the pool replaces it instead of reusing a
+      // connection whose statement may still be running, mid-transaction.
+      const discard = timedOut || cancelled || Boolean(opts?.signal?.aborted);
+      client.release(discard ? new Error('asksql: query did not finish') : undefined);
     }
   }
 
@@ -319,6 +325,10 @@ function mapConnectError(err: unknown): AskSqlError {
   const msg = err instanceof Error ? err.message : String(err);
   if (code === '28P01' || code === '28000' || /password authentication failed|role.* does not exist/i.test(msg)) {
     return new AskSqlError('DB_AUTH', { detail: msg, cause: err });
+  }
+  // The server answered; it just has no such database. Telling the user to check the host is wrong.
+  if (code === '3D000' || /database .* does not exist/i.test(msg)) {
+    return new AskSqlError('DB_NOT_FOUND', { detail: msg, cause: err });
   }
   // Everything else (refused/not-found/timeout and any other connect failure) is unreachable.
   return new AskSqlError('DB_UNREACHABLE', { detail: msg, cause: err });

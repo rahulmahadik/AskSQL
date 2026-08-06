@@ -3,6 +3,7 @@ package com.rahulmahadik.asksql.ide.llm
 import com.rahulmahadik.asksql.ide.errors.AskSqlException
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -67,4 +68,13 @@ class LlmClientsTest {
     }
 
     private fun config(provider: ProviderKind) = ProviderConfig(provider = provider, model = "some-model", apiKey = "test-key")
+
+    /** An exhausted account and a per-minute cap need opposite advice, so they cannot share a message. */
+    @Test fun `an exhausted account is told apart from a rate limit`() {
+        assertTrue(LlmClients.isBillingExhaustionMessage("""{"error":{"code":"insufficient_quota"}}"""))
+        assertTrue(LlmClients.isBillingExhaustionMessage("Your credit balance is too low to access the API"))
+        assertTrue(LlmClients.isBillingExhaustionMessage("You exceeded your current quota, please check your plan"))
+        assertFalse(LlmClients.isBillingExhaustionMessage("Rate limit reached for gpt-4o, try again in 20s"))
+        assertFalse(LlmClients.isBillingExhaustionMessage("service temporarily unavailable"))
+    }
 }
