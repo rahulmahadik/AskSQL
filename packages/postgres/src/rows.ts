@@ -28,13 +28,16 @@ export function shapeValue(value: unknown, kind: ColumnKind): CellValue {
     case 'boolean':
       return typeof value === 'boolean' ? value : value === 't' || value === 'true' || value === true;
     case 'number': {
-      if (typeof value === 'number') return value;
+      // NaN/Infinity are legal float8 values but not legal JSON: stringified they become
+      // null, indistinguishable from SQL NULL. They travel as strings, like NUMERIC 'NaN'.
+      if (typeof value === 'number') return Number.isFinite(value) ? value : String(value);
       const n = Number(value);
       return Number.isFinite(n) ? n : String(value);
     }
     default: {
       if (typeof value === 'object') return JSON.stringify(value);
-      return typeof value === 'number' || typeof value === 'boolean' ? value : String(value);
+      if (typeof value === 'number') return Number.isFinite(value) ? value : String(value);
+      return typeof value === 'boolean' ? value : String(value);
     }
   }
 }

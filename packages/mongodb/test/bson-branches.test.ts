@@ -31,8 +31,11 @@ describe('bsonTypeOf', () => {
 
 describe('binaryToCell / jsonify / toPlain / displayScalar', () => {
   it('binaryToCell reports size + hex preview from a Binary wrapper', () => {
-    const cell = binaryToCell(b('Binary', { buffer: new Uint8Array([1, 2, 3]) })) as { __binary: { bytes: number } };
-    expect(cell.__binary.bytes).toBeGreaterThanOrEqual(0);
+    const cell = binaryToCell(b('Binary', { buffer: new Uint8Array([1, 2, 3]) })) as {
+      __binary: { bytes: number; hexPreview: string };
+    };
+    expect(cell.__binary.bytes).toBe(3);
+    expect(cell.__binary.hexPreview).toBe('010203');
   });
   it('binaryToCell handles a raw Uint8Array and a missing buffer', () => {
     expect(binaryToCell(new Uint8Array([9]))).toHaveProperty('__binary');

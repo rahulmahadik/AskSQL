@@ -39,7 +39,7 @@ class ConcurrentQueryExecutionTest {
                 try {
                     registry.withConnection(descriptor, null) { connection ->
                         val result = JdbcExecutor.execute(connection, "SELECT COUNT(*) AS c FROM numbers WHERE n = $n", maxRows = 10, timeoutMs = 5000, EngineKind.SQLITE)
-                        n to (result.rows.firstOrNull()?.firstOrNull() as? com.rahulmahadik.asksql.ide.model.CellValue.Number)?.value
+                        n to com.rahulmahadik.asksql.ide.test.numericOrNull(result.rows.firstOrNull()?.firstOrNull())
                     }
                 } catch (e: Exception) {
                     n to null

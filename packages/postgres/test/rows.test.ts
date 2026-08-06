@@ -58,3 +58,19 @@ describe('shapeValue', () => {
     expect(shapeValue(null, 'text')).toBeNull();
   });
 });
+
+describe('non-finite doubles (float8 NaN/Infinity are real Postgres values)', () => {
+  // pg parses float8 'NaN'/'Infinity' into real JS non-finite numbers. JSON.stringify turns
+  // those into null - silently aliasing SQL NULL - so they must travel as strings.
+  it('NaN, Infinity, and -Infinity arriving as driver numbers become strings', () => {
+    expect(shapeValue(Number.NaN, 'number')).toBe('NaN');
+    expect(shapeValue(Number.POSITIVE_INFINITY, 'number')).toBe('Infinity');
+    expect(shapeValue(Number.NEGATIVE_INFINITY, 'number')).toBe('-Infinity');
+  });
+  it('a finite driver number is untouched', () => {
+    expect(shapeValue(1.25, 'number')).toBe(1.25);
+  });
+  it('non-finite numbers on the unknown-kind path also become strings', () => {
+    expect(shapeValue(Number.NaN, 'unknown')).toBe('NaN');
+  });
+});

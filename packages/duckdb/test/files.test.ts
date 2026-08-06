@@ -56,15 +56,30 @@ describe('headerless CSV', () => {
 });
 
 describe('ragged rows surface a clear error', () => {
-  maybe('inconsistent column counts -> FILE_PARSE, not a silent mangle', async () => {
+  // registerFile only creates a VIEW over read_csv_auto, so the CSV is not read until the
+  // first SELECT; the old registration-time try/catch here was dead code that asserted nothing.
+  maybe('inconsistent column counts -> a typed error OR faithful rows, never a silent mangle', async () => {
+    let table: string;
     try {
-      await conn.registerFile({ table: 'ragged', path: data('ragged.csv'), format: 'csv' });
-      // DuckDB may accept it via null-padding; if so, that's acceptable too -
-      // the invariant is no throw of an untyped error and no crash.
+      table = await conn.registerFile({ table: 'ragged', path: data('ragged.csv'), format: 'csv' });
     } catch (err) {
       expect(CoreError.is(err)).toBe(true);
       expect((err as AskSqlError).code).toBe('FILE_PARSE');
+      return;
     }
+    let res;
+    try {
+      res = await conn.execute(`SELECT * FROM ${table} ORDER BY 1`);
+    } catch (err) {
+      // Failing the query is acceptable, but only inside the taxonomy.
+      expect(CoreError.is(err), `raw ${String(err)} escaped execute()`).toBe(true);
+      return;
+    }
+    // If DuckDB accepted the file, every source row must still be represented: the file has
+    // 3 data rows; silently dropping the short or long row would be the mangle.
+    expect(res.rowCount).toBe(3);
+    const firstCol = res.rows.map((r) => String(r[0]));
+    expect(firstCol).toEqual(['1', '4', '6']);
   });
 });
 

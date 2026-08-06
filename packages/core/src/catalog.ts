@@ -308,12 +308,33 @@ function tokenizeIdentifier(raw: string): string[] {
     .filter((w) => w.length > 1);
 }
 
+interface TableScoreTokens {
+  readonly name: string;
+  readonly nameTokens: ReadonlySet<string>;
+  readonly columnTokens: ReadonlySet<string>;
+  readonly commentHay: string;
+}
+
+/** Tokenizations depend only on the table, not the question, so they are memoized per TableInfo. */
+const scoreTokensCache = new WeakMap<TableInfo, TableScoreTokens>();
+
+function scoreTokensOf(t: TableInfo): TableScoreTokens {
+  let tokens = scoreTokensCache.get(t);
+  if (!tokens) {
+    tokens = {
+      name: t.name.toLowerCase(),
+      nameTokens: new Set(tokenizeIdentifier(t.name)),
+      columnTokens: new Set(t.columns.flatMap((c) => tokenizeIdentifier(c.name))),
+      commentHay: [t.comment ?? '', ...t.columns.map((c) => c.comment ?? '')].join(' ').toLowerCase(),
+    };
+    scoreTokensCache.set(t, tokens);
+  }
+  return tokens;
+}
+
 /** Word-level scoring beats raw substring: a whole-word name hit ranks above an incidental substring, cutting false positives on large schemas. */
 function scoreTable(t: TableInfo, qTerms: readonly string[]): number {
-  const name = t.name.toLowerCase();
-  const nameTokens = new Set(tokenizeIdentifier(t.name));
-  const columnTokens = new Set(t.columns.flatMap((c) => tokenizeIdentifier(c.name)));
-  const commentHay = [t.comment ?? '', ...t.columns.map((c) => c.comment ?? '')].join(' ').toLowerCase();
+  const { name, nameTokens, columnTokens, commentHay } = scoreTokensOf(t);
   let score = 0;
   for (const term of qTerms) {
     const plural = `${term}s`;
@@ -403,20 +424,30 @@ function trimColumns(
   };
 }
 
+/** Full-catalog render, memoized per catalog object: the same text serves every question until the catalog cache refreshes. */
+const fullRenderCache = new WeakMap<SchemaCatalog, string>();
+
 export function pruneCatalog(catalog: SchemaCatalog, question: string, settings?: PrunerSettings): PruneResult {
   const maxTables = settings?.maxTables ?? 40;
   const maxSchemaTokens = settings?.maxSchemaTokens ?? 6000;
   const all = catalog.tables.filter((t) => !t.partitionOf);
 
   // Fast path: the whole schema fits; the rendered text is handed back to the caller.
-  const fullText = formatCatalogForPrompt({ ...catalog, tables: all });
-  if (all.length <= maxTables && estimateTokens(fullText) <= maxSchemaTokens) {
-    return {
-      catalog: { ...catalog, tables: all },
-      schemaText: fullText,
-      dropped: catalog.tables.length - all.length,
-      strategy: 'none',
-    };
+  // Over maxTables the fast path can never apply, so the full render is not built at all.
+  if (all.length <= maxTables) {
+    let fullText = fullRenderCache.get(catalog);
+    if (fullText === undefined) {
+      fullText = formatCatalogForPrompt({ ...catalog, tables: all });
+      fullRenderCache.set(catalog, fullText);
+    }
+    if (estimateTokens(fullText) <= maxSchemaTokens) {
+      return {
+        catalog: { ...catalog, tables: all },
+        schemaText: fullText,
+        dropped: catalog.tables.length - all.length,
+        strategy: 'none',
+      };
+    }
   }
 
   const qTerms = terms(question);

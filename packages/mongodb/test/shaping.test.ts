@@ -71,3 +71,13 @@ describe('tabulate', () => {
     expect(rows).toEqual([]);
   });
 });
+
+describe('non-finite plain numbers (the live path: promoteValues gives raw JS doubles)', () => {
+  // The Double-wrapper fallback below never runs in production because the driver promotes
+  // BSON doubles to plain numbers first; the plain-number branch itself must guard.
+  it('a plain NaN/Infinity cell becomes a string, not JSON null', () => {
+    expect(shapeValue(Number.NaN)).toBe('NaN');
+    expect(shapeValue(Number.POSITIVE_INFINITY)).toBe('Infinity');
+    expect(shapeValue(Number.NEGATIVE_INFINITY)).toBe('-Infinity');
+  });
+});

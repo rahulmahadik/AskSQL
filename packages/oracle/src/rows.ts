@@ -29,13 +29,15 @@ export function shapeValue(value: unknown, kind: ColumnKind): CellValue {
       // Oracle has no native boolean; a 1/0 or 'Y'/'N' surrogate may arrive here.
       return typeof value === 'boolean' ? value : value === 1 || value === '1' || value === 'Y' || value === 'true';
     case 'number': {
-      if (typeof value === 'number') return value;
+      // BINARY_DOUBLE NaN/Infinity are not legal JSON (they stringify to null); travel as strings.
+      if (typeof value === 'number') return Number.isFinite(value) ? value : String(value);
       const n = Number(value);
       return Number.isFinite(n) ? n : String(value);
     }
     default: {
       if (typeof value === 'object') return JSON.stringify(value);
-      return typeof value === 'number' || typeof value === 'boolean' ? value : String(value);
+      if (typeof value === 'number') return Number.isFinite(value) ? value : String(value);
+      return typeof value === 'boolean' ? value : String(value);
     }
   }
 }

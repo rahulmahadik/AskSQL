@@ -169,3 +169,19 @@ describe('EXE - execution, fidelity, read-only, cancel', () => {
     expect(res.rowCount).toBeLessThanOrEqual(2);
   });
 });
+
+describe('FID - numeric extremes survive the wire', () => {
+  maybe('float8 NaN/Infinity travel as strings, never as JSON null', async () => {
+    const rs = await conn.execute("SELECT 'NaN'::float8 AS a, 'Infinity'::float8 AS b, '-Infinity'::float8 AS c");
+    expect(rs.rows[0]).toEqual(['NaN', 'Infinity', '-Infinity']);
+    expect(JSON.stringify(rs.rows)).not.toContain('null');
+  });
+
+  maybe('bigint beyond 2^53 and long NUMERIC round-trip digit for digit', async () => {
+    const rs = await conn.execute(
+      'SELECT 9223372036854775807::bigint AS big, 0.30000000000000000000001::numeric AS n',
+    );
+    expect(rs.rows[0]![0]).toBe('9223372036854775807');
+    expect(rs.rows[0]![1]).toBe('0.30000000000000000000001');
+  });
+});
