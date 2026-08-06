@@ -13,7 +13,7 @@ import {
   type ResultColumn,
   type ResultSet,
   type SchemaCatalog,
-} from '@asksql/core';
+} from '@asksql/core/runtime';
 import {
   buildDuckCatalog,
   buildResultColumns,

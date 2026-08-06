@@ -50,6 +50,21 @@ describe('fetchProviderModels', () => {
     expect(mock.grantedOrigins.size).toBe(0);
   });
 
+  // NVIDIA lists its whole public catalogue; a reranking or parsing model 404s on /chat/completions.
+  it('drops reranking, retrieval and parsing models from a hosted list', async () => {
+    globalThis.fetch = vi.fn(async () =>
+      jsonResponse(200, {
+        data: [
+          { id: 'meta/llama-3.3-70b-instruct' },
+          { id: 'nvidia/nemoretriever-parse' },
+          { id: 'nvidia/llama-3.2-nv-rerankqa-1b-v2' },
+          { id: 'nvidia/llama-3.2-nv-embedqa-1b-v1' },
+        ],
+      }),
+    ) as typeof fetch;
+    expect(await fetchProviderModels('nvidia', undefined, 'nvapi-1')).toEqual(['meta/llama-3.3-70b-instruct']);
+  });
+
   it('lists ollama models, filtering out embedding models', async () => {
     globalThis.fetch = vi.fn(async () =>
       jsonResponse(200, { models: [{ name: 'llama3.2' }, { name: 'nomic-embed-text' }] }),

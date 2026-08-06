@@ -10,6 +10,8 @@ export default defineConfig({
       // logic runnable outside the extension host.
       vscode: fileURLToPath(new URL('./packages/vscode/test/vscode-mock.ts', import.meta.url)),
       '@asksql/core/mongo': fileURLToPath(new URL('./packages/core/src/mongo/index.ts', import.meta.url)),
+      '@asksql/core/runtime': fileURLToPath(new URL('./packages/core/src/runtime.ts', import.meta.url)),
+      '@asksql/core/providers': fileURLToPath(new URL('./packages/core/src/providers.ts', import.meta.url)),
       '@asksql/core': pkg('core'),
       // Must precede the bare '@asksql/duckdb' entry: aliases match in order,
       // and the bare one would rewrite this subpath to index.ts/browser.

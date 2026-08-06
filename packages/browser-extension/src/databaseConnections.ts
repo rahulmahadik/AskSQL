@@ -1,5 +1,5 @@
 /** A browser extension cannot open a database socket, so form details are POSTed to the AskSQL server, which opens the connection and returns an id - the extension stores the id, never the password. Requires the server to enable dynamic connections (404 otherwise). */
-import { assertBaseUrl } from '@asksql/core';
+import { assertBaseUrl } from '@asksql/core/providers';
 
 export type DatabaseEngine = 'postgres' | 'mysql' | 'oracle' | 'mongodb' | 'sqlite' | 'duckdb';
 
@@ -166,10 +166,13 @@ export async function testRemoteDatabaseConnection(
   form: DatabaseForm,
 ): Promise<string> {
   const created = await createRemoteDatabaseConnection(serverBaseUrl, authHeader, 'Connection test', form);
-  const headers = authHeader ? { Authorization: authHeader } : undefined;
+  // The server answers 415 to any non-GET without this, so without it the cleanup never happened
+  // and every test left a live connection behind.
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (authHeader) headers['Authorization'] = authHeader;
   await fetch(`${serverBaseUrl.replace(/\/$/, '')}/connections/${encodeURIComponent(created.remoteConnectionId)}`, {
     method: 'DELETE',
-    ...(headers ? { headers } : {}),
+    headers,
   }).catch(() => {
     // The database answered, which is what was tested; a failed cleanup only leaks an idle connection.
   });

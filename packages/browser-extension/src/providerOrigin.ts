@@ -1,5 +1,5 @@
 /** Shared by the side panel and options page: the origin a provider's requests actually go to, for permission checks. */
-import { PROVIDER_API_HOST, type ProviderName } from '@asksql/core';
+import { PROVIDER_API_HOST, type ProviderName } from '@asksql/core/providers';
 
 export function providerOrigin(provider: {
   readonly provider: ProviderName;

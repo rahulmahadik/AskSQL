@@ -3,7 +3,7 @@
  * never sends a request, so this actually calls the model.
  */
 import { generateText, APICallError } from 'ai';
-import { resolveModel, type ProviderConfig } from '@asksql/core';
+import { resolveModel, type ProviderConfig } from '@asksql/core/providers';
 
 export async function testProviderConnectivity(config: ProviderConfig): Promise<void> {
   const model = await resolveModel(config);

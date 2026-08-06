@@ -1,6 +1,6 @@
 /** Multi-entry MV3 build: background, side panel, and options each get their own bundle. DuckDB-WASM worker/wasm assets are copied verbatim from node_modules and self-hosted via chrome.runtime.getURL - MV3 forbids remotely hosted code. */
 import * as esbuild from 'esbuild';
-import { cpSync, mkdirSync, existsSync, readdirSync } from 'node:fs';
+import { cpSync, mkdirSync, existsSync, readdirSync, rmSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
@@ -21,8 +21,14 @@ const common = {
 
 const builds = [
   { ...common, entryPoints: ['src/background.ts'], outfile: 'dist/background.js' },
-  { ...common, entryPoints: ['src/sidepanel/main.tsx'], outfile: 'dist/sidepanel/main.js' },
-  { ...common, entryPoints: ['src/options/main.tsx'], outfile: 'dist/options/main.js' },
+  // Split so the guard's SQL parser loads only when a file connection is opened.
+  {
+    ...common,
+    entryPoints: { 'sidepanel/main': 'src/sidepanel/main.tsx', 'options/main': 'src/options/main.tsx' },
+    outdir: 'dist',
+    splitting: true,
+    chunkNames: 'chunks/[name]-[hash]',
+  },
 ];
 
 function copyStatic() {
@@ -73,6 +79,9 @@ if (watch) {
   await Promise.all(contexts.map((c) => c.watch()));
   console.log('watching...');
 } else {
+  // A production build sets sourcemap: false, which never OVERWRITES maps a previous watch build
+  // left behind - and package-zip.mjs ships everything in dist (34+ MB of unminified source).
+  rmSync(dist, { recursive: true, force: true });
   copyStatic();
   await Promise.all(builds.map((b) => esbuild.build(b)));
   console.log('built dist/{background.js,sidepanel/main.js,options/main.js}');

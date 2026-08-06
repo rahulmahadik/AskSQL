@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
-vi.mock('@asksql/core', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@asksql/core')>();
+vi.mock('@asksql/core/providers', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@asksql/core/providers')>();
   return { ...actual, resolveModel: vi.fn() };
 });
 // Keep the real APICallError (testProvider.ts does `instanceof APICallError`,
@@ -11,7 +11,7 @@ vi.mock('ai', async (importOriginal) => {
   return { ...actual, generateText: vi.fn() };
 });
 
-import { resolveModel } from '@asksql/core';
+import { resolveModel } from '@asksql/core/providers';
 import { generateText, APICallError } from 'ai';
 import { testProviderConnectivity } from '../src/testProvider.js';
 
