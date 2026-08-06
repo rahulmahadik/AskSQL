@@ -9,10 +9,13 @@ same way the AskSQL JetBrains plugin works. There are two kinds:
   loaded into their own DuckDB-WASM database and analyzed entirely in-browser. Put
   several files (or a single `.zip` containing any mix of them) in one connection to
   join across all of them; a multi-sheet Excel workbook gets one table per sheet
-  automatically. Nothing leaves the tab except the question sent to your AI model.
+  automatically. Nothing leaves the tab except the question and the schema sent to your
+  AI model; your rows stay in the browser.
 - **AskSQL server connections** - point the extension at a running `@asksql/server`
   sidecar to ask questions against PostgreSQL, MySQL, Oracle, MongoDB, SQLite, or
-  DuckDB. Database credentials pass through once, straight to your own AskSQL server; the browser keeps only the server's address, never the password.
+  DuckDB. Database credentials pass through once, straight to your own AskSQL server; the
+  browser keeps only that server's address and the connection id it hands back, never the
+  password.
   (A browser extension cannot open a raw database socket, so a sidecar is the only way
   to reach a real database from here.)
 
@@ -41,9 +44,11 @@ other AskSQL surface. See [`PRIVACY.md`](PRIVACY.md) for exactly what's stored a
   command ready to copy and a **Check again** button.
 - **Engine controls**: row cap (default 200), optional approval mode (a generated query waits
   for your **Run** click), SQL shown before or after results, and a per-question schema token
-  budget.
+  budget. The token budget applies to data file connections; a sidecar builds its own prompts
+  from the budget configured on the server.
 - **Custom instructions**: steer generation ("Prefer the reporting views") - added to the
   built-in rules; the read-only guard still applies, so nothing written there can allow a write.
+  These too apply to data file connections; a sidecar takes its instructions from its own config.
 - **A working chat header**: active provider/model (click to change), an in-place connection
   switcher, the **Schema** tree toggle, and **Disconnect**. Reopening the panel preselects
   your last connection.
@@ -61,9 +66,10 @@ Every connection needs a model to ask. In the extension's Settings page:
 - **No API key**: install [Ollama](https://ollama.com), run `ollama pull <a model>`,
   select `ollama` as the provider and enter that model's name. The first request asks
   for permission to reach `localhost` (the one-time Chrome/Edge prompt described
-  below) - grant it and it works. No `OLLAMA_ORIGINS` configuration is needed:
+  below) - grant it and it works. `OLLAMA_ORIGINS` normally needs no configuration:
   AskSQL strips the `Origin` header Ollama would otherwise reject (see
-  [PRIVACY.md](PRIVACY.md)).
+  [PRIVACY.md](PRIVACY.md)). Where a managed browser profile blocks that rule, the
+  extension says so and Ollama's own `OLLAMA_ORIGINS=chrome-extension://*` works.
 - **API key**: pick Groq, OpenAI, Anthropic, Google, Azure, or NVIDIA and paste a key.
   Use **Test provider** to confirm it actually answers, not just that the fields are
   non-empty, or **Fetch models** to pick from the models your endpoint actually has.
@@ -109,13 +115,10 @@ otherwise; see [`PRIVACY.md`](PRIVACY.md) for the full breakdown.
 
 ## Development
 
-`chrome.permissions.request()` cannot be driven by headless browser automation (there is no CDP
-hook to dismiss the native prompt), so the automated suite stops short of a full live round-trip
-for a sidecar connection.
-
 ```bash
 pnpm install
-pnpm --filter asksql-browser-extension run build
+pnpm build                                        # workspace dists the bundle imports
+pnpm --filter asksql-browser-extension run build  # needs a local Chrome/Chromium/Edge
 ```
 
 Load `packages/browser-extension/dist/` as an unpacked extension via
@@ -126,20 +129,20 @@ Load `packages/browser-extension/dist/` as an unpacked extension via
 ```bash
 pnpm --filter asksql-browser-extension run typecheck
 pnpm --filter asksql-browser-extension run lint
-pnpm exec vitest run packages/browser-extension --coverage
+pnpm exec vitest run packages/browser-extension
 ```
 
-The unit suite covers every framework-free module (storage, permissions, zip/xlsx
-parsing, the service worker, etc.) at 100%; the two React entry points (options,
-side panel) are DOM-rendering integration glue validated instead by a real-browser
-suite:
+The unit suite covers the framework-free modules (storage, permissions, zip/xlsx
+parsing, the service worker, and so on). The two React entry points (options, side
+panel) are DOM-rendering glue, exercised by the real-browser suites instead:
 
 ```bash
 node scripts/fetch-duckdb-extensions.mjs   # needs a local Chrome/Chromium/Edge
 node esbuild.mjs --production
 node test/e2e-smoke.mjs <path-to-chrome-for-testing>
+node test/e2e-settings.mjs <path-to-chrome-for-testing>
 ```
 
-`test/e2e-smoke.mjs` needs **Chrome for Testing** specifically, not branded
-Chrome/Edge - branded Chrome removed `--load-extension` support in Chrome 137.
+Both need **Chrome for Testing** specifically, not branded Chrome/Edge - branded
+Chrome removed `--load-extension` support in Chrome 137.
 Get one with `pnpm dlx @puppeteer/browsers install chrome@stable`.

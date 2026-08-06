@@ -5,6 +5,18 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-08-06
+
+### Fixed
+- A result with one or two rows is visible again. The horizontal scrollbar appeared inside the
+  height the chat had already allotted, so with a single row it covered the only row there was.
+
+### Changed
+- Installs on **2024.2 and newer**, down from 2025.1. The only thing that had ever stopped it was
+  one constructor: 2025.1 added a single-extension `FileSaverDescriptor`, and binding to it emitted
+  a call older IDEs do not have, so CSV export would have thrown at runtime. 2024.1 stays out of
+  reach, because the API that routes model calls through the IDE's proxy settings arrives in 2024.2.
+
 ## [0.4.0] - 2026-08-06
 
 ### Added

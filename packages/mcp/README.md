@@ -14,8 +14,9 @@ tools to any MCP client (Claude Desktop, Claude Code, IDE agents):
 The same AST guard applies to every call, so an agent can never write: a `DELETE` through
 `asksql_run` comes back `GUARD_BLOCKED`, and so does a write smuggled in as a second statement.
 
-Every tool takes an optional `connectionId`; `asksql_run` also takes `maxRows`. The engine passed
-in is a `createAskSql` engine, so this covers PostgreSQL, MySQL, SQLite, DuckDB and Oracle.
+Every tool except `asksql_list_connections` takes an optional `connectionId`; `asksql_run` also
+takes `maxRows`. The engine passed in is a `createAskSql` engine, so this covers PostgreSQL,
+MySQL, SQLite, DuckDB and Oracle.
 MongoDB uses the separate `createMongoAskSql` engine and is not exposed over MCP.
 
 ```bash
