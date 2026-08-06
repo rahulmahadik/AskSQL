@@ -21,6 +21,8 @@ object HallucinationChecks {
     private val SYSTEM_SCHEMAS = setOf("information_schema", "pg_catalog", "mysql", "performance_schema", "sys")
     private val CTE_NAME = Regex("""([A-Za-z_][A-Za-z0-9_]*)\s+as\s*\(""", RegexOption.IGNORE_CASE)
     private val HAS_WITH = Regex("""\bwith\b""", RegexOption.IGNORE_CASE)
+    private val SELECT_ALIAS_RE = Regex("""\bas\s+["'`]?([A-Za-z_][A-Za-z0-9_]*)["'`]?""", RegexOption.IGNORE_CASE)
+    private val SUBQUERY_OPEN_RE = Regex("""\(\s*select\b""", RegexOption.IGNORE_CASE)
 
     /** Scans the whole statement; over-collecting CTE names only makes the floor more lenient. */
     private fun collectCteNames(sql: String): Set<String> {
@@ -80,11 +82,10 @@ object HallucinationChecks {
         }
 
         val cteNames = collectCteNames(sql)
-        val aliases = Regex("""\bas\s+["'`]?([A-Za-z_][A-Za-z0-9_]*)["'`]?""", RegexOption.IGNORE_CASE)
-            .findAll(sql).map { it.groupValues[1].lowercase() }.toSet()
+        val aliases = SELECT_ALIAS_RE.findAll(sql).map { it.groupValues[1].lowercase() }.toSet()
         val tableAliases = collectTableAliases(statement)
 
-        val hasSubquery = Regex("""\(\s*select\b""", RegexOption.IGNORE_CASE).containsMatchIn(sql)
+        val hasSubquery = SUBQUERY_OPEN_RE.containsMatchIn(sql)
         var attributable = !hasSubquery
 
         val queryTables = mutableListOf<String>()

@@ -108,6 +108,16 @@ class PostgresJdbcIntegrationTest {
         }
     }
 
+    @Test
+    fun `an INTEGER keeps its own digits and never renders as a double`() = runTest {
+        openConnection().use { connection ->
+            val result = JdbcExecutor.execute(connection, "SELECT 1::int AS n", maxRows = 1, timeoutMs = 5000, EngineKind.POSTGRES)
+            val cell = result.rows.first().first()
+            assertTrue("expected ExactNumeric for INTEGER, got $cell", cell is CellValue.ExactNumeric)
+            assertEquals("1", (cell as CellValue.ExactNumeric).value)
+        }
+    }
+
     @Test(expected = java.sql.SQLException::class)
     fun `the read-only session rejects a write even with the AST guard bypassed`() {
         openConnection().use { connection ->
@@ -191,7 +201,7 @@ class PostgresJdbcIntegrationTest {
             async {
                 registry.withConnection(descriptor, container.password) { connection ->
                     JdbcExecutor.execute(connection, "SELECT $n AS n", maxRows = 1, timeoutMs = 5000, EngineKind.POSTGRES)
-                        .rows.first().first().let { it as CellValue.Number }.value
+                        .rows.first().first().let { com.rahulmahadik.asksql.ide.test.numericOrNull(it) ?: error("expected a number, got $it") }
                 }
             }
         }.awaitAll()

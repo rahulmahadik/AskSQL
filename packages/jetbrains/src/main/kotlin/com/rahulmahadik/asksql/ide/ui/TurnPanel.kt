@@ -21,17 +21,26 @@ internal fun escapeHtml(text: String): String =
  */
 private val FENCED_BLOCK_RE = Regex("""```[A-Za-z0-9]*\n?[\s\S]*?```""")
 
+// Hoisted like FENCED_BLOCK_RE: markdownToHtml runs on the EDT as each answer renders, and an
+// inline Regex(...) recompiles its Pattern on every call.
+private val EXPLANATION_HEADING_RE = Regex("""^\s*(\*\*|__)?\s*Explanation\s*(\*\*|__)?\s*:\s*""", RegexOption.IGNORE_CASE)
+private val FENCED_CAPTURE_RE = Regex("""```[A-Za-z0-9]*\n?([\s\S]*?)```""")
+private val BOLD_STARS_RE = Regex("""\*\*(.+?)\*\*""", RegexOption.DOT_MATCHES_ALL)
+private val BOLD_UNDERSCORES_RE = Regex("""(?<!\w)__(.+?)__(?!\w)""", RegexOption.DOT_MATCHES_ALL)
+private val INLINE_CODE_RE = Regex("""`([^`]+)`""")
+private val BULLET_RE = Regex("""(?m)^\s*[-*]\s+""")
+
 internal fun markdownToHtml(text: String): String = escapeHtml(text)
     // A leading "Explanation:" heading is redundant: this block already sits under the result.
-    .replace(Regex("""^\s*(\*\*|__)?\s*Explanation\s*(\*\*|__)?\s*:\s*""", RegexOption.IGNORE_CASE), "")
+    .replace(EXPLANATION_HEADING_RE, "")
     // Fenced blocks -> a <pre>; before inline `code`, and newlines become <br> here so the later \n->\<br> doesn't double.
-    .replace(Regex("""```[A-Za-z0-9]*\n?([\s\S]*?)```""")) { m ->
+    .replace(FENCED_CAPTURE_RE) { m ->
         "<pre>${m.groupValues[1].trim('\n').replace("\n", "<br>")}</pre>"
     }
-    .replace(Regex("""\*\*(.+?)\*\*""", RegexOption.DOT_MATCHES_ALL), "<b>$1</b>")
-    .replace(Regex("""(?<!\w)__(.+?)__(?!\w)""", RegexOption.DOT_MATCHES_ALL), "<b>$1</b>")
-    .replace(Regex("""`([^`]+)`"""), "<code>$1</code>")
-    .replace(Regex("""(?m)^\s*[-*]\s+"""), "&bull; ")
+    .replace(BOLD_STARS_RE, "<b>$1</b>")
+    .replace(BOLD_UNDERSCORES_RE, "<b>$1</b>")
+    .replace(INLINE_CODE_RE, "<code>$1</code>")
+    .replace(BULLET_RE, "&bull; ")
     .replace("\n", "<br>")
 
 /**

@@ -24,6 +24,9 @@ internal class OpenAiCompatibleClient(
 
     private val baseUrl = LlmClients.effectiveBaseUrl(config).trimEnd('/')
 
+    /** These are listed next to chat models but answer 404 on /chat/completions. */
+    private val nonChatModel = Regex("""embed|rerank|retriever|[-/]parse$|\bocr\b""", RegexOption.IGNORE_CASE)
+
     init {
         BaseUrlGuard.assertBaseUrl(baseUrl, carriesSecret = !config.apiKey.isNullOrEmpty())
     }
@@ -104,7 +107,7 @@ internal class OpenAiCompatibleClient(
         val json = JsonParser.parseString(response.body()).asJsonObject
         val data = json.getAsJsonArray("data") ?: return@onIo emptyList()
         data.mapNotNull { it.asJsonObject?.get("id")?.asString }
-            .filterNot { it.contains("embed", ignoreCase = true) }
+            .filterNot { nonChatModel.containsMatchIn(it) }
             .sorted()
     }
 }

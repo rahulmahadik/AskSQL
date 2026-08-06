@@ -12,8 +12,17 @@ import java.sql.Connection
 object PostgresIntrospector : Introspector {
 
     override fun introspect(connection: Connection): SchemaCatalog {
-        val raw = CommonIntrospection.listTables(connection, catalog = null, schemaPattern = null)
+        val batched = PostgresConstraints.load(connection)
+        val raw = CommonIntrospection.listTables(connection, catalog = null, schemaPattern = null, loadConstraints = batched == null)
             .filterNot { it.schema in setOf("pg_catalog", "information_schema") }
+        if (batched != null) {
+            for (t in raw) {
+                val key = t.schema to t.name
+                t.primaryKey = batched.primaryKeys[key].orEmpty()
+                t.foreignKeys = batched.foreignKeys[key].orEmpty()
+                t.indexes = batched.indexes[key].orEmpty()
+            }
+        }
 
         val comments = tableComments(connection)
         val columnComments = columnComments(connection)

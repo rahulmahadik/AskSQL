@@ -28,7 +28,7 @@
             <li><b>Private by default.</b> Zero telemetry. Only your schema reaches the model, never the
                 rows in your tables; secrets live in your OS keychain.</li>
             <li><b>Every JetBrains IDE.</b> IntelliJ IDEA, DataGrip, PyCharm, WebStorm, GoLand, PhpStorm,
-                Rider, CLion, RubyMine, RustRover and Android Studio (2025.1 and newer).</li>
+                Rider, CLion, RubyMine, RustRover and Android Studio (2024.2 and newer).</li>
         </ul>
         <p><b>Getting started</b></p>
         <ol>
