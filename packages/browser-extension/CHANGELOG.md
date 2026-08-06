@@ -2,6 +2,19 @@
 
 All notable changes to the browser extension. Versions match `manifest.json`.
 
+## 0.2.1 - 2026-08-07
+
+### Fixed
+- A crafted zip could exhaust the tab. The size and compression-ratio guards read the sizes the
+  archive declared, so an entry claiming 1KB and inflating to gigabytes passed every check and was
+  fully decompressed before it could be rejected.
+- The model picker no longer offers embedding, reranking or document-parsing models, which answer
+  404 to a chat request.
+
+### Changed
+- The side panel starts on 0.26MB of JavaScript instead of 4.18MB. The SQL guard's parser is the
+  bulk of it and is fetched only when a data-file connection is opened.
+
 ## 0.2.0 - tagged 2026-08-06, awaiting store review
 
 ### Added

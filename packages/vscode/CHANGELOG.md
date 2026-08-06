@@ -6,6 +6,17 @@ All notable changes to the AskSQL VS Code extension are documented here. The for
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-08-07
+
+### Fixed
+- A wrong password no longer reports the database as unreachable. A refused connection, a database
+  that does not exist, and a server that never answered are three different messages now.
+- The model picker no longer offers models that cannot answer a chat request. A provider that lists
+  its whole catalogue includes embedding, reranking and document-parsing models, and picking one
+  produced a bare 404 that read as if the name had been typed wrong.
+- SQLite connections verify read-only by reading `PRAGMA query_only` back rather than trusting the
+  option passed to the driver, which turned out to be accepted and ignored.
+
 ## [0.6.0] - 2026-08-06
 
 ### Added
