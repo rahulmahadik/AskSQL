@@ -1,8 +1,12 @@
 # Changelog - AskSQL for Edge and Chrome
 
-All notable changes to the browser extension. Versions match `manifest.json`.
+All notable changes to the browser extension are documented here. Versions match
+`manifest.json`. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
+the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## 0.2.1 - 2026-08-07
+## [Unreleased]
+
+## [0.2.1] - 2026-08-07
 
 ### Fixed
 - A crafted zip could exhaust the tab. The size and compression-ratio guards read the sizes the
@@ -15,7 +19,7 @@ All notable changes to the browser extension. Versions match `manifest.json`.
 - The side panel starts on 0.26MB of JavaScript instead of 4.18MB. The SQL guard's parser is the
   bulk of it and is fetched only when a data-file connection is opened.
 
-## 0.2.0 - tagged 2026-08-06, awaiting store review
+## [0.2.0] - tagged 2026-08-06, awaiting store review
 
 ### Added
 
@@ -34,7 +38,7 @@ All notable changes to the browser extension. Versions match `manifest.json`.
   page presented them as global anyway.
 - **Reset everything** no longer says it clears saved queries. This extension has none.
 
-## 0.1.0 - first store submission
+## [0.1.0] - first store submission
 
 First release. AskSQL as a browser side panel: ask a database questions in plain
 English, read-only, schema-only prompts, zero telemetry.
