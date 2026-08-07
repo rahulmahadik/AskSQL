@@ -2,6 +2,9 @@ name: JetBrains Plugin CI
 
 # packages/core is listed: the parity job builds its golden vectors from the local core.
 on:
+  # A run that wedges (a platform incident, a lost runner) cannot otherwise be retriggered
+  # without inventing a file change, since every trigger below is path filtered.
+  workflow_dispatch:
   push:
     branches: [main, develop]
     paths:

@@ -5,6 +5,9 @@ name: VS Code Extension CI
 # extension bundles @asksql/core + the three connectors, so a change to any of
 # those must re-validate the extension too.
 on:
+  # A run that wedges (a platform incident, a lost runner) cannot otherwise be retriggered
+  # without inventing a file change, since every trigger below is path filtered.
+  workflow_dispatch:
   push:
     branches: [main, develop]
     paths:
