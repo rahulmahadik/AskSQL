@@ -1,5 +1,12 @@
 # @asksql/mcp
 
+## 0.1.9
+
+### Patch Changes
+
+- Updated dependencies [abd7a9e]
+  - @asksql/core@0.6.0
+
 ## 0.1.8
 
 ### Patch Changes
