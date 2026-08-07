@@ -4,32 +4,45 @@
     <vendor email="rahultkiet@gmail.com" url="https://github.com/rahulmahadik/AskSQL">Rahul Mahadik</vendor>
 
     <description><![CDATA[
-        <p>AI database chat inside your IDE. Ask a question in plain language, review the SQL it
-        writes, approve it, and get results.</p>
+        <p>AI database chat inside your IDE, with your rows never leaving your machine. Ask a
+        question in plain language, review the SQL the AI writes, approve it, and get results. Run
+        the AI model locally through Ollama or LM Studio and nothing leaves at all.</p>
         <ul>
-            <li><b>Read-only by design.</b> An AST guard checks every statement before it runs, on every
-                engine. On Postgres, MySQL, Oracle and SQLite the session itself is opened read-only as a
-                second floor. MongoDB has no read-only session to open, so there the guard is the only
-                one, working from an allowlist rather than a blocklist; the same is true of DuckDB when
-                it is holding data files, because loading them needs to create views.</li>
+            <li><b>Read-only by design.</b> An AST guard checks every statement before it runs, on
+                every engine, and on Postgres, MySQL, Oracle and SQLite the session itself is opened
+                read-only as a second floor. (MongoDB and file-backed DuckDB have no read-only session
+                to open, so there the guard is the only floor, working from an allowlist rather than a
+                blocklist.)</li>
             <li><b>Asking for a change is never a change.</b> Ask for an INSERT, UPDATE, DELETE or a
                 schema change and you get the statement written out to run yourself, never executed.</li>
             <li><b>Six databases.</b> Postgres, MySQL, SQLite, DuckDB, Oracle and MongoDB.</li>
             <li><b>Or no database at all.</b> Point it at CSV, TSV, TXT, JSON, NDJSON, Parquet, Excel or
                 .sql files and query them as tables, joining across files. No server to install.</li>
+            <li><b>Already set up in DataGrip or IDEA Ultimate?</b> AskSQL reuses the data sources you
+                configured in Database Tools and SQL, so you do not enter the same connection details
+                twice. In the free IDEs it connects over JDBC on its own.</li>
             <li><b>Questions about the schema, not just the rows.</b> "How are these tables related?" is
                 answered in plain language from your schema, and a query it suggests can be copied
                 straight out.</li>
+            <li><b>Results you can read.</b> A table, and a chart when the shape suits one: a bar chart
+                for a label and a number, a line for a date. Export to CSV, or open the full result in
+                an editor.</li>
             <li><b>Teach it your vocabulary.</b> A business glossary maps terms your schema does not
                 define, which is also how you tell it that <code>total_cents</code> is cents.</li>
             <li><b>Bring your own model.</b> OpenAI, Anthropic, Google Gemini, Groq, NVIDIA, or any
                 OpenAI-compatible endpoint including Azure AI Foundry. Ollama and LM Studio run on your
                 machine with no API key.</li>
-            <li><b>Private by default.</b> Zero telemetry. Only your schema reaches the model, never the
-                rows in your tables; secrets live in your OS keychain.</li>
+            <li><b>Private by default.</b> Zero telemetry. Only your schema reaches the model, never
+                the rows in your tables, unless you switch on sample column values yourself. Secrets
+                live in your OS keychain.</li>
+            <li><b>Costs nothing until you ask.</b> Installed and idle, it loads no classes, adds
+                nothing to IDE startup, and sits at 0.2% CPU. Connecting to a wide schema takes three
+                catalog queries rather than one per table.</li>
             <li><b>Every JetBrains IDE.</b> IntelliJ IDEA, DataGrip, PyCharm, WebStorm, GoLand, PhpStorm,
                 Rider, CLion, RubyMine, RustRover and Android Studio (2024.2 and newer).</li>
         </ul>
+        <p>AskSQL reads. It does not write, migrate or manage schemas, and it does not replace your
+        IDE's database tools.</p>
         <p><b>Getting started</b></p>
         <ol>
             <li>Open the <b>AskSQL</b> tool window on the right.</li>
