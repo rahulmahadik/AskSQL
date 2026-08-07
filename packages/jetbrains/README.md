@@ -148,7 +148,7 @@ These hold on every engine (the plan doc carries the full list):
 ## Compatibility
 
 AskSQL depends only on `com.intellij.modules.platform`, so it installs in **every
-IntelliJ-Platform IDE, 2025.1 and newer** (build 251+), paid and
+IntelliJ-Platform IDE, 2024.2 and newer** (build 242+), paid and
 free editions alike. Fleet is not supported (it does not use the IntelliJ Platform plugin
 model).
 
@@ -157,9 +157,12 @@ Every release is run through the JetBrains **Plugin Verifier**: 15 verifications
 
 | IDE | Versions verified |
 | --- | --- |
-| IntelliJ IDEA Community | 2025.1 (floor), 2025.2, 2025.3 |
+| IntelliJ IDEA Community | 2024.2 (floor), 2024.3, 2025.1, 2025.2, 2025.3 |
 | IntelliJ IDEA Ultimate, PyCharm Professional, WebStorm, PhpStorm, GoLand, Rider, CLion, RubyMine, RustRover | 2026.1 (latest stable) |
 | Android Studio | whichever build is installed locally |
+
+2024.1 is out of reach: `com.intellij.util.net.JdkProxyProvider`, which routes model calls through
+the IDE's proxy settings, arrives in 242.
 
 IntelliJ IDEA Community is the version floor, so it is pinned at each supported major;
 the other IDEs track the latest stable release. The plugin is compiled against the floor,

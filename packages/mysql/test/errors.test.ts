@@ -22,6 +22,14 @@ function connector(): MysqlConnector {
 }
 
 describe('connect error mapping', () => {
+  // The server answered and named the missing database; advising a host/port check would be wrong.
+  it('maps ER_BAD_DB_ERROR to DB_NOT_FOUND, not DB_UNREACHABLE', async () => {
+    state.getConnection = async () => {
+      throw Object.assign(new Error("Unknown database 'nope'"), { code: 'ER_BAD_DB_ERROR' });
+    };
+    await expect(connector().connect()).rejects.toMatchObject({ name: 'AskSqlError', code: 'DB_NOT_FOUND' });
+  });
+
   it('maps ER_ACCESS_DENIED_ERROR to DB_AUTH', async () => {
     state.getConnection = () =>
       Promise.reject(

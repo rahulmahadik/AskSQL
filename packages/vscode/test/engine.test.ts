@@ -44,6 +44,9 @@ vi.mock('@asksql/sqlite', () => ({ SqliteConnector: class extends FakeConnector 
 vi.mock('@asksql/oracle', () => ({ OracleConnector: class extends FakeConnector {} }));
 vi.mock('@asksql/mongodb', () => ({ MongodbConnector: class extends FakeConnector {} }));
 
+// Flipped to 0 by the test that proves a handle which is not read-only is refused.
+let sqliteQueryOnly = 1;
+
 // A SQLite handle mock so openSqlite does not touch the real filesystem/driver.
 vi.mock('node:sqlite', () => ({
   DatabaseSync: class {
@@ -51,6 +54,13 @@ vi.mock('node:sqlite', () => ({
       public path: string,
       public opts?: unknown,
     ) {}
+    // The real driver reports query_only 0 for a readOnly handle until the pragma is set, so the
+    // mock starts at 0 and only flips when openSqlite sets it, exactly like node:sqlite.
+    private queryOnly = 0;
+    exec = (sql: string) => {
+      if (/query_only\s*=\s*ON/i.test(sql)) this.queryOnly = sqliteQueryOnly;
+    };
+    prepare = () => ({ all: () => [{ query_only: this.queryOnly }] });
     close = sqliteClose;
   },
 }));
@@ -83,6 +93,7 @@ import {
 } from '../src/engine.js';
 
 beforeEach(() => {
+  sqliteQueryOnly = 1;
   resetVscodeMock();
   FakeConnector.gate = undefined;
   FakeConnector.tables = [{ name: 't', kind: 'table', columns: [] }];
@@ -204,6 +215,12 @@ describe('EngineManager.buildOne branches (via catalogFor)', () => {
   it('builds a sqlite connector via node:sqlite with an absolute file', async () => {
     const mgr = mgrWith([{ id: 's', name: 'S', engine: 'sqlite', file: '/tmp/data.db' }]);
     expect((await mgr.catalogFor('s')).tables.length).toBe(1);
+  });
+
+  it('refuses a sqlite handle that did not open read-only', async () => {
+    sqliteQueryOnly = 0;
+    const mgr = mgrWith([{ id: 's', name: 'S', engine: 'sqlite', file: '/tmp/data.db' }]);
+    await expect(mgr.catalogFor('s')).rejects.toThrow(/did not open read-only/);
   });
 
   it('fails a SQL engine with no database name', async () => {

@@ -8,7 +8,7 @@ export const ASKSQL_CSS = `
 .asksql-root {
   --aq-bg: #ffffff; --aq-fg: #1a1a2e; --aq-muted: #6b7280; --aq-border: #e5e7eb;
   --aq-accent: #4f46e5; --aq-accent-fg: #ffffff; --aq-surface: #f9fafb;
-  --aq-code-bg: #f3f4f6; --aq-danger: #dc2626; --aq-warn: #b45309; --aq-ok: #059669;
+  --aq-code-bg: #f3f4f6; --aq-danger: #dc2626; --aq-warn: #b45309;
   --aq-shadow: 0 10px 40px rgba(0,0,0,.15);
   color: var(--aq-fg); font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;
   font-size: 14px; line-height: 1.5; box-sizing: border-box;
@@ -18,14 +18,14 @@ export const ASKSQL_CSS = `
   .asksql-root:not([data-asksql-theme="light"]) {
     --aq-bg: #0f1117; --aq-fg: #e5e7eb; --aq-muted: #9ca3af; --aq-border: #2a2f3a;
     --aq-accent: #6366f1; --aq-accent-fg: #ffffff; --aq-surface: #171a21;
-    --aq-code-bg: #1c2029; --aq-danger: #f87171; --aq-warn: #fbbf24; --aq-ok: #34d399;
+    --aq-code-bg: #1c2029; --aq-danger: #f87171; --aq-warn: #fbbf24;
     --aq-shadow: 0 10px 40px rgba(0,0,0,.5);
   }
 }
 .asksql-root[data-asksql-theme="dark"] {
   --aq-bg: #0f1117; --aq-fg: #e5e7eb; --aq-muted: #9ca3af; --aq-border: #2a2f3a;
   --aq-accent: #6366f1; --aq-accent-fg: #ffffff; --aq-surface: #171a21;
-  --aq-code-bg: #1c2029; --aq-danger: #f87171; --aq-warn: #fbbf24; --aq-ok: #34d399;
+  --aq-code-bg: #1c2029; --aq-danger: #f87171; --aq-warn: #fbbf24;
   --aq-shadow: 0 10px 40px rgba(0,0,0,.5);
 }
 .asksql-chat { display: flex; flex-direction: column; height: 100%; background: var(--aq-bg); }

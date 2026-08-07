@@ -376,6 +376,49 @@ describe('AskSqlChat', () => {
     expect((picker as HTMLSelectElement).value).toBe('b');
   });
 
+  // A turn's SQL was written for the schema behind the connection that produced it, and Run/Explain
+  // send it to whichever connection is selected now.
+  it('drops the transcript when the user switches to another database', async () => {
+    const user = userEvent.setup();
+    const transport = makeTransport({
+      connections: [
+        { id: 'a', name: 'Prod', engine: 'postgres', database: 'app' },
+        { id: 'b', name: 'Analytics', engine: 'duckdb' },
+      ],
+      chat: chatOf({ type: 'sql', sql: 'SELECT * FROM orders' }, { type: 'done' }),
+    });
+    render(<AskSqlChat transport={transport} />);
+    const picker = await screen.findByRole('combobox', { name: /Choose database/i });
+
+    await user.type(screen.getByRole('textbox'), 'how many orders');
+    await user.keyboard('{Enter}');
+    await waitFor(() => expect(screen.getByText(/SELECT \* FROM orders/)).toBeTruthy());
+
+    await user.selectOptions(picker, 'b');
+    await waitFor(() => expect(screen.queryByText(/SELECT \* FROM orders/)).toBeNull());
+    expect(screen.getByText(/Ask your database anything/i)).toBeTruthy();
+  });
+
+  it('keeps the transcript when the picker is re-rendered without a real switch', async () => {
+    const user = userEvent.setup();
+    const transport = makeTransport({
+      connections: [
+        { id: 'a', name: 'Prod', engine: 'postgres', database: 'app' },
+        { id: 'b', name: 'Analytics', engine: 'duckdb' },
+      ],
+      chat: chatOf({ type: 'sql', sql: 'SELECT * FROM orders' }, { type: 'done' }),
+    });
+    const { rerender } = render(<AskSqlChat transport={transport} />);
+    await screen.findByRole('combobox', { name: /Choose database/i });
+
+    await user.type(screen.getByRole('textbox'), 'how many orders');
+    await user.keyboard('{Enter}');
+    await waitFor(() => expect(screen.getByText(/SELECT \* FROM orders/)).toBeTruthy());
+
+    rerender(<AskSqlChat transport={transport} />);
+    expect(screen.getByText(/SELECT \* FROM orders/)).toBeTruthy();
+  });
+
   it('submits on Enter (but Shift+Enter inserts a newline)', async () => {
     const user = userEvent.setup();
     const transport = makeTransport({ chat: chatOf({ type: 'sql', sql: 'SELECT 1' }, { type: 'done' }) });
@@ -397,15 +440,31 @@ describe('AskSqlChat', () => {
     expect(screen.queryByRole('button', { name: 'Save' })).toBeNull();
   });
 
-  it('warns when a row limit was auto-applied', async () => {
+  // The notice states that a cap was applied, which is always true when the guard added one. It
+  // deliberately does not claim rows were withheld: the guard's own LIMIT makes that undetectable.
+  it('tells the user a row cap was applied', async () => {
     const user = userEvent.setup();
     const transport = makeTransport({
       chat: chatOf({ type: 'sql', sql: 'SELECT 1', autoLimited: true }, { type: 'done' }),
+      execute: async () => resultOf(),
     });
-    render(<AskSqlChat transport={transport} requireApproval />);
+    render(<AskSqlChat transport={transport} />);
     await user.type(screen.getByRole('textbox', { name: /Ask a question/i }), 'q');
     await user.click(screen.getByRole('button', { name: 'Send' }));
-    expect(await screen.findByText(/row limit was added automatically/i)).toBeTruthy();
+    expect(await screen.findByText(/row limit was applied automatically/i)).toBeTruthy();
+  });
+
+  it('says nothing when the model set its own limit', async () => {
+    const user = userEvent.setup();
+    const transport = makeTransport({
+      chat: chatOf({ type: 'sql', sql: 'SELECT 1', autoLimited: false }, { type: 'done' }),
+      execute: async () => resultOf(),
+    });
+    render(<AskSqlChat transport={transport} />);
+    await user.type(screen.getByRole('textbox', { name: /Ask a question/i }), 'q');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText('SELECT 1');
+    expect(screen.queryByText(/row limit was applied/i)).toBeNull();
   });
 });
 

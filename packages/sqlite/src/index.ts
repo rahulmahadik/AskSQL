@@ -401,12 +401,18 @@ export class SqliteConnector implements Connector {
 
     const truncated = valueRows.length > maxRows;
     const clipped = truncated ? valueRows.slice(0, maxRows) : valueRows;
-    // SQLite exposes no result-column types; infer each kind from the column's first non-null value.
-    const columns: ResultColumn[] = colNames.map((name, i) => ({
-      name,
-      kind: inferKind(clipped.find((r) => r[i] != null)?.[i]),
-    }));
-    const rows = clipped.map((r) => colNames.map((_, i) => shapeSqliteValue(r[i])));
+    // SQLite exposes no result-column types; infer each kind from the column's first non-null
+    // value - then widen to 'bigint' if ANY value in the column overflows a JS number, so one
+    // column never mixes number cells with string cells (SQLite columns are not typed per-row).
+    const kinds = colNames.map((_, i) => {
+      const kind = inferKind(clipped.find((r) => r[i] != null)?.[i]);
+      if (kind === 'number' && clipped.some((r) => typeof r[i] === 'bigint' && !fitsJsNumber(r[i] as bigint))) {
+        return 'bigint' as const;
+      }
+      return kind;
+    });
+    const columns: ResultColumn[] = colNames.map((name, i) => ({ name, kind: kinds[i]! }));
+    const rows = clipped.map((r) => colNames.map((_, i) => shapeSqliteValue(r[i], kinds[i])));
     return {
       columns,
       rows,
@@ -452,14 +458,19 @@ function inferKind(sample: unknown): ResultColumn['kind'] {
   return 'unknown';
 }
 
-function shapeSqliteValue(v: unknown): CellValue {
+function shapeSqliteValue(v: unknown, columnKind?: ResultColumn['kind']): CellValue {
   if (v === null || v === undefined) return null;
-  // Narrow to number when it fits; keep a genuine 64-bit value as a string so precision is not lost.
-  if (typeof v === 'bigint') return fitsJsNumber(v) ? Number(v) : v.toString();
+  // Narrow to number when it fits; keep a genuine 64-bit value as a string so precision is not
+  // lost. In a column classified 'bigint' EVERY integer travels as a string, so the column
+  // stays one type even when some of its values would fit a JS number.
+  if (typeof v === 'bigint') return columnKind === 'bigint' || !fitsJsNumber(v) ? v.toString() : Number(v);
   if (Buffer.isBuffer(v) || v instanceof Uint8Array) {
     const buf = Buffer.from(v as Uint8Array);
     return { __binary: { bytes: buf.length, hexPreview: buf.subarray(0, 16).toString('hex') } };
   }
-  if (typeof v === 'number' || typeof v === 'boolean') return v;
+  // SQLite REAL can hold +-Infinity (9e999); non-finite numbers are not legal JSON and
+  // would serialize to null, so they travel as strings.
+  if (typeof v === 'number') return Number.isFinite(v) ? v : String(v);
+  if (typeof v === 'boolean') return v;
   return String(v);
 }

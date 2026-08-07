@@ -42,10 +42,18 @@ describe('assertBaseUrl SSRF', () => {
   });
 
   it('never echoes the raw URL (it can embed a password)', () => {
+    // The URL MUST be rejected - and no surface of the error (userMessage, detail, or the
+    // Error.message that detail is folded into) may quote the credential back.
+    let caught: unknown;
     try {
       assertBaseUrl('https://user:hunter2@gateway.example.com/v1', false);
     } catch (e) {
-      expect((e as { userMessage?: string }).userMessage ?? '').not.toContain('hunter2');
+      caught = e;
     }
+    expect(caught, 'a credential-embedding baseURL must throw').toBeDefined();
+    const err = caught as { userMessage?: string; detail?: string; message?: string };
+    expect(err.userMessage ?? '').not.toContain('hunter2');
+    expect(err.detail ?? '').not.toContain('hunter2');
+    expect(err.message ?? '').not.toContain('hunter2');
   });
 });

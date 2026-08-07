@@ -204,7 +204,9 @@ function readRawJson(req: ExpressLikeReq, maxBytes: number): Promise<unknown> {
       }
       chunks.push(buf);
     });
+    let ended = false;
     req.on('end', () => {
+      ended = true;
       if (aborted) return;
       const raw = Buffer.concat(chunks).toString('utf8').trim();
       if (!raw) return resolve({});
@@ -215,5 +217,17 @@ function readRawJson(req: ExpressLikeReq, maxBytes: number): Promise<unknown> {
       }
     });
     req.on('error', reject);
+    req.on('close', () => {
+      if (aborted || ended) return;
+      aborted = true;
+      reject(
+        new AskSqlError('INVALID_INPUT', {
+          userMessage: 'The request ended before its body arrived.',
+          detail: 'client disconnected before the request body completed',
+        }),
+      );
+    });
+    // A client that sends headers and then disconnects mid-body emits 'close' with no 'end';
+    // without this handler the promise never settles and the request context leaks forever.
   });
 }

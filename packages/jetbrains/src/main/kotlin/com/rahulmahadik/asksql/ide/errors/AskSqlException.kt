@@ -9,9 +9,16 @@ enum class AskSqlErrorCode {
     INVALID_INPUT,
     GUARD_BLOCKED,
     DB_UNREACHABLE,
+    /** The server answered and refused the credentials; retrying the same ones cannot help. */
+    DB_AUTH,
+    /** The server answered, but the named database or schema does not exist on it. */
+    DB_NOT_FOUND,
     DB_QUERY_ERROR,
-    DB_TOO_MANY_ROWS,
     LLM_AUTH,
+    /** The account has no credit or quota left; waiting never helps. */
+    LLM_BILLING,
+    /** A transient per-minute cap; waiting does help. */
+    LLM_RATE_LIMIT,
     LLM_UNAVAILABLE,
     LLM_BAD_OUTPUT,
     LLM_REFUSAL,
@@ -41,6 +48,7 @@ class AskSqlException(
     companion object {
         private val RETRYABLE_CODES = setOf(
             AskSqlErrorCode.DB_UNREACHABLE,
+            AskSqlErrorCode.LLM_RATE_LIMIT,
             AskSqlErrorCode.LLM_UNAVAILABLE,
         )
 
@@ -49,9 +57,12 @@ class AskSqlException(
             AskSqlErrorCode.INVALID_INPUT -> "That input doesn't look quite right. Give it another go."
             AskSqlErrorCode.GUARD_BLOCKED -> "I stopped that one for safety. AskSQL only ever runs read-only SELECT queries."
             AskSqlErrorCode.DB_UNREACHABLE -> "I couldn't reach the database. Check it's running and the connection settings are right."
+            AskSqlErrorCode.DB_AUTH -> "The database refused those credentials. Check the username and password."
+            AskSqlErrorCode.DB_NOT_FOUND -> "The database connected, but that database name doesn't exist on the server."
             AskSqlErrorCode.DB_QUERY_ERROR -> "The database didn't accept that query."
-            AskSqlErrorCode.DB_TOO_MANY_ROWS -> "That returned more rows than the limit, so I trimmed it. Export to CSV for the full result."
             AskSqlErrorCode.LLM_AUTH -> "The AI provider didn't accept those credentials. Check your API key in Settings."
+            AskSqlErrorCode.LLM_BILLING -> "The AI account is out of credits or over its quota. Add credits or check the plan; waiting won't clear this."
+            AskSqlErrorCode.LLM_RATE_LIMIT -> "The AI provider is rate-limiting requests. Wait a moment and try again."
             AskSqlErrorCode.LLM_UNAVAILABLE -> "The AI provider isn't responding right now. Give it a moment and try again."
             AskSqlErrorCode.LLM_BAD_OUTPUT -> "I couldn't turn that reply into a working query. Try rephrasing the question."
             AskSqlErrorCode.LLM_REFUSAL -> "The model chose not to answer that one. Try rewording it."

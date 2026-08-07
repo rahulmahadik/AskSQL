@@ -75,8 +75,9 @@ function crossSiteRejection(req: ServerRequest, requireLoopbackHost: boolean): H
   };
   // The host check covers EVERY method: a rebound GET reads the schema and history just as well.
   if (requireLoopbackHost) {
+    // An absent Host is not a pass: HTTP/1.1 requires one, and omitting it would skip the check.
     const host = hostnameOf(header('host'));
-    if (host && !LOOPBACK_HOSTS.has(host)) {
+    if (!LOOPBACK_HOSTS.has(host)) {
       return json(403, {
         error: {
           code: 'SERVER_AUTHZ',
@@ -108,7 +109,7 @@ function hostnameOf(hostHeader: string): string {
   return value.split(':')[0]!;
 }
 
-const LOOPBACK_HOSTS: ReadonlySet<string> = new Set(['localhost', '127.0.0.1', '[::1]', '::1', '0.0.0.0']);
+const LOOPBACK_HOSTS: ReadonlySet<string> = new Set(['localhost', '127.0.0.1', '[::1]', '::1']);
 export class AskSqlServer {
   private readonly history = new MemoryHistoryStore(2000);
   private engine;
@@ -121,6 +122,8 @@ export class AskSqlServer {
   private dynamicSeq = 0;
   /** Ids mid-creation, reserved before the first await (see createConnection). */
   private readonly creatingIds = new Set<string>();
+  /** Ids this server created at runtime. Anything else was configured by the operator. */
+  private readonly dynamicIds = new Set<string>();
 
   constructor(private readonly config: AskSqlServerConfig) {
     if (typeof config.auth !== 'function') {
@@ -308,7 +311,20 @@ export class AskSqlServer {
     if (!canAccess(auth, ANY_CONNECTION)) {
       throw new AskSqlError('SERVER_AUTHZ', { detail: `user ${auth.userId} may not create connections` });
     }
-    const spec = (await req.json()) as ConnectionSpec;
+    // Through readBody like every other endpoint: malformed JSON (or a null / non-object body)
+    // is the CLIENT's mistake - 400 INVALID_INPUT, never a 500 "server misconfigured".
+    const spec = (await this.readBody(req)) as unknown as ConnectionSpec;
+    for (const [field, value] of [
+      ['id', spec.id],
+      ['name', spec.name],
+    ] as const) {
+      if (value !== undefined && typeof value !== 'string') {
+        throw new AskSqlError('INVALID_INPUT', {
+          detail: `connection spec ${field} must be a string, got ${typeof value}`,
+          userMessage: `The connection's ${field} must be a string.`,
+        });
+      }
+    }
     assertSpecAllowed(spec, options);
 
     const id = spec.id?.trim() || `dyn_${++this.dynamicSeq}`;
@@ -332,6 +348,7 @@ export class AskSqlServer {
       // Connect eagerly, so a bad host or password fails here while the user is still on the form.
       await connector.connect();
       this.setConnectors([...this.connectors, connector]);
+      this.dynamicIds.add(id);
       return json(201, {
         connection: { id, name: connector.name, engine: connector.engine, database: connector.database },
       });
@@ -350,19 +367,35 @@ export class AskSqlServer {
         },
       });
     }
-    // Same scope rule as every query endpoint: a caller who cannot use a connection cannot tear it down.
+    // Deleting dials nothing but removes a connection for everyone, so it needs the standing that
+    // creating one needs, not merely permission to query it.
+    if (!canAccess(auth, ANY_CONNECTION)) {
+      throw new AskSqlError('SERVER_AUTHZ', { detail: `user ${auth.userId} may not remove connections` });
+    }
     this.assertAccess(id, auth);
+    // An operator-configured connection is not this endpoint's to remove.
+    if (!this.dynamicIds.has(id)) {
+      return json(403, {
+        error: {
+          code: 'SERVER_AUTHZ',
+          userMessage: 'That connection was configured on the server and cannot be removed here.',
+          retryable: false,
+        },
+      });
+    }
     const mongo = this.mongoById.get(id);
     if (mongo) {
       await mongo.close();
       this.mongoById.delete(id);
       this.mongoEngines.delete(id);
+      this.dynamicIds.delete(id);
       return json(200, { removed: id });
     }
     // assertAccess already rejected an id in neither map, so a non-mongo id here is a SQL connector.
     const connector = this.byId.get(id)!;
     await connector.close?.();
     this.setConnectors(this.connectors.filter((c) => c.id !== id));
+    this.dynamicIds.delete(id);
     return json(200, { removed: id });
   }
 

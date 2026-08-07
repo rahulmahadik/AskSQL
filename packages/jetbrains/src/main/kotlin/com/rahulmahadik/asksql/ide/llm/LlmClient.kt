@@ -56,6 +56,14 @@ object LlmClients {
     /** Same classification as core's `classifyLlmError`: a 400/413 whose body talks about context/token/length is a context-overflow, not a generic outage. */
     fun isContextOverflowMessage(message: String): Boolean = CONTEXT_OVERFLOW_RE.containsMatchIn(message)
 
+    private val BILLING_RE = Regex(
+        """insufficient_quota|credit balance is too low|out of credits|billing|exceeded your current quota|quota exceeded""",
+        RegexOption.IGNORE_CASE,
+    )
+
+    /** An exhausted account, as opposed to a per-minute cap: no amount of waiting clears it. */
+    fun isBillingExhaustionMessage(body: String): Boolean = BILLING_RE.containsMatchIn(body)
+
     /** A shared [HttpClient] wired to the platform's proxy selector, so provider calls honor the IDE's HTTP/SOCKS proxy. */
     val sharedHttpClient: HttpClient by lazy {
         HttpClient.newBuilder()
@@ -128,17 +136,20 @@ object LlmClients {
             if (response.statusCode() >= 400) {
                 val body = response.body().bufferedReader(StandardCharsets.UTF_8).use { it.readText() }
                 if (response.statusCode() == 404) {
-                    // A 404 from an LLM endpoint means the model name is wrong/not installed, not a down provider.
                     throw AskSqlException(
                         AskSqlErrorCode.CONFIG_ERROR,
-                        userMessage = "The AI provider returned 404 - the model name is likely wrong or not installed. Check the model in Settings (for Ollama, pull it first with `ollama pull <model>`).",
+                        userMessage = "The AI provider has no chat model with that name. It may be an embedding or reranking model, " +
+                            "or one your API key has no access to - pick a different model in Settings " +
+                            "(for Ollama, pull it first with `ollama pull <model>`).",
                         detail = "HTTP 404: ${body.take(500)}",
                     )
                 }
-                val code = if ((response.statusCode() == 400 || response.statusCode() == 413) && isContextOverflowMessage(body)) {
-                    AskSqlErrorCode.LLM_CONTEXT_OVERFLOW
-                } else {
-                    AskSqlErrorCode.LLM_UNAVAILABLE
+                val status = response.statusCode()
+                val code = when {
+                    (status == 400 || status == 413) && isContextOverflowMessage(body) -> AskSqlErrorCode.LLM_CONTEXT_OVERFLOW
+                    isBillingExhaustionMessage(body) -> AskSqlErrorCode.LLM_BILLING
+                    status == 429 -> AskSqlErrorCode.LLM_RATE_LIMIT
+                    else -> AskSqlErrorCode.LLM_UNAVAILABLE
                 }
                 throw AskSqlException(code, detail = "HTTP ${response.statusCode()}: ${body.take(500)}")
             }

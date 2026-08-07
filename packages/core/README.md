@@ -39,7 +39,7 @@ const result = await answer.run();  // guarded, read-only execution
 console.table(result.rows);
 ```
 
-The model only ever receives your **schema and the question, never your data**. Every generated
+By default the model receives only your **schema and the question, never your data**. Every generated
 statement passes a deterministic AST guard before it can run. Writes, DDL and stacked statements are
 refused, and a row `LIMIT` is injected automatically.
 
@@ -80,3 +80,35 @@ aggregation pipeline instead of SQL.
 `model` also accepts a plain async function
 (`({ system, prompt, signal }) => string | AsyncIterable<string>`) - an escape hatch
 for custom gateways with no AI SDK involved.
+
+## What else the engine does
+
+Beyond ask -> approve -> run, all optional:
+
+- **Explain a query in plain language** - `engine.explain(sql)` describes what a statement
+  does, grounded in the schema.
+- **Streaming progress** - `config.onEvent` (and per-ask `onEvent`) emits stage + token events
+  across the pipeline (`catalog`, `prune`, `prompt`, `llm`, `extract`, `guard`, `repair`, `execute`,
+  `done`) for live UIs.
+- **Cancellation** - pass an `AbortSignal` to any ask/run/explain and Postgres/MySQL cancel the
+  running query at the database.
+- **Hallucination floor** - before a query runs, the engine deterministically checks every
+  referenced table *and* column against your schema; if the model invents or mis-guesses a
+  column (a common small-model slip), it is handed the real column list and re-asked, so the
+  fix happens before the database ever sees the query. The schema is also auto-shrunk and
+  retried once on context overflow.
+- **Follow-up context** - prior turns are threaded into the prompt so "now break that down by
+  month" works.
+- **Query history** - `config.history` records every attempt (status, duration), backed by an
+  in-memory store.
+- **Schema pruning + token budget** - large catalogs are pruned to the most relevant tables
+  under a token budget (`config.pruner`) before prompting.
+- **Privacy by default** - only the schema is ever sent. `allowDataInPrompt` (default off) is the
+  opt-in for sampled cell values; with it off they are stripped at the single exit from the catalog,
+  so a connector that samples cannot leak them into any prompt - the first prompt, a repair,
+  `explain`, or `explainSchema`. The MongoDB engine takes the same option, gating the values its
+  document sampling infers. Declared enum labels come from the schema and are kept either way.
+
+Prompts, model sampling, guard policy, and grounding (glossary, few-shots) are configurable
+without forking; see
+[docs/configuration.md](https://github.com/rahulmahadik/AskSQL/blob/HEAD/docs/configuration.md).

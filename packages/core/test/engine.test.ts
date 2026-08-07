@@ -260,6 +260,19 @@ describe('validation + cancellation', () => {
     ).toThrow();
   });
 
+  // A MongoDB connector has no dialect; without this it reached prompt building and failed there
+  // with a property read on undefined, which says nothing about what the caller did wrong.
+  it('a connector with no dialect is rejected at config, not while building a prompt', () => {
+    const mongoish = Object.assign(new FakeConnector(), { id: 'mongo', dialect: undefined });
+    expect(() => createAskSql({ connectors: [mongoish], model: model(['x']) })).toThrow(/createMongoAskSql/);
+    try {
+      createAskSql({ connectors: [mongoish], model: model(['x']) });
+    } catch (err) {
+      expect((err as { code: string }).code).toBe('CONFIG_ERROR');
+      expect((err as { userMessage: string }).userMessage).toMatch(/cannot answer SQL questions/i);
+    }
+  });
+
   it('direct execute of a write is blocked and recorded', async () => {
     const conn = new FakeConnector();
     const engine = createAskSql({ connectors: [conn], model: model(['x']) });

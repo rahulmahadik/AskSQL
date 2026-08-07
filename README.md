@@ -1,6 +1,6 @@
 # AskSQL
 
-*AI database chat: ask in plain language, review the query, get answers.*
+*Ask your database a question in plain English. Review the SQL. Approve it. Get the answer.*
 
 [![CI](https://github.com/rahulmahadik/AskSQL/actions/workflows/ci.yml/badge.svg)](https://github.com/rahulmahadik/AskSQL/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/@asksql/core?label=%40asksql%2Fcore)](https://www.npmjs.com/package/@asksql/core)
@@ -8,26 +8,15 @@
 [![JetBrains Marketplace](https://img.shields.io/jetbrains/plugin/v/33126?label=JetBrains)](https://plugins.jetbrains.com/plugin/33126-asksql)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
-All packages are published on npm under the [`@asksql`](https://www.npmjs.com/org/asksql) scope.
+AskSQL turns your question into a SQL query, shows you the query and a short explanation,
+and runs it only after you approve. It is read-only by design: a deterministic guard refuses
+anything that is not a SELECT, so asking it to delete rows gets you the statement written
+out as text to run yourself, never executed.
 
-**Get it:**
-
-| Surface | Install |
-|---|---|
-| JetBrains IDEs (IntelliJ, DataGrip, PyCharm, ...) | [JetBrains Marketplace](https://plugins.jetbrains.com/plugin/33126-asksql) |
-| VS Code | [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=RahulMahadik.asksql-vscode) |
-| Your own app / server | `npm i @asksql/core` - plus [`@asksql/react`](https://www.npmjs.com/package/@asksql/react), [`@asksql/server`](https://www.npmjs.com/package/@asksql/server), [`@asksql/widget`](https://www.npmjs.com/package/@asksql/widget) and the per-database connectors |
-
-**Open-source, embeddable AI database chat.** Ask a question in plain language, review the
-generated SQL, approve it, and get results - as a floating chat-head bubble you can drop into
-any app, or a full-page chat UI, from one `npm install`.
-
-```tsx
-import { AskSqlChat, HttpTransport } from '@asksql/react';
-
-const transport = new HttpTransport({ baseUrl: '/asksql' });
-<AskSqlChat transport={transport} />
-```
+It works with PostgreSQL, MySQL / MariaDB, SQLite, DuckDB, Oracle, and MongoDB. You bring
+your own model: a local one through [Ollama](https://ollama.com), or an OpenAI, Anthropic,
+Google Gemini, Azure, Groq, NVIDIA, or any OpenAI-compatible key. Everything is self-hosted,
+with no telemetry; the model sees your schema and your question, never your rows.
 
 <p align="center">
   <img src="docs/screenshots/02-results-table-light.png" width="620"
@@ -36,101 +25,110 @@ const transport = new HttpTransport({ baseUrl: '/asksql' });
   <em>Ask in plain language, review the generated SQL, get results. (<a href="docs/screenshots/README.md">more screenshots</a>)</em>
 </p>
 
-## Use it in JetBrains IDEs
+## Get it
 
-Install **[AskSQL](https://plugins.jetbrains.com/plugin/33126-asksql)** from the JetBrains
-Marketplace (IntelliJ IDEA, DataGrip, PyCharm, and the rest of the family). Six databases,
-local or hosted models, read-only by design - the same engine as every other surface.
+The same engine and guard, on four surfaces:
 
-## Use it in VS Code
+| Where you work | Install |
+|---|---|
+| JetBrains IDEs (IntelliJ, DataGrip, PyCharm, ...) | [JetBrains Marketplace](https://plugins.jetbrains.com/plugin/33126-asksql) |
+| VS Code | [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=RahulMahadik.asksql-vscode) |
+| Edge / Chrome | Browser extension: build it from [`packages/browser-extension`](packages/browser-extension/README.md) |
+| Your own app or server | `npm i @asksql/core` plus [`@asksql/react`](https://www.npmjs.com/package/@asksql/react), [`@asksql/server`](https://www.npmjs.com/package/@asksql/server), [`@asksql/widget`](https://www.npmjs.com/package/@asksql/widget) and the per-database connectors, all under the [`@asksql`](https://www.npmjs.com/org/asksql) npm scope |
 
-Prefer a ready-made tool over the libraries? The **AskSQL** VS Code extension puts the same engine
-and read-only guard in a sidebar panel: connect Postgres, MySQL / MariaDB, SQLite, Oracle or
-MongoDB, ask in plain language, and get answers without leaving your editor. Bring your own model -
-a chat model already in VS Code, a local Ollama model, or your own OpenAI / Anthropic / Google /
-Groq / NVIDIA key.
+Most people want one of the first three. If you are building your own product, the npm
+packages give you the same engine as an embeddable chat: a floating chat-head bubble, a
+full-page chat UI, or a headless hook. The rest of this README covers that path.
 
-<p align="center">
-  <img src="packages/vscode/images/extension-overview.png" width="820"
-       alt="AskSQL in VS Code: the Databases explorer and the Ask panel side by side in the editor." />
-</p>
-<p align="center">
-  <img src="packages/vscode/images/sidebar-chat.png" width="410"
-       alt="Ask a question in the AskSQL sidebar and get the answer as a table." />
-  <img src="packages/vscode/images/general-db-question.png" width="410"
-       alt="A plain-language question turned into SQL with results, plus a general question answered from the schema." />
-</p>
+```tsx
+import { AskSqlChat, HttpTransport } from '@asksql/react';
 
-Install **[AskSQL](https://marketplace.visualstudio.com/items?itemName=RahulMahadik.asksql-vscode)** from the VS Code Marketplace (or build the `.vsix` from `packages/vscode`). See the
-[extension README](packages/vscode/README.md) for details.
-
-Working in a JetBrains IDE instead? The **AskSQL** plugin for IntelliJ IDEA, DataGrip, PyCharm, and
-the rest of the family lives in [`packages/jetbrains`](packages/jetbrains/README.md) - a pure
-Kotlin/JVM port of the same engine and guard.
-
-## Why AskSQL
-
-Most open-source text-to-SQL tools are Python libraries, hosted platforms, or standalone
-apps. AskSQL is built for JS/TS developers instead: an **npm package you install and mount in
-an afternoon**, self-hosted with your own LLM and your own database.
-
-It fits three shapes of app without a rewrite - drop the `<AskSqlBubble/>` into an existing
-product, mount `<AskSqlChat/>` as a full-page analytics tool, or build a custom surface on the
-headless `useAskSql` hook. Postgres, MySQL, SQLite, DuckDB (including CSV / Parquet / Excel
-files queried in the browser), Oracle, and MongoDB are first-class, and any OpenAI-compatible
-model works. Nothing runs until a deterministic guard has proven the SQL is read-only.
-
-- **Two surfaces, one engine** - `<AskSqlBubble/>` (Intercom-style chat head) and
-  `<AskSqlChat/>` (full page), plus headless `useAskSql` for custom UIs.
-- **Local-first** - upload CSV / JSON / Parquet / a portable SQL dump and query them in-process with DuckDB; run a
-  fully local model with Ollama. Data and credentials never have to leave your infrastructure.
-- **Verifiable safety** - read-only by default, a deterministic **AST-based SQL guard** (not
-  regex), optional human approval before execution, and query audit.
-- **Bring your own LLM** - OpenAI, Anthropic, Google Gemini, Azure OpenAI, **Groq**, NVIDIA,
-  Ollama, or any OpenAI-compatible endpoint, via the Vercel AI SDK.
-- **Pay only for what you import** - per-database adapter packages; a MySQL-only app never
-  downloads DuckDB's WASM or `pg`.
-
-## How it fits together
-
-```text
-  Browser                         Your server                    Your database
-  ---------------------           ----------------------         -------------------
-  <AskSqlChat/>                    @asksql/server                 Postgres / MySQL /
-  <AskSqlBubble/>   --HTTP/SSE-->  - auth hook (your login)       SQLite / DuckDB /
-  useAskSql  /  widget            - holds DB credentials          Oracle / MongoDB
-                                   - server-side guard
-                                        |
-                                        v
-                                   @asksql/core (engine)
-                                    1. introspect schema
-                                    2. schema + question -----> LLM provider
-                                       (no DB rows sent)   <----  generated SQL
-                                    3. AST guard: read-only SELECT only
-                                       (blocked -> refused, never runs)
-                                    4. connector runs it (read-only session
-                                       where the engine supports it) --> DB
+const transport = new HttpTransport({ baseUrl: '/asksql' });
+<AskSqlChat transport={transport} />
 ```
 
-Credentials and the authoritative guard live on the server; the browser only ever sends a
-question and renders results. The model sees your **schema and the question, never your rows**.
+## JetBrains IDEs
 
-Client-only mode collapses this: `<AskSqlChat/>` talks straight to `@asksql/core` and a
-DuckDB-WASM connector in the same tab, with no server and nothing leaving the browser.
+A pure Kotlin/JVM port of the engine and guard for IntelliJ IDEA, DataGrip, PyCharm, and the
+rest of the family: six databases, local or hosted models, read-only by design. Install it from
+the [JetBrains Marketplace](https://plugins.jetbrains.com/plugin/33126-asksql); setup and
+screenshots: [plugin README](packages/jetbrains/README.md).
+
+## VS Code
+
+The same engine in a sidebar panel: connect Postgres, MySQL / MariaDB, SQLite, Oracle or
+MongoDB and ask without leaving the editor, using a chat model already in VS Code, a local
+Ollama model, or your own API key. Install it from the
+[VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=RahulMahadik.asksql-vscode);
+details: [extension README](packages/vscode/README.md).
+
+## Browser extension
+
+The Edge / Chrome extension puts the chat in the browser's side panel. Point it at data files
+(CSV, JSON, Parquet, Excel, or a `.sql` dump) analyzed entirely in-tab with DuckDB-WASM, or at
+an `@asksql/server` sidecar to reach a real database. Build it from
+[`packages/browser-extension`](packages/browser-extension/README.md).
+
+## npm libraries
+
+Where most open-source text-to-SQL tools are Python libraries or hosted platforms, AskSQL is an
+npm package for JS/TS developers, self-hosted with your own LLM and your own database. Mount
+`<AskSqlBubble/>` in an existing product, `<AskSqlChat/>` as a full-page tool, or build on the
+headless `useAskSql` hook; the [`@asksql/server`](packages/server/README.md) sidecar keeps
+credentials off the browser. Start with the [`@asksql/react` README](packages/react/README.md),
+then [docs/deployment.md](docs/deployment.md) for how it fits together, the two ways to run,
+the per-mode install matrix, and the runnable `examples/`.
+
+## Databases
+
+Six engines are first-class. Each connector introspects the schema and executes only guarded,
+read-only queries; the driver is a peer dependency you install yourself.
+
+| Database | Package | Driver (peer) | How you connect |
+|----------|---------|---------------|-----------------|
+| PostgreSQL | `@asksql/postgres` | `pg` | `connectionString` (or `host`/`port`/`user`/`password`/`database`) |
+| MySQL / MariaDB | `@asksql/mysql` | `mysql2` | `uri` + `database`, or `host`/`port`/`user`/`password`/`database` |
+| SQLite | `@asksql/sqlite` | `better-sqlite3` (or `node:sqlite`) | `file` path, or pass an existing `database` handle |
+| DuckDB | `@asksql/duckdb` | `@duckdb/node-api` (Node) / `@duckdb/duckdb-wasm` (browser) | `path` (`:memory:` default) and/or `files` to register CSV/JSON/Parquet/Excel/`.sql` as tables (each data file or Excel `sheet` becomes its own joinable table; a portable `.sql` dump runs its CREATE + INSERT and exposes the tables it builds) |
+| Oracle | `@asksql/oracle` | `oracledb` (pure-JS Thin mode) | `host`/`port`/`user`/`password`/`database` (service name), or a `connectString` |
+| MongoDB | `@asksql/mongodb` | `mongodb` | `connectionString` (`mongodb://` or `mongodb+srv://`) + `database` |
+
+MongoDB is non-SQL: pass `MongodbConnector` to `createMongoAskSql` from `@asksql/core/mongo`;
+the flow is the same ask, guard, run, but over aggregation pipelines. Registering multiple
+connectors lets one engine answer questions across several databases.
+
+## Read-only by design
+
+The LLM is untrusted input; a deterministic AST-based guard, not the prompt, decides what runs.
+Only a single read-only SELECT passes, along with EXPLAIN of one and the read-only PRAGMA/SHOW
+forms: every write and DDL form, stacked statement, and dangerous function is blocked, and
+anything unparseable fails closed. Where the engine supports it (Postgres, MySQL, SQLite,
+Oracle) the connector also opens a read-only session as a backstop, and the generated SQL is
+always shown before it runs (`requireApproval` adds a Run button). The
+guard's full case coverage is the `guard-security` and `guard-fuzz` suites under
+`packages/core/test/`; [docs/FAQ.md](docs/FAQ.md) covers the safety model in detail.
+
+## Packages
+
+| Package | What it is |
+|---------|------------|
+| [`@asksql/core`](https://www.npmjs.com/package/@asksql/core) | Engine: schema catalog, AST guard, NL->SQL pipeline, provider resolver. No drivers. |
+| [`@asksql/postgres`](https://www.npmjs.com/package/@asksql/postgres) [`@asksql/mysql`](https://www.npmjs.com/package/@asksql/mysql) [`@asksql/sqlite`](https://www.npmjs.com/package/@asksql/sqlite) [`@asksql/duckdb`](https://www.npmjs.com/package/@asksql/duckdb) [`@asksql/oracle`](https://www.npmjs.com/package/@asksql/oracle) [`@asksql/mongodb`](https://www.npmjs.com/package/@asksql/mongodb) | Database connectors (drivers are peer deps). |
+| [`@asksql/server`](https://www.npmjs.com/package/@asksql/server) | Credential-holding sidecar: auth hook, server-side guard, SSE `/chat`. Express adapter included. |
+| [`@asksql/react`](https://www.npmjs.com/package/@asksql/react) | `<AskSqlChat/>`, `<AskSqlBubble/>`, `useAskSql`, result table, CSV export. Light/dark. |
+| [`@asksql/widget`](https://www.npmjs.com/package/@asksql/widget) | Vanilla-JS `<script>` embed (shadow-DOM isolated) for non-React pages. |
+| [`@asksql/mcp`](https://www.npmjs.com/package/@asksql/mcp) | Model Context Protocol tools, so agents (Claude Desktop, IDEs) can query through the same guard. See [packages/mcp](packages/mcp/README.md). |
+
+**API reference (TypeDoc):** [rahulmahadik.github.io/AskSQL](https://rahulmahadik.github.io/AskSQL/)
 
 ## Quick start
 
-New here? This is the whole thing, fully local - no cloud, no API key, no server. It points at a
-SQLite file and a model running on your own machine through [Ollama](https://ollama.com).
+The whole thing, fully local: a SQLite file and a model on your own machine through Ollama.
+No cloud, no API key, no server.
 
 ```bash
-# 1. Install: the engine + the SQLite adapter + the local-model SDK.
-#    Node 22.5+ uses the built-in node:sqlite, so there is no driver to build. On older
-#    Node, or if you prefer that driver, add better-sqlite3 to this line.
-npm i @asksql/core @asksql/sqlite @ai-sdk/openai-compatible
-
-# 2. Get a local model (install Ollama first from ollama.com), then pull a small coder model:
-ollama pull qwen2.5-coder:7b
+npm i @asksql/core @asksql/sqlite @ai-sdk/openai-compatible  # Node 22.5+ needs no sqlite driver
+ollama pull qwen2.5-coder:7b                                 # install Ollama first: ollama.com
 ```
 
 ```ts
@@ -146,428 +144,11 @@ console.log(answer.sql);            // the SQL - always shown before it runs
 console.log(await answer.run());    // guarded (read-only) + executed
 ```
 
-That is a complete, private setup: your database and your model both stay on your machine, and
-only the schema plus your question ever reach the model. When you want a chat UI add
-`@asksql/react`; to keep DB credentials off the browser add the `@asksql/server` sidecar; to
-query CSV / Parquet files in the browser use `@asksql/duckdb`. The rest of this README covers
-each of those. Prefer a cloud model instead of Ollama? Swap step 2 for one `@ai-sdk/*` package
-and an API key - see [Install only what your mode needs](#install-only-what-your-mode-needs).
-
-**Schema Q&A** (on by default in the IDE extensions; `engine.explainSchema` in code):
-questions that aren't a data query - "how do these tables relate?", "how should I add a
-phone column?", "suggest an index" - get grounded prose answers, with any proposed
-INSERT/UPDATE/DELETE/DDL returned as text that is never executed. A bare imperative write
-("delete all cancelled orders") takes the same path, and is recognised before any model call,
-so it comes back as a proposal rather than a SELECT. Ask something with nothing to do with
-data and AskSQL says so plainly rather than guessing; ask about databases in general, or
-about another engine, and it answers for the one you're on.
-
-## Packages
-
-All packages publish under the [`@asksql`](https://www.npmjs.com/org/asksql) npm scope.
-
-| Package | What it is |
-|---------|------------|
-| [`@asksql/core`](https://www.npmjs.com/package/@asksql/core) | Engine: schema catalog, AST guard, NL->SQL pipeline, provider resolver. No drivers. |
-| [`@asksql/postgres`](https://www.npmjs.com/package/@asksql/postgres) [`@asksql/mysql`](https://www.npmjs.com/package/@asksql/mysql) [`@asksql/sqlite`](https://www.npmjs.com/package/@asksql/sqlite) [`@asksql/duckdb`](https://www.npmjs.com/package/@asksql/duckdb) [`@asksql/oracle`](https://www.npmjs.com/package/@asksql/oracle) [`@asksql/mongodb`](https://www.npmjs.com/package/@asksql/mongodb) | Database connectors (drivers are peer deps). |
-| [`@asksql/server`](https://www.npmjs.com/package/@asksql/server) | Credential-holding sidecar: auth hook, server-side guard, SSE `/chat`. Express adapter included. |
-| [`@asksql/react`](https://www.npmjs.com/package/@asksql/react) | `<AskSqlChat/>`, `<AskSqlBubble/>`, `useAskSql`, result table, CSV export. Light/dark. |
-| [`@asksql/widget`](https://www.npmjs.com/package/@asksql/widget) | Vanilla-JS `<script>` embed (shadow-DOM isolated) for non-React pages. |
-| [`@asksql/mcp`](https://www.npmjs.com/package/@asksql/mcp) | Model Context Protocol tools, so agents (Claude Desktop, IDEs) can query through the same guard. |
-
-**API reference (TypeDoc):** [rahulmahadik.github.io/AskSQL](https://rahulmahadik.github.io/AskSQL/)
-
-## Install only what your mode needs
-
-Every setup is **three parts**, and you install only the ones you use:
-
-1. **Engine** - `@asksql/core` (always).
-2. **Data layer** - a database adapter + its driver (`@asksql/postgres` + `pg`, `@asksql/mysql`
-   + `mysql2`, `@asksql/sqlite` on its own from Node 22.5), **or** `@asksql/duckdb` for browser
-   file-analytics. Plus `@asksql/server` when you run the sidecar, and `@asksql/react` for the UI.
-3. **Model-provider SDK** - one `@ai-sdk/*` package for the LLM you picked (see the table below).
-
-Nothing outside those is pulled in - a MySQL-only app never downloads DuckDB's WASM or `pg`.
-
-```bash
-# Browser file analytics (CSV/JSON/Parquet, zero backend) with a local Ollama model:
-npm i @asksql/core @asksql/react @asksql/duckdb @ai-sdk/openai-compatible
-
-# Server sidecar over MySQL, using OpenAI:
-npm i @asksql/core @asksql/server @asksql/react @asksql/mysql mysql2 @ai-sdk/openai
-
-# Server sidecar over Postgres, using Groq:
-npm i @asksql/core @asksql/server @asksql/react @asksql/postgres pg @ai-sdk/groq
-```
-
-Pick the **one** model-provider SDK that matches your `provider` - they are optional peer deps:
-
-| `provider` | Install |
-|------------|---------|
-| `openai` | `@ai-sdk/openai` |
-| `anthropic` | `@ai-sdk/anthropic` |
-| `google` | `@ai-sdk/google` |
-| `azure` (classic) | `@ai-sdk/azure` |
-| `groq` | `@ai-sdk/groq` |
-| `nvidia` | `@ai-sdk/openai-compatible` |
-| `ollama`, `openai-compatible` (LM Studio, vLLM, OpenRouter, Azure AI Foundry, ...) | `@ai-sdk/openai-compatible` |
-
-## Databases
-
-Six engines are first-class. Each connector introspects the schema (tables, views, columns,
-keys, enums, indexes) and executes only guarded, read-only queries. The driver is a peer
-dependency you install yourself.
-
-| Database | Package | Driver (peer) | How you connect |
-|----------|---------|---------------|-----------------|
-| PostgreSQL | `@asksql/postgres` | `pg` | `connectionString` (or `host`/`port`/`user`/`password`/`database`) |
-| MySQL / MariaDB | `@asksql/mysql` | `mysql2` | `uri` + `database`, or `host`/`port`/`user`/`password`/`database` |
-| SQLite | `@asksql/sqlite` | `better-sqlite3` (or `node:sqlite`) | `file` path, or pass an existing `database` handle |
-| DuckDB | `@asksql/duckdb` | `@duckdb/node-api` (Node) / `@duckdb/duckdb-wasm` (browser) | `path` (`:memory:` default) and/or `files` to register CSV/JSON/Parquet/Excel/`.sql` as tables (each data file or Excel `sheet` becomes its own joinable table; a portable `.sql` dump runs its CREATE + INSERT and exposes the tables it builds) |
-| Oracle | `@asksql/oracle` | `oracledb` (pure-JS Thin mode) | `host`/`port`/`user`/`password`/`database` (service name), or a `connectString` |
-| MongoDB | `@asksql/mongodb` | `mongodb` | `connectionString` (`mongodb://` or `mongodb+srv://`) + `database` |
-
-```ts
-new PostgresConnector({ id: 'shop', name: 'Shop', connectionString: process.env.DATABASE_URL });
-new MysqlConnector({ id: 'app', name: 'App', uri: process.env.DATABASE_URL, database: 'app' });
-new SqliteConnector({ id: 'local', name: 'Local', file: './app.db' });
-new DuckDbConnector({ id: 'files', name: 'Files', files: [{ table: 'sales', path: 'sales.csv', format: 'csv' }] });
-```
-
-MongoDB is non-SQL: pass `MongodbConnector` to `createMongoAskSql` from `@asksql/core/mongo` (not
-`createAskSql`). The flow is the same ask, guard, run, but over aggregation pipelines.
-
-Connectors open **read-only** sessions where the engine supports it, so the AST guard has a
-second line of defense at the database itself. Registering multiple connectors lets one engine
-answer questions across several databases. Credentials belong on the server sidecar, never in
-the browser.
-
-## Two ways to run
-
-**Client-only (zero backend)** - files + DuckDB in the browser, model called directly:
-
-```ts
-import { createAskSql, resolveModel } from '@asksql/core';
-import { DuckDbConnector } from '@asksql/duckdb';
-
-const connector = new DuckDbConnector({ id: 'files', name: 'Files',
-  files: [{ table: 'sales', path: 'sales.csv', format: 'csv' }] });
-const model = await resolveModel({ provider: 'ollama', model: 'qwen2.5-coder:7b',
-  baseURL: 'http://localhost:11434/v1' });
-const engine = createAskSql({ connectors: [connector], model });
-
-const answer = await engine.ask('Which region has the highest sales?');
-console.log(answer.sql);            // reviewed before it runs
-const result = await answer.run();  // guarded + executed
-```
-
-**Server sidecar** - credentials stay server-side, browser talks HTTP:
-
-```ts
-import express from 'express';
-import { asksqlMiddleware } from '@asksql/server/express';
-import { PostgresConnector } from '@asksql/postgres';
-import { resolveModel } from '@asksql/core';
-
-const app = express();
-app.use(express.json());
-app.use('/asksql', asksqlMiddleware({
-  connectors: [new PostgresConnector({ id: 'shop', name: 'Shop', connectionString: process.env.DATABASE_URL })],
-  engine: { model: await resolveModel({ provider: 'groq', model: 'llama-3.3-70b-versatile', apiKey: process.env.GROQ_API_KEY }) },
-  auth: (req) => ({ userId: lookUpSession(req), allowedConnectionIds: ['shop'] }), // your auth
-}));
-```
-
-## Configuration
-
-**Model providers** - OpenAI, Anthropic, Gemini, Azure (classic + AI Foundry), Groq, NVIDIA,
-Ollama, or any OpenAI-compatible endpoint. See **[docs/providers.md](docs/providers.md)** for
-per-provider config (including the Azure classic-vs-Foundry gotcha).
-
-Prompts and model sampling are host-configurable - no forking required.
-
-**Prompts** (`config.prompts`) - extend or fully replace the system prompt:
-
-```ts
-const engine = createAskSql({
-  connectors: [connector],
-  model,
-  prompts: {
-    // Append house rules to the built-in prompt:
-    instructions: 'Prefer CTEs over subqueries. Alias every aggregate.',
-    // ...or replace it entirely (you own correctness guidance - the AST guard
-    // still enforces read-only regardless of what the prompt says):
-    // system: ({ dialectLabel, maxRows }) => `You are a ${dialectLabel} analyst...`,
-  },
-});
-```
-
-**Model sampling** (`config.llm`) - every knob is optional; unset ones fall back
-to the provider default, and `temperature` defaults to `0` (deterministic, best
-for SQL):
-
-```ts
-const engine = createAskSql({
-  connectors: [connector],
-  model,
-  llm: {
-    temperature: 0,          // 0 = deterministic (default)
-    topP: 0.9,               // nucleus sampling (prefer temperature OR topP)
-    topK: 40,                // where the provider supports it
-    frequencyPenalty: 0.2,
-    presencePenalty: 0,
-    seed: 42,                // reproducible sampling where supported
-    stopSequences: ['\n\n'],
-    maxRetries: 2,           // retries on 429 / 5xx / network (default 2)
-    timeoutMs: 60000,        // per-call timeout (default 60s)
-    maxOutputTokens: 1024,   // cap the completion length
-    // Escape hatch for provider-specific knobs (reasoning effort, etc.):
-    providerOptions: { groq: { reasoning_format: 'hidden' } },
-  },
-});
-```
-
-**Guard policy** (`config.policy`) - the read-only floor is immovable, but the limits
-around it are yours to set:
-
-```ts
-const engine = createAskSql({
-  connectors: [connector],
-  model,
-  policy: {
-    maxRows: 1000,               // LIMIT injected when missing / lowered when higher.
-                                 // Default 1000, clamped to at most 100000.
-    denyFunctions: ['pg_sleep'], // extra names blocked on top of the built-in denylist
-    allowFileFunctions: false,   // read_csv/read_parquet - true only for browser DuckDB.
-                                 // Credential and settings functions stay denied either way.
-    maxSqlLength: 100000,        // reject pathologically long SQL
-    maxDepth: 400,               // AST walk depth cap (fails closed)
-  },
-});
-```
-
-**Grounding** - two optional inputs make generation sharper without touching the guard:
-
-```ts
-const engine = createAskSql({
-  connectors: [connector],
-  model,
-  // Define house vocabulary so "MRR" or "active user" map to real columns:
-  glossary: [{ term: 'active user', definition: 'a user with an event in the last 30 days' }],
-  // Approved question -> SQL pairs are retrieved as few-shots on later asks:
-  fewShots: new MemoryFewShotStore(),
-});
-// After a user approves an answer, teach the engine (only stored if it passes the guard):
-await engine.recordFeedback('top customers by revenue', approvedSql, { connectionId: 'shop' });
-```
-
-## Model Context Protocol (MCP)
-
-`@asksql/mcp` exposes the same guarded engine to MCP clients (Claude Desktop, IDE agents),
-so an assistant can explore and query your database through the identical read-only guard -
-a `DELETE` still comes back `GUARD_BLOCKED`.
-
-```bash
-npm i @asksql/core @asksql/mcp @modelcontextprotocol/sdk
-```
-
-```ts
-import { createAskSql } from '@asksql/core';
-import { startAskSqlMcpServer } from '@asksql/mcp';
-
-const engine = createAskSql({ connectors: [/* ... */], model });
-await startAskSqlMcpServer(engine); // speaks MCP over stdin/stdout
-```
-
-Five tools are advertised: `asksql_list_connections`, `asksql_schema`, `asksql_query`
-(question -> SQL, no execution), `asksql_explain_schema` (a question about the schema itself,
-answered in prose, nothing executed), and `asksql_run` (execute an approved read-only SELECT).
-`createAskSqlMcpTools(engine)` returns the raw tool defs for a custom transport; the SDK is an
-optional peer, needed only by `startAskSqlMcpServer`. It takes a `createAskSql` engine, so it
-covers the five SQL engines, not MongoDB. See
-[packages/mcp/README.md](packages/mcp/README.md).
-
-## What else is in the box
-
-Beyond ask -> approve -> run, the engine and server ship these (all optional):
-
-- **Explain a query in plain language** - `engine.explain(sql)` / server `POST /explain` describe
-  what a statement does, grounded in the schema. `useAskSql().planFor()` is separate: it runs
-  `EXPLAIN` through the guard and returns the database's own plan.
-- **Streaming progress** - `config.onEvent` (and per-ask `onEvent`) emits stage + token events
-  across the pipeline (`catalog`, `prune`, `llm`, `extract`, `guard`, `execute`, `done`) for live UIs.
-- **Cancellation** - pass an `AbortSignal` to any ask/run/explain and Postgres/MySQL cancel the
-  running query at the database. `@asksql/server` threads the request's signal through, so
-  `useAskSql().cancel()` stops the query too, not just the browser request.
-- **Hallucination floor** - before a query runs, the engine deterministically checks every
-  referenced table *and* column against your schema; if the model invents or mis-guesses a
-  column (a common small-model slip), it is handed the real column list and re-asked, so the
-  fix happens before the database ever sees the query. The schema is also auto-shrunk and
-  retried once on context overflow.
-- **Suggested fix on failure** - if a query still fails at the database, the server asks the
-  model for a corrected query and returns it as a suggestion; the UI shows an **"Apply suggested
-  fix"** button so the user can review and re-run it (it never auto-runs). The driver's error text
-  is redacted first: row values are stripped out, the column, table and constraint names the model
-  needs are kept. Toggle with the server's `suggestFixOnError` option (default on; set false to
-  disable the extra model call).
-- **Follow-up context** - prior turns are threaded into the prompt so "now break that down by
-  month" works; the UI sends the last few turns automatically.
-- **Query history + audit** - `config.history` records every attempt (status, duration) and
-  `@asksql/server` serves it at a paginated `GET /history`, backed by an in-memory store; the
-  server's `audit` option is a pluggable sink with the guard verdict.
-- **Saved queries** - `useSavedQueries` / `SavedQueryStore` pin and reuse questions
-  (localStorage-backed, SSR-safe).
-- **Schema pruning + token budget** - large catalogs are pruned to the most relevant tables
-  under a token budget (`config.pruner`) before prompting.
-- **Privacy by default** - only the schema is ever sent. `allowDataInPrompt` (default off) is the
-  opt-in for sampled cell values; with it off they are stripped at the single exit from the catalog,
-  so a connector that samples cannot leak them into any prompt - the first prompt, a repair,
-  `explain`, or `explainSchema`. The MongoDB engine takes the same option, gating the values its
-  document sampling infers. Declared enum labels come from the schema and are kept either way.
-- **Server hardening** - `GET /health`, a request-body size cap (`maxBodyBytes`), a JSON
-  content-type gate on every state-changing request, an optional loopback `Host` check
-  (`requireLoopbackHost`), and built-in `cors` handling on the Express adapter.
-
-## Customizing the UI
-
-The UI is override-friendly at four levels, lightest to fully custom:
-
-**Theme with CSS variables** - restyle without touching components. Override any of
-`--aq-accent`, `--aq-bg`, `--aq-surface`, `--aq-fg`, `--aq-muted`, `--aq-border`,
-`--aq-code-bg`, `--aq-ok`, `--aq-warn`, `--aq-danger`, `--aq-shadow` (and `--aq-accent-fg`),
-and set `theme="light" | "dark" | "auto"`.
-
-**Component props** - `<AskSqlChat>` takes `placeholder`, `suggestions`, `requireApproval`,
-`showConnectionPicker`, `connectionId`, and `nonce` (CSP); `<AskSqlBubble>` adds `title`,
-`icon`, `position`, `offset`, and `zIndex`. The vanilla widget's `AskSQL.mount()` takes the
-same `theme` / `title` / `position` / `offset` / `zIndex`.
-
-**Compose the building blocks** - `<ResultTable>`, `<SqlBlock>`, `<SchemaBrowser>`, and
-`<ResultChart>` (plus the `formatCell` / `toCsv` helpers) are exported standalone, so you can
-lay out your own surface while keeping our rendering.
-
-**Go fully headless** - `useAskSql` gives you the entire ask -> approve -> run state machine
-with zero markup; render your own UI on top while the engine and guard still run underneath:
-
-```tsx
-import { useAskSql } from '@asksql/react';
-
-function MyChat({ transport }) {
-  const { turns, busy, ask, run, editSql } = useAskSql({ transport, requireApproval: true });
-  // Render turns / SQL / results however you like; approval + guard still apply.
-}
-```
-
-## Safety model
-
-The LLM is untrusted input. A deterministic guard - not the prompt - decides what runs:
-
-- Single read-only `SELECT` only (CTEs verified recursively); every write/DDL form, stacked
-  statement, data-modifying CTE, `SELECT INTO`, locking clause, `INTO OUTFILE`, backtick-quoted
-  identifiers outside MySQL, and a dangerous-function denylist are **blocked**. Anything
-  unparseable fails closed.
-- Runs client-side for UX **and** server-side for authority; where the engine supports it
-  (Postgres, MySQL, SQLite, Oracle) the connector also opens a read-only session, so a bypass
-  still hits a read-only transaction. DuckDB has no read-only session: in Node it opens a plain
-  database file with `access_mode=READ_ONLY` (verified after opening, and a missing file is not
-  created), but registering `files` needs `CREATE VIEW`, so that mode and the browser build are
-  read-write and the AST guard is the only barrier.
-- Row caps injected automatically; the generated SQL is always shown before it runs, and an
-  optional `requireApproval` gate can hold every query behind a Run button; every query (and
-  every block) is recorded.
-
-The guard is developed test-first: its full case coverage - every blocked write/DDL/obfuscation
-form plus property-based fuzzing - lives in the `guard-security` and `guard-fuzz` suites under
-`packages/core/test/`.
-
-## Accuracy depends on the model and the question
-
-Be clear-eyed about what AskSQL guarantees. The guard guarantees **safety** - the SQL is
-read-only and is shown to you before it runs. It does **not** guarantee the query is
-**semantically** what you meant. How good the generated SQL is depends on two things:
-
-- **How capable your model is.** AskSQL is built to run fully offline on a local coder model -
-  pick one sized to your workload (see the rule of thumb below), and if you ever need to, a
-  cloud model is an option for the heaviest analytics, never a requirement.
-- **How complex the question is.** Single-table filters and simple joins are reliable across the
-  board. But multi-table analytics - especially aggregating measures across several
-  one-to-many tables at once - can trip a smaller model into a classic **join fan-out**
-  (summing over a row-multiplied result and inflating the total), or a hallucinated column, even
-  though the SQL is valid and the guard passes. Both of those are caught before the query runs:
-  invented columns against the schema, and a fan-out against your foreign keys, each sending the
-  query back to be rewritten.
-
-**Rule of thumb, from real testing.** The more tables a question must join, and the larger or
-more inconsistently-named your schema, the more model capability you need:
-
-| Your situation | What to use |
-|----------------|-------------|
-| Small, clean schema; simple or few-table questions | A 1.5B-3B is fine (it handled a 5-table join on a tidy schema in our tests). |
-| Complex schema (many tables), questions needing several joins | Use **7B or larger**. A 1.5B failed outright on a real 63-table schema; a 7B matched a 14B. |
-| Very deep joins (4+ tables) on an inconsistently-named schema | Even a 14B can slip on a wrong column - review the SQL, and prefer consistent naming (`service_id`, not `id`). |
-
-In our testing the **7B** (for example `qwen2.5-coder:7b`) is the sweet spot for accuracy
-against speed, and it is easy to run locally.
-
-The table above is field experience on private schemas that are not in this repository, so unlike
-the benchmark below you cannot re-run it. Treat it as guidance; the numbers you can check yourself
-are in the next section.
-
-### Measured, and reproducible
-
-Load the fixtures in `packages/postgres/test/fixture.sql` and `packages/mysql/test/fixture.sql`,
-build the workspace (`pnpm install && pnpm build`), then run
-`node tools/benchmark/run.mjs qwen2.5-coder:1.5b qwen2.5-coder:7b qwen2.5-coder:14b`. It asks seven
-data questions, executes the SQL that comes back, and scores a question right only when the
-returned rows contain the expected value **and** the row count matches what a correct answer
-would produce, so a `SELECT *` that happens to include the word is still wrong. Seven more
-questions test whether AskSQL stays in its lane.
-
-| Model | SQL correct | Blocked by the guard | Scope correct | DELETE request | Median ask | Median schema answer |
-|---|---|---|---|---|---|---|
-| `qwen2.5-coder:1.5b` | 5/7 | 2 | 7/7 | statement + note | 1.1s | 0.5s |
-| `qwen2.5-coder:7b` | 7/7 | 0 | 7/7 | statement + note | 2.7s | 1.6s |
-| `qwen2.5-coder:14b` | 7/7 | 0 | 7/7 | statement + note | 4.6s | 3.6s |
-
-*Apple M4 Pro, 24 GB, Ollama 0.20.3, 2026-08-01.* The **DELETE request** column is not a model
-score: every model returned the statement as text, and the "AskSQL is read-only and never executed
-this" note beside it is appended by AskSQL, not written by the model. It is there to show the
-safety net firing on all three.
-
-Read it for what it is: a small schema and a handful of questions, not a Spider-style benchmark,
-and latency is whatever your machine does. What it does show is the shape of the trade-off - a 7B
-matched a 14B here at roughly half the latency, which is why it is the default recommendation.
-
-The **blocked** column is the interesting one. Those are not wrong answers: the 1.5B invented a
-`product_id` column on a view, and AskSQL refused to run the query, told the user which columns
-that view really has, and left the database untouched. A small model fails loudly here rather
-than returning a confident wrong number.
-
-Practical guidance: **review the generated SQL** (it is always shown first; set
-`requireApproval` to force a click), give heavy analytics a more capable local model, and treat
-the numbers on complex multi-join aggregations as draft until you have sanity-checked them.
-Prompt guidance (`config.prompts.instructions`) and a larger model both help; neither makes
-review optional.
-
-## Examples
-
-- **`examples/browser-duckdb`** - no backend at all: upload a CSV, ask questions, everything
-  runs in the tab via DuckDB-WASM. Nothing leaves the browser. ([screenshot](docs/screenshots/README.md))
-- `examples/node-duckdb` - headless file analytics with a real model.
-- `examples/node-oracle` - headless Oracle (Thin-mode driver, EZConnect string).
-- `examples/node-mongodb` - headless MongoDB (aggregation-pipeline engine, `mongodb://` URI).
-- `examples/express-postgres` - sidecar + static page over live Postgres.
-- `examples/vite-react` - the React app (bubble + full page).
-- `examples/plain-html` - one `<script>` tag, `AskSQL.mount(...)`.
-
-Runs on any OS (macOS/Linux/Windows) and any modern browser - the browser connector uses only
-standard Web Worker / OPFS / File APIs.
-
-## FAQ
-
-Common questions are answered in [docs/FAQ.md](docs/FAQ.md): data privacy, supported databases,
-free and local LLM options, accuracy vs model choice, big schemas, multi-database, safety, and
-production-readiness.
+Your database and your model both stay on your machine; only the schema and your question ever
+reach the model. From here, add `@asksql/react` for a chat UI, `@asksql/server` to keep
+credentials off the browser, or a cloud model by swapping the `resolveModel` line
+([docs/providers.md](docs/providers.md)). Prompts, model sampling, guard limits, and grounding
+are all configurable: [docs/configuration.md](docs/configuration.md).
 
 ## Development
 

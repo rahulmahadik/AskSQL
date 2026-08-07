@@ -114,7 +114,8 @@ describe('LIMITS: caps are enforced with friendly errors', () => {
     let s = 'SELECT 1';
     for (let i = 0; i < 300; i++) s = `SELECT * FROM (${s}) t${i}`;
     const v = guardSql({ sql: s, dialect: POSTGRES_DIALECT });
-    expect(typeof v.allowed).toBe('boolean'); // did not throw
+    // "did not throw" alone would stay green if the cap were deleted; the cap must BLOCK.
+    expect(v.allowed).toBe(false);
   });
 
   it('an over-long question is rejected with a plain-language message', async () => {
@@ -222,5 +223,84 @@ describe('FRIENDLY ERRORS: every error code has an actionable, safe message', ()
     expect(new AskSqlError('GUARD_BLOCKED').retryable).toBe(false);
     expect(new AskSqlError('LLM_AUTH').retryable).toBe(false);
     expect(new AskSqlError('INVALID_INPUT').retryable).toBe(false);
+  });
+});
+
+/**
+ * Each branch of a set operation may carry its own LIMIT, which caps that branch and not the
+ * statement: two branches of 900 can return 1800 rows. The parser hangs the last branch's LIMIT
+ * where a statement-level one would sit and drops a trailing one entirely, so neither can be read
+ * off the AST.
+ */
+describe('row cap on set operations', () => {
+  const guard = (sql: string, maxRows = 1000) => guardSql({ sql, dialect: POSTGRES_DIALECT, policy: { maxRows } });
+
+  it('caps the statement when only the branches carry a limit', () => {
+    const v = guard('(SELECT a FROM t LIMIT 900) UNION ALL (SELECT b FROM u LIMIT 900)');
+    expect(v.allowed).toBe(true);
+    expect(v.autoLimited).toBe(true);
+    expect(v.sql).toMatch(/\bLIMIT 1000\s*$/);
+    // The branches are left exactly as written; only the statement gains a bound.
+    expect(v.sql).toContain('(SELECT a FROM t LIMIT 900)');
+    expect(v.sql).toContain('(SELECT b FROM u LIMIT 900)');
+  });
+
+  it('does not mistake a branch limit for the statement limit and edit it', () => {
+    const v = guard('(SELECT a FROM t LIMIT 5000) UNION ALL (SELECT b FROM u LIMIT 5000)');
+    expect(v.sql).toContain('(SELECT a FROM t LIMIT 5000)');
+    expect(v.sql).toContain('(SELECT b FROM u LIMIT 5000)');
+    expect(v.sql).toMatch(/\bLIMIT 1000\s*$/);
+  });
+
+  it('leaves a statement-level limit alone rather than appending a second one', () => {
+    const v = guard('(SELECT a FROM t LIMIT 900) UNION ALL (SELECT b FROM u LIMIT 900) LIMIT 100');
+    expect(v.autoLimited).toBeFalsy();
+    expect(v.sql.match(/\bLIMIT\b/gi)).toHaveLength(3);
+    expect(v.sql).toMatch(/LIMIT 100\s*$/);
+  });
+
+  it('lowers a statement-level limit that exceeds the cap', () => {
+    const v = guard('(SELECT a FROM t LIMIT 900) UNION ALL (SELECT b FROM u LIMIT 900) LIMIT 99999');
+    expect(v.loweredLimit).toBe(true);
+    expect(v.sql).toMatch(/LIMIT 1000\s*$/);
+  });
+
+  it('still caps an unparenthesised set operation the usual way', () => {
+    expect(guard('SELECT a FROM t UNION ALL SELECT b FROM u').sql).toMatch(/\bLIMIT 1000\s*$/);
+    expect(guard('SELECT a FROM t UNION ALL SELECT b FROM u LIMIT 10').sql).toMatch(/LIMIT 10\s*$/);
+    expect(guard('SELECT a FROM t UNION ALL SELECT b FROM u LIMIT 99999').sql).toMatch(/LIMIT 1000\s*$/);
+  });
+
+  // A non-numeric statement-level limit cannot be read as a count, but it is still a limit:
+  // treating it as "no limit" appends a second LIMIT clause, which is a syntax error.
+  it('caps LIMIT ALL on a set operation instead of appending a second clause', () => {
+    const v = guard('(SELECT id FROM users) UNION (SELECT id FROM admins) LIMIT ALL');
+    expect(v.allowed).toBe(true);
+    expect(v.sql.match(/\bLIMIT\b/gi)).toHaveLength(1);
+    expect(v.sql).toMatch(/LIMIT 1000\s*$/);
+  });
+
+  it('rewrites the statement LIMIT ALL, not a branch that carries its own', () => {
+    const v = guard('(SELECT id FROM users LIMIT ALL) UNION (SELECT id FROM admins) LIMIT ALL');
+    expect(v.allowed).toBe(true);
+    expect(v.sql).toContain('(SELECT id FROM users LIMIT ALL)');
+    expect(v.sql).toMatch(/LIMIT 1000\s*$/);
+  });
+
+  it('blocks a parameter or subquery limit on a set operation, as it does on a plain select', () => {
+    for (const sql of [
+      '(SELECT id FROM users) UNION (SELECT id FROM admins) LIMIT :n',
+      '(SELECT id FROM users) UNION (SELECT id FROM admins) LIMIT (SELECT 5)',
+    ]) {
+      const v = guard(sql);
+      expect(v.allowed, sql).toBe(false);
+      expect(v.ruleId, sql).toBe('limit_nonliteral');
+    }
+  });
+
+  it('is not fooled by a parenthesis inside a string literal', () => {
+    const v = guard(`SELECT a FROM t WHERE x = 'a) LIMIT 9' LIMIT 99999`);
+    expect(v.sql).toMatch(/LIMIT 1000\s*$/);
+    expect(v.sql).toContain(`'a) LIMIT 9'`);
   });
 });

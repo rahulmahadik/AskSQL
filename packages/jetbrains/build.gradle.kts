@@ -109,9 +109,11 @@ intellijPlatform {
         }
 
         ideaVersion {
-            // Floor 2025.1 (build 251), open-ended upper bound: the plugin stays installable on new
+            // Floor 2024.2 (build 242), open-ended upper bound: the plugin stays installable on new
             // majors until the Plugin Verifier's EAP run proves otherwise (a verifier failure blocks release).
-            sinceBuild = "251"
+            // 2024.1 is out of reach: com.intellij.util.net.JdkProxyProvider, which routes LLM calls
+            // through the IDE's proxy settings, arrives in 242.
+            sinceBuild = "242"
             untilBuild = provider { null }
         }
 
@@ -124,7 +126,9 @@ intellijPlatform {
         ides {
             // ideaIC publishes both build-number and marketing-version Maven
             // artifacts; build numbers pin the exact floor/latest builds.
-            create(IntelliJPlatformType.IntellijIdeaCommunity, "251.29188.72")  // 2025.1 (compatibility floor)
+            create(IntelliJPlatformType.IntellijIdeaCommunity, "2024.2")  // 2024.2 (compatibility floor)
+            create(IntelliJPlatformType.IntellijIdeaCommunity, "2024.3")
+            create(IntelliJPlatformType.IntellijIdeaCommunity, "251.29188.72")  // 2025.1
             create(IntelliJPlatformType.IntellijIdeaCommunity, "252.28539.54")  // 2025.2.6.2
             create(IntelliJPlatformType.IntellijIdeaCommunity, "253.28294.334") // 2025.3 (IC's own latest stable)
             // Full cross-IDE matrix only when ASKSQL_VERIFY_FULL=true (the release workflow sets it); per-push CI verifies the IC floor+latest above to avoid ~10 cold IDE downloads.
@@ -230,8 +234,10 @@ tasks {
         commandLine("npm", "run", "export")
     }
 
+    // Both Configurables and every action are indexed here; without it "AskSQL" finds nothing in
+    // the Settings search field. Costs a headless IDE run at build time.
     buildSearchableOptions {
-        enabled = false // no Configurable-driven searchable options yet; re-enable if that changes
+        enabled = true
     }
 
     // Hand-maintained rather than a license-scanning plugin: the bundled dependency set is small

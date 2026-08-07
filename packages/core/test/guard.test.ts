@@ -204,7 +204,8 @@ describe('resource bounds', () => {
     let s = 'SELECT 1';
     for (let i = 0; i < 200; i++) s = `SELECT * FROM (${s}) t${i}`;
     const v = pg(s);
-    expect(typeof v.allowed).toBe('boolean');
+    // The title says "block cleanly": the verdict itself must be a block, not merely a non-crash.
+    expect(v.allowed).toBe(false);
   });
 });
 
@@ -233,6 +234,24 @@ describe('auto-LIMIT', () => {
     const v = pg('SELECT * FROM users LIMIT 999999', { maxRows: 100 });
     expect(v.loweredLimit).toBe(true);
     expect(v.sql).toMatch(/limit\s+100/i);
+  });
+  // The LIMIT was located in stripped text but spliced into the original, and stripping is not
+  // length-preserving: anything hidden before the LIMIT shifted the write and corrupted the query.
+  it('lowers the LIMIT without touching a string literal before it', () => {
+    const v = pg("SELECT * FROM users WHERE name = 'shipped_yesterday' LIMIT 5000", { maxRows: 1000 });
+    expect(v.allowed).toBe(true);
+    expect(v.sql).toContain("'shipped_yesterday'");
+    expect(v.sql).toMatch(/limit\s+1000/i);
+  });
+  it('lowers the LIMIT with a block comment before it', () => {
+    const v = pg('SELECT * FROM users /* a much longer comment */ LIMIT 5000', { maxRows: 1000 });
+    expect(v.sql).toMatch(/limit\s+1000/i);
+    expect(v.sql).toContain('a much longer comment');
+  });
+  it('lowers the LIMIT with a quoted identifier before it', () => {
+    const v = pg('SELECT * FROM "my long table name" LIMIT 5000', { maxRows: 1000 });
+    expect(v.sql).toMatch(/limit\s+1000/i);
+    expect(v.sql).toContain('"my long table name"');
   });
   it('preserves a smaller LIMIT', () => {
     const v = pg('SELECT * FROM users LIMIT 5', { maxRows: 100 });

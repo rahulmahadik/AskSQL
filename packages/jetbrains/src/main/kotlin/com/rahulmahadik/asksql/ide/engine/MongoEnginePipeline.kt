@@ -98,6 +98,12 @@ class MongoEnginePipeline(
         catalogCache.clear()
     }
 
+    /** Same reasoning as [EnginePipeline]'s per-connection overload. */
+    fun invalidateCatalogCache(connectionId: String) {
+        catalogGeneration.incrementAndGet()
+        catalogCache.remove(connectionId)
+    }
+
     /**
      * Drops sampled field values unless the user opted in. Applied at the single exit from
      * [catalog], so a caller cannot leak values by forgetting to ask for the stripped form.
@@ -112,9 +118,7 @@ class MongoEnginePipeline(
             userMessage = "This MongoDB connection has no database name configured.",
         )
 
-    // -----------------------------------------------------------------
     // Catalog (300s TTL, single in-flight fetch per connection): sampling-based, not metadata-based.
-    // -----------------------------------------------------------------
 
     suspend fun catalog(descriptor: ConnectionDescriptor, password: String?, refresh: Boolean = false): SchemaCatalog {
         val cached = catalogCache[descriptor.id]
@@ -141,9 +145,7 @@ class MongoEnginePipeline(
         }
     }
 
-    // -----------------------------------------------------------------
     // ask(): question -> catalog -> prune -> prompt -> LLM -> extract -> guard -> collection floor -> repair loop
-    // -----------------------------------------------------------------
 
     suspend fun ask(
         question: String,
@@ -369,9 +371,7 @@ class MongoEnginePipeline(
         }
     }
 
-    // -----------------------------------------------------------------
     // execute(): guards EVERY pipeline, including one the caller already saw guarded once.
-    // -----------------------------------------------------------------
 
     suspend fun execute(
         pipelineJson: String,

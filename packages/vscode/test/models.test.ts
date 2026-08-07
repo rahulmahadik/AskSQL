@@ -39,6 +39,26 @@ describe('providerModels', () => {
     expect((init as { headers: Record<string, string> }).headers.Authorization).toBe('Bearer sk-1');
   });
 
+  // NVIDIA lists its whole public catalogue, including models that answer no chat request. Offering
+  // one in the picker sends the user to a 404 on a model this extension itself suggested.
+  it('drops reranking, retrieval and document-parsing models, not just embeddings', async () => {
+    setConfig({ provider: 'nvidia', baseURL: '' });
+    const fetchMock = vi.fn(async () =>
+      okJson({
+        data: [
+          { id: 'meta/llama-3.3-70b-instruct' },
+          { id: 'nvidia/llama-3.2-nv-embedqa-1b-v1' },
+          { id: 'nvidia/nemoretriever-parse' },
+          { id: 'nvidia/nemotron-parse' },
+          { id: 'nvidia/llama-3.2-nv-rerankqa-1b-v2' },
+        ],
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const secrets = createSecretStorage({ [apiKeyKey('nvidia')]: 'nvapi-1' });
+    expect(await providerModels(secrets as never, 1000)).toEqual(['meta/llama-3.3-70b-instruct']);
+  });
+
   it('returns empty for a provider with no listable endpoint (anthropic)', async () => {
     setConfig({ provider: 'anthropic', baseURL: '' });
     const secrets = createSecretStorage();

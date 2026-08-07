@@ -70,12 +70,13 @@ account (no usable free API tier in most regions).
 ### Can the AI run a write or a destructive query?
 
 No. A deterministic, AST-based guard - not the prompt - decides what runs. It allows a single
-read-only `SELECT` (CTEs included) and blocks every write, DDL, stacked statement, locking
-clause, file-reading function, and a dangerous-function denylist. Anything it cannot parse fails
-closed. Where the engine supports it (Postgres, MySQL, SQLite, Oracle) the connector also opens a
-read-only session as a backstop. DuckDB has no read-only session: in Node a plain database file is
-opened `READ_ONLY`, but registering `files` needs `CREATE VIEW`, so in that mode and in the browser
-the AST guard is the sole barrier.
+read-only `SELECT` (CTEs included), `EXPLAIN` of one, and read-only `PRAGMA` / `SHOW`, and blocks
+every write, DDL, stacked statement, locking clause, file-reading function, and a
+dangerous-function denylist. Anything it cannot parse fails closed. Where the engine supports it
+(Postgres, MySQL, SQLite, Oracle) the connector also opens a read-only session as a backstop.
+DuckDB has no read-only session: in Node a plain database file is opened `READ_ONLY`, but
+registering `files` needs `CREATE VIEW`, so in that mode and in the browser the AST guard is the
+sole barrier.
 
 ### Can I ask general questions about the schema - or how to change it?
 
@@ -111,7 +112,8 @@ the `useAskSql` hook) and each turn waits behind a Run button.
 
 Yes, at four levels: CSS-variable theming, component props, composing the exported building
 blocks (`ResultTable`, `SqlBlock`, `SchemaBrowser`, `ResultChart`), or the fully headless
-`useAskSql` hook. See the "Customizing the UI" section of the README.
+`useAskSql` hook. See "Customizing the UI" in the
+[`@asksql/react` README](../packages/react/README.md).
 
 ### Can agents use AskSQL?
 
@@ -148,13 +150,14 @@ A join fan-out is caught too: if a query sums a column from a table while joined
 that has many rows per row of the first, each value would be counted once per child row and the
 total would come back too high. AskSQL spots that from your foreign keys and re-asks. Other
 semantic mistakes still get through, so always review the SQL, and give hard analytics a more
-capable model. See "Accuracy depends on the model and the question" in the README.
+capable model. The section [below](#accuracy-depends-on-the-model-and-the-question) goes deeper,
+with measured numbers.
 
 ### The numbers look wrong by a factor of 100. Why?
 
 Almost always a unit the schema names but never explains. A column called `total_cents` holds
 cents, so "total revenue in dollars" can come back as `1000000249999` rather than
-`10000002549.99`, and it reads as an ordinary figure.
+`10000002499.99`, and it reads as an ordinary figure.
 
 Nothing about the column's type says which unit it is, so tell it once and every question after
 that gets it right. Either comment the column in your database:
@@ -248,9 +251,78 @@ entirely. The guard still enforces read-only regardless of what any prompt says.
 
 ### Is it production-ready?
 
-It is an early (pre-1.0; `@asksql/core` is at `0.4.x`) but functional release: the pipeline
+It is an early (pre-1.0; `@asksql/core` is at `0.5.x`) but functional release: the pipeline
 (schema to SQL to guard to execute), the safety guard, the six database adapters, the server
 sidecar, the React UI, and the MCP server are all working and tested against live databases
 and multiple providers. Treat
 generated SQL for complex analytics as reviewable draft, keep credentials on the server sidecar,
 and pin the versions you deploy.
+
+## Accuracy depends on the model and the question
+
+Be clear-eyed about what AskSQL guarantees. The guard guarantees **safety** - the SQL is
+read-only and is shown to you before it runs. It does **not** guarantee the query is
+**semantically** what you meant. How good the generated SQL is depends on two things:
+
+- **How capable your model is.** AskSQL is built to run fully offline on a local coder model -
+  pick one sized to your workload (see the rule of thumb below), and if you ever need to, a
+  cloud model is an option for the heaviest analytics, never a requirement.
+- **How complex the question is.** Single-table filters and simple joins are reliable across the
+  board. But multi-table analytics - especially aggregating measures across several
+  one-to-many tables at once - can trip a smaller model into a classic **join fan-out**
+  (summing over a row-multiplied result and inflating the total), or a hallucinated column, even
+  though the SQL is valid and the guard passes. Both of those are caught before the query runs:
+  invented columns against the schema, and a fan-out against your foreign keys, each sending the
+  query back to be rewritten.
+
+**Rule of thumb, from real testing.** The more tables a question must join, and the larger or
+more inconsistently-named your schema, the more model capability you need:
+
+| Your situation | What to use |
+|----------------|-------------|
+| Small, clean schema; simple or few-table questions | A 1.5B-3B is fine (it handled a 5-table join on a tidy schema in our tests). |
+| Complex schema (many tables), questions needing several joins | Use **7B or larger**. A 1.5B failed outright on a real 63-table schema; a 7B matched a 14B. |
+| Very deep joins (4+ tables) on an inconsistently-named schema | Even a 14B can slip on a wrong column - review the SQL, and prefer consistent naming (`service_id`, not `id`). |
+
+In our testing the **7B** (for example `qwen2.5-coder:7b`) is the sweet spot for accuracy
+against speed, and it is easy to run locally.
+
+The table above is field experience on private schemas that are not in this repository, so unlike
+the benchmark below you cannot re-run it. Treat it as guidance; the numbers you can check yourself
+are in the next section.
+
+### Measured, and reproducible
+
+Load the fixtures in `packages/postgres/test/fixture.sql` and `packages/mysql/test/fixture.sql`,
+build the workspace (`pnpm install && pnpm build`), then run
+`node tools/benchmark/run.mjs qwen2.5-coder:1.5b qwen2.5-coder:7b qwen2.5-coder:14b`. It asks seven
+data questions, executes the SQL that comes back, and scores a question right only when the
+returned rows contain the expected value **and** the row count matches what a correct answer
+would produce, so a `SELECT *` that happens to include the word is still wrong. Seven more
+questions test whether AskSQL stays in its lane.
+
+| Model | SQL correct | Blocked by the guard | Scope correct | DELETE request | Median ask | Median schema answer |
+|---|---|---|---|---|---|---|
+| `qwen2.5-coder:1.5b` | 5/7 | 2 | 7/7 | statement + note | 1.1s | 0.5s |
+| `qwen2.5-coder:7b` | 7/7 | 0 | 7/7 | statement + note | 2.7s | 1.6s |
+| `qwen2.5-coder:14b` | 7/7 | 0 | 7/7 | statement + note | 4.6s | 3.6s |
+
+*Apple M4 Pro, 24 GB, Ollama 0.20.3, 2026-08-01.* The **DELETE request** column is not a model
+score: every model returned the statement as text, and the "AskSQL is read-only and never executed
+this" note beside it is appended by AskSQL, not written by the model. It is there to show the
+safety net firing on all three.
+
+Read it for what it is: a small schema and a handful of questions, not a Spider-style benchmark,
+and latency is whatever your machine does. What it does show is the shape of the trade-off - a 7B
+matched a 14B here at roughly half the latency, which is why it is the default recommendation.
+
+The **blocked** column is the interesting one. Those are not wrong answers: the 1.5B invented a
+`product_id` column on a view, and AskSQL refused to run the query, told the user which columns
+that view really has, and left the database untouched. A small model fails loudly here rather
+than returning a confident wrong number.
+
+Practical guidance: **review the generated SQL** (it is always shown first; set
+`requireApproval` to force a click), give heavy analytics a more capable local model, and treat
+the numbers on complex multi-join aggregations as draft until you have sanity-checked them.
+Prompt guidance (`config.prompts.instructions`) and a larger model both help; neither makes
+review optional.

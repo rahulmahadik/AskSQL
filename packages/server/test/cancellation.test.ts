@@ -87,16 +87,16 @@ describe('a cancelled request cancels the work behind it', () => {
     expect(connector.seen!.aborted).toBe(true);
   });
 
-  // Core wraps the caller's signal in a per-attempt controller and detaches the listener when the
-  // call ends, so identity is not the thing to assert. Aborting BEFORE the request proves the
-  // wiring: the model can only see an already-aborted signal if the request's reached it.
-  it('an already-cancelled request reaches the model as cancelled on /chat', async () => {
+  // Core refuses to start a model call on an already-aborted signal (a custom-model call would
+  // fire the provider request even though the only possible outcome is CANCELLED). So the wiring
+  // proof is now: the model is NEVER invoked, and the stream reports the cancellation.
+  it('an already-cancelled request never invokes the model on /chat', async () => {
     const connector = new FakeConnector();
     const controller = new AbortController();
     controller.abort();
-    let modelSignal: AbortSignal | undefined;
-    const model: CustomModel = async ({ signal }) => {
-      modelSignal = signal;
+    let modelCalled = false;
+    const model: CustomModel = async () => {
+      modelCalled = true;
       return '```sql\nSELECT id FROM orders\n```';
     };
     const srv = server(connector, model);
@@ -104,10 +104,13 @@ describe('a cancelled request cancels the work behind it', () => {
     const response = await srv.handle(
       request('/chat', { connectionId: 'db', question: 'how many orders' }, controller.signal),
     );
-    if ('stream' in response) for await (const ev of response.stream) void ev;
+    const events: { type: string; code?: string }[] = [];
+    if ('stream' in response) for await (const ev of response.stream) events.push(ev as { type: string });
 
-    expect(modelSignal).toBeDefined();
-    expect(modelSignal!.aborted).toBe(true);
+    expect(modelCalled).toBe(false);
+    const error = events.find((e) => e.type === 'error');
+    expect(error).toBeDefined();
+    expect(error!.code).toBe('CANCELLED');
   });
 
   it('a live request reaches the model as not cancelled', async () => {

@@ -8,6 +8,8 @@ React components and hooks for [AskSQL](https://github.com/rahulmahadik/AskSQL):
   machine, for building your own UI.
 - Building blocks: `<ResultTable />`, `<SqlBlock />`, `<SchemaBrowser />`,
   `<ResultChart />`.
+- `useSavedQueries` / `SavedQueryStore`: pin and reuse questions
+  (localStorage-backed, SSR-safe).
 
 Light and dark themes, CSS-variable theming, CSP nonce support.
 
@@ -91,6 +93,29 @@ in-browser - same `<AskSqlChat>`, no server.
 to a new non-empty value - e.g. an "ask about selection" hand-off, with
 `onInitialQuestionConsumed` to clear your state) and `sqlDisplayPlacement`
 (`'before' | 'after'`) to show results first with the SQL below.
+
+## Customizing the UI
+
+The UI is override-friendly at four levels, lightest to fully custom:
+
+**Theme with CSS variables** - restyle without touching components. Override any of
+`--aq-accent`, `--aq-bg`, `--aq-surface`, `--aq-fg`, `--aq-muted`, `--aq-border`,
+`--aq-code-bg`, `--aq-warn`, `--aq-danger`, `--aq-shadow` (and `--aq-accent-fg`),
+and set `theme="light" | "dark" | "auto"`.
+
+**Component props** - `<AskSqlChat>` takes `placeholder`, `suggestions`, `requireApproval`,
+`showConnectionPicker`, `connectionId`, and `nonce` (CSP); `<AskSqlBubble>` adds `title`,
+`icon`, `position`, `offset`, and `zIndex`. The vanilla widget's `AskSQL.mount()` takes the
+same `theme` / `title` / `position` / `offset` / `zIndex`.
+
+**Compose the building blocks** - `<ResultTable>`, `<SqlBlock>`, `<SchemaBrowser>`, and
+`<ResultChart>` (plus the `formatCell` / `toCsv` helpers) are exported standalone, so you can
+lay out your own surface while keeping our rendering.
+
+**Go fully headless** - `useAskSql` (see [Headless](#headless) above) gives you the entire
+ask -> approve -> run state machine with zero markup; render your own UI on top while the
+engine and guard still run underneath. The hook also exposes `planFor()`, which runs
+`EXPLAIN` through the guard and returns the database's own plan.
 
 Full documentation: [https://github.com/rahulmahadik/AskSQL](https://github.com/rahulmahadik/AskSQL)
 

@@ -26,7 +26,13 @@ const INSTALLED_PEERS = [
   '@modelcontextprotocol/sdk@^1.18.0',
 ];
 /** Peers too heavy or too native to install for a packaging check; import is probed instead. */
-const PROBE_ONLY = new Set(['@asksql/oracle', '@asksql/mysql', '@asksql/postgres', '@asksql/mongodb', '@asksql/duckdb']);
+const PROBE_ONLY = new Set([
+  '@asksql/oracle',
+  '@asksql/mysql',
+  '@asksql/postgres',
+  '@asksql/mongodb',
+  '@asksql/duckdb',
+]);
 
 const run = (cmd, args, opts = {}) =>
   execFileSync(cmd, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], ...opts });
@@ -43,7 +49,12 @@ function publishablePackages() {
     }
     if (pkg.private || !pkg.name?.startsWith('@asksql/')) continue;
     const exports = typeof pkg.exports === 'object' ? Object.keys(pkg.exports) : ['.'];
-    out.push({ name: pkg.name, dir: join(ROOT, 'packages', dir), exports, peers: Object.keys(pkg.peerDependencies ?? {}) });
+    out.push({
+      name: pkg.name,
+      dir: join(ROOT, 'packages', dir),
+      exports,
+      peers: Object.keys(pkg.peerDependencies ?? {}),
+    });
   }
   return out;
 }
@@ -75,11 +86,23 @@ writeFileSync(
 console.log(`installing into ${consumer} (nested, no hoisting)`);
 // --legacy-peer-deps stops npm auto-installing peers: only what a package truly declares as a
 // dependency is present, so an undeclared import has nothing to accidentally resolve against.
-run('npm', ['install', '--install-strategy=nested', '--legacy-peer-deps', '--no-audit', '--no-fund', ...tarballs, ...INSTALLED_PEERS], {
-  cwd: consumer,
-  stdio: 'inherit',
-  timeout: 600_000,
-});
+run(
+  'npm',
+  [
+    'install',
+    '--install-strategy=nested',
+    '--legacy-peer-deps',
+    '--no-audit',
+    '--no-fund',
+    ...tarballs,
+    ...INSTALLED_PEERS,
+  ],
+  {
+    cwd: consumer,
+    stdio: 'inherit',
+    timeout: 600_000,
+  },
+);
 
 const failures = [];
 const pass = (msg) => console.log(`  ok    ${msg}`);

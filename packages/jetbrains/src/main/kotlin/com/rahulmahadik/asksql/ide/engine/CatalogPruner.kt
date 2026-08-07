@@ -38,16 +38,24 @@ object CatalogPruner {
     /** Cheap token estimate (~4 chars per token) for budget decisions only. */
     fun estimateTokens(text: String): Int = ceil(text.length / 4.0).toInt()
 
+    // Hoisted: these run once per comment/sample value/column across the whole catalog, and an
+    // inline Regex(...) recompiles its Pattern on every call.
+    private val WHITESPACE_RUN_RE = Regex("""\s+""")
+    private val FK_BASE_RE = Regex("""^(.+?)_?id$""", RegexOption.IGNORE_CASE)
+    private val CAMEL_BOUNDARY_RE = Regex("""([a-z0-9])([A-Z])""")
+    private val NON_TERM_RE = Regex("""[^a-z0-9_]+""")
+    private val IDENTIFIER_SPLIT_RE = Regex("""[^A-Za-z0-9]+|(?<=[a-z0-9])(?=[A-Z])""")
+
     private fun sanitizeComment(comment: String?): String? {
         if (comment.isNullOrBlank()) return null
-        val flat = comment.replace(Regex("""\s+"""), " ").trim()
+        val flat = comment.replace(WHITESPACE_RUN_RE, " ").trim()
         if (flat.isEmpty()) return null
         return if (flat.length > COMMENT_CAP) "${flat.take(COMMENT_CAP)}..." else flat
     }
 
     /** Flattens and caps a live-data sample value, replacing `|` (the join separator). */
     private fun sanitizeValue(value: String): String {
-        val flat = value.replace(Regex("""\s+"""), " ").replace("|", "/").trim()
+        val flat = value.replace(WHITESPACE_RUN_RE, " ").replace("|", "/").trim()
         return if (flat.length > VALUE_SAMPLE_CAP) flat.take(VALUE_SAMPLE_CAP) else flat
     }
 
@@ -225,8 +233,8 @@ object CatalogPruner {
 
     /** FK-column base name, e.g. "client" from "client_id" or "clientId"; null if not a *_id column. */
     private fun fkBase(column: String): String? {
-        val m = Regex("""^(.+?)_?id$""", RegexOption.IGNORE_CASE).find(column) ?: return null
-        val base = m.groupValues[1].replace(Regex("""([a-z0-9])([A-Z])"""), "$1_$2").lowercase() // camelCase -> snake
+        val m = FK_BASE_RE.find(column) ?: return null
+        val base = m.groupValues[1].replace(CAMEL_BOUNDARY_RE, "$1_$2").lowercase() // camelCase -> snake
         return if (base.isNotEmpty()) base else null
     }
 
@@ -269,13 +277,13 @@ object CatalogPruner {
 
     private fun terms(question: String): List<String> =
         question.lowercase()
-            .split(Regex("""[^a-z0-9_]+"""))
+            .split(NON_TERM_RE)
             .filter { it.length > 2 && !STOPWORDS.contains(it) }
             .map { if (it.endsWith("s") && it.length > 3) it.dropLast(1) else it }
 
     /** Splits snake_case and camelCase identifiers into lowercase words, so "customer_id"/"productName" match the term "customer"/"product". */
     private fun tokenizeIdentifier(raw: String): List<String> =
-        raw.split(Regex("""[^A-Za-z0-9]+|(?<=[a-z0-9])(?=[A-Z])"""))
+        raw.split(IDENTIFIER_SPLIT_RE)
             .map { it.lowercase() }
             .filter { it.length > 1 }
 

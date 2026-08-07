@@ -106,6 +106,7 @@ describe('auth', () => {
     const s = makeServer(() => null);
     const r = await s.handle(req('GET', '/connections'));
     expect(isStream(r)).toBe(false);
+    if (isStream(r)) throw new Error('unexpected stream response');
     if (!isStream(r)) expect(r.status).toBe(403);
   });
   it('auth throwing -> 403', async () => {
@@ -113,6 +114,7 @@ describe('auth', () => {
       throw new Error('boom');
     });
     const r = await s.handle(req('GET', '/connections'));
+    if (isStream(r)) throw new Error('unexpected stream response');
     if (!isStream(r)) expect(r.status).toBe(403);
   });
 });
@@ -121,6 +123,7 @@ describe('/ connection scope', () => {
   it('user sees only allowed connections', async () => {
     const s = makeServer(allowA);
     const r = await s.handle(req('GET', '/connections'));
+    if (isStream(r)) throw new Error('unexpected stream response');
     if (!isStream(r)) {
       const conns = (r.body as { connections: { id: string }[] }).connections;
       expect(conns.map((c) => c.id)).toEqual(['db_a']);
@@ -129,6 +132,7 @@ describe('/ connection scope', () => {
   it("accessing another user's connection -> 403", async () => {
     const s = makeServer(allowA);
     const r = await s.handle(req('POST', '/execute', { sql: 'SELECT id FROM users', connectionId: 'db_b' }));
+    if (isStream(r)) throw new Error('unexpected stream response');
     if (!isStream(r)) expect(r.status).toBe(403);
   });
 });
@@ -150,6 +154,7 @@ describe('/history is per-user', () => {
 
     const aliceHist = await s.handle(withUser('alice', 'GET', '/history', undefined, { connectionId: 'db_a' }));
     const bobHist = await s.handle(withUser('bob', 'GET', '/history', undefined, { connectionId: 'db_a' }));
+    if (isStream(aliceHist) || isStream(bobHist)) throw new Error('unexpected stream response');
     if (!isStream(aliceHist) && !isStream(bobHist)) {
       expect((aliceHist.body as { total: number }).total).toBe(1);
       expect((bobHist.body as { total: number }).total).toBe(0);
@@ -169,6 +174,7 @@ describe('credential leak sweep', () => {
       s.handle(req('POST', '/execute', { sql: 'DROP TABLE users', connectionId: 'db_a' })),
     ]);
     for (const r of responses) {
+      if (isStream(r)) throw new Error('unexpected stream response');
       if (!isStream(r)) {
         const text = JSON.stringify(r.body);
         expect(text).not.toMatch(/SUPERSECRET/);
@@ -182,6 +188,7 @@ describe('server-side guard', () => {
   it('blocks a write POSTed directly to /execute', async () => {
     const s = makeServer(allowAll);
     const r = await s.handle(req('POST', '/execute', { sql: 'DELETE FROM users', connectionId: 'db_a' }));
+    if (isStream(r)) throw new Error('unexpected stream response');
     if (!isStream(r)) {
       expect(r.status).toBe(400);
       expect((r.body as { error: { code: string } }).error.code).toBe('GUARD_BLOCKED');
@@ -190,6 +197,7 @@ describe('server-side guard', () => {
   it('runs a legit SELECT', async () => {
     const s = makeServer(allowAll);
     const r = await s.handle(req('POST', '/execute', { sql: 'SELECT id FROM users', connectionId: 'db_a' }));
+    if (isStream(r)) throw new Error('unexpected stream response');
     if (!isStream(r)) {
       expect(r.status).toBe(200);
       expect((r.body as { result: { rowCount: number } }).result.rowCount).toBe(1);
@@ -201,6 +209,7 @@ describe('GET /schema + /history pagination', () => {
   it('returns a catalog', async () => {
     const s = makeServer(allowAll);
     const r = await s.handle(req('GET', '/schema', undefined, { connectionId: 'db_a' }));
+    if (isStream(r)) throw new Error('unexpected stream response');
     if (!isStream(r)) {
       const cat = (r.body as { catalog: { tables: unknown[] } }).catalog;
       expect(cat.tables).toHaveLength(1);
@@ -210,6 +219,7 @@ describe('GET /schema + /history pagination', () => {
     const s = makeServer(allowAll);
     await s.handle(req('POST', '/execute', { sql: 'SELECT id FROM users', connectionId: 'db_a' }));
     const r = await s.handle(req('GET', '/history', undefined, { connectionId: 'db_a' }));
+    if (isStream(r)) throw new Error('unexpected stream response');
     if (!isStream(r)) {
       const body = r.body as { total: number; page: number; per_page: number };
       expect(body.total).toBeGreaterThanOrEqual(1);
@@ -241,6 +251,7 @@ describe('ERR unknown endpoint', () => {
   it('404 for unknown path', async () => {
     const s = makeServer(allowAll);
     const r = await s.handle(req('GET', '/nope'));
+    if (isStream(r)) throw new Error('unexpected stream response');
     if (!isStream(r)) expect(r.status).toBe(404);
   });
 });
@@ -367,6 +378,7 @@ describe('explain / explainSchema / routing', () => {
     const r = await makeServer(allowAll).handle(
       req('POST', '/explain', { sql: 'SELECT id FROM users', connectionId: 'db_a' }),
     );
+    if (isStream(r)) throw new Error('unexpected stream response');
     if (!isStream(r)) {
       expect(r.status).toBe(200);
       expect(typeof (r.body as { explanation: string }).explanation).toBe('string');
@@ -377,6 +389,7 @@ describe('explain / explainSchema / routing', () => {
     const r = await makeServer(allowAll).handle(
       req('POST', '/explainSchema', { question: 'what tables are here?', connectionId: 'db_a' }),
     );
+    if (isStream(r)) throw new Error('unexpected stream response');
     if (!isStream(r)) {
       expect(r.status).toBe(200);
       const b = r.body as { answer: string; grounded: boolean; isSchemaChange: boolean };
@@ -388,6 +401,7 @@ describe('explain / explainSchema / routing', () => {
 
   it('an unknown path returns 404', async () => {
     const r = await makeServer(allowAll).handle(req('GET', '/nope'));
+    if (isStream(r)) throw new Error('unexpected stream response');
     if (!isStream(r)) expect(r.status).toBe(404);
   });
 });

@@ -4,7 +4,7 @@ The vanilla-JavaScript embed for [AskSQL](https://github.com/rahulmahadik/AskSQL
 questions in plain language from any web page, React or not. The chat renders inside a **shadow root**,
 so your page's CSS and the widget's CSS never collide.
 
-![AskSQL widget: a CSV queried entirely in the browser with DuckDB-WASM, question to SQL to results, nothing leaving the tab](https://github.com/rahulmahadik/AskSQL/raw/HEAD/docs/screenshots/07-browser-duckdb.png)
+![AskSQL widget: a CSV queried entirely in the browser with DuckDB-WASM, question to SQL to results, nothing leaving the tab](https://github.com/rahulmahadik/AskSQL/raw/HEAD/docs/screenshots/web-01-query-and-table.png)
 
 ## Use it with a script tag
 

@@ -48,7 +48,9 @@ export function shapeValue(value: unknown): CellValue {
   const t = typeof value;
   if (t === 'string') return value as string;
   if (t === 'boolean') return value as boolean;
-  if (t === 'number') return value as number;
+  // promoteValues gives plain JS numbers, so this branch (not the Double fallback below) is the
+  // live path; NaN/Infinity stringify to null in JSON, so they travel as strings.
+  if (t === 'number') return Number.isFinite(value as number) ? (value as number) : String(value);
   if (t === 'bigint') return String(value);
   if (Array.isArray(value)) return jsonify(value);
   if (t === 'object') {

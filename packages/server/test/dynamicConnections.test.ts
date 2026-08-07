@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { assertSpecAllowed, ENGINE_DEFAULTS, type ConnectionSpec } from '../src/dynamicConnections.js';
+import { assertSpecAllowed, ENGINE_DEFAULTS, mongoUriHosts, type ConnectionSpec } from '../src/dynamicConnections.js';
 
 const on = { enabled: true } as const;
 const mysql = (over: Partial<ConnectionSpec> = {}): ConnectionSpec => ({
@@ -149,5 +149,22 @@ describe('assertSpecAllowed', () => {
       expect(() => assertSpecAllowed(mysql({ port }), on)).toThrow(/port/i);
     }
     expect(() => assertSpecAllowed(mysql({ port: 3306 }), on)).not.toThrow();
+  });
+});
+
+// Credentials in the URI were read as the host, so any username hid the address the filter exists
+// to reject: mongodb://user@169.254.169.254 reported "user" and sailed past the link-local check.
+describe('mongoUriHosts and userinfo', () => {
+  it('reads the host behind credentials', () => {
+    expect(mongoUriHosts('mongodb://user:pass@169.254.169.254/db')).toEqual(['169.254.169.254']);
+    expect(mongoUriHosts('mongodb://u@127.0.0.1:27017/db')).toEqual(['127.0.0.1']);
+  });
+  it('handles credentials that contain an @', () => {
+    expect(mongoUriHosts('mongodb://us@er:p@ss@10.0.0.5:27017/db')).toEqual(['10.0.0.5']);
+  });
+  it('still reads a plain host and a replica set list', () => {
+    expect(mongoUriHosts('mongodb://169.254.169.254/db')).toEqual(['169.254.169.254']);
+    expect(mongoUriHosts('mongodb://h1:27017,h2:27017/db')).toEqual(['h1', 'h2']);
+    expect(mongoUriHosts('mongodb+srv://a:b@cluster0.example.com/db')).toEqual(['cluster0.example.com']);
   });
 });

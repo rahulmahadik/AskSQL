@@ -114,7 +114,7 @@ export function AskSqlChat(props: AskSqlChatProps): JSX.Element {
     };
   }, [props.transport, props.connectionId, props.showConnectionPicker]);
 
-  const { turns, busy, ask, run, editSql, planFor, cancel } = useAskSql({
+  const { turns, busy, ask, run, editSql, planFor, cancel, reset } = useAskSql({
     transport: props.transport,
     connectionId: activeConn ?? props.connectionId,
     requireApproval: props.requireApproval,
@@ -131,6 +131,17 @@ export function AskSqlChat(props: AskSqlChatProps): JSX.Element {
   useEffect(() => {
     threadRef.current?.scrollTo({ top: threadRef.current.scrollHeight });
   }, [turns]);
+
+  // A turn's SQL was written for the schema of the connection that produced it, and Run/Explain
+  // send it to whichever connection is selected now. Switching databases discards the transcript.
+  const boundConn = useRef<string | undefined>(activeConn ?? props.connectionId);
+  useEffect(() => {
+    const current = activeConn ?? props.connectionId;
+    const previous = boundConn.current;
+    boundConn.current = current;
+    // Undefined until the picker resolves; only a switch between two real connections resets.
+    if (previous !== undefined && current !== undefined && previous !== current) reset();
+  }, [activeConn, props.connectionId, reset]);
 
   const lastAskedInitial = useRef<string | undefined>(undefined);
   useEffect(() => {
@@ -315,8 +326,8 @@ function TurnView({
       {turn.explanation && !editing && <Markdown className="asksql-explain" text={turn.explanation} />}
       {turn.autoLimited && (
         <div className="asksql-warn">
-          A row limit was added automatically, so these are the first rows only. Raise the row cap to see more; an
-          export writes the rows shown here.
+          A row limit was applied automatically. Raise the row cap in settings if you need more; an export writes the
+          rows shown here.
         </div>
       )}
       {!editing &&
@@ -481,11 +492,12 @@ export function SqlBlock({ sql }: { sql: string }): JSX.Element {
 }
 
 export function ResultTable({ result }: { result: ResultSet }): JSX.Element {
-  const csv = useMemo(() => toCsv(result.columns, result.rows), [result]);
   const chartable = useMemo(() => isChartable(result), [result]);
   const [view, setView] = useState<'table' | 'chart'>('table');
   const download = () => {
-    const blob = new Blob([csv], { type: 'text/csv' });
+    // Built on click only: rendering the whole result set to CSV up front charges every
+    // answer for an export most users never ask for.
+    const blob = new Blob([toCsv(result.columns, result.rows)], { type: 'text/csv' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;

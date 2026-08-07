@@ -280,6 +280,14 @@ export function createAskSql(config: AskSqlConfig): AskSqlEngine {
         userMessage: 'AskSQL is misconfigured: two connections share the same id.',
       });
     }
+    // MongoDB speaks pipelines, not SQL, and belongs to createMongoAskSql. Without this the
+    // missing dialect surfaces much later as a property read on undefined while building a prompt.
+    if (!c.dialect) {
+      throw new AskSqlError('CONFIG_ERROR', {
+        detail: `connector "${c.id}" has no dialect; a MongoDB connection belongs to createMongoAskSql`,
+        userMessage: 'AskSQL is misconfigured: this connection type cannot answer SQL questions.',
+      });
+    }
     ids.add(c.id);
   }
 
@@ -305,6 +313,16 @@ export function createAskSql(config: AskSqlConfig): AskSqlEngine {
       opts?.onEvent?.(event);
     } catch {
       // Listener bugs must never break the pipeline.
+    }
+  };
+
+  // History is telemetry: a failed write must never mask the query's own outcome
+  // (a successful result, a guard block, or the real database error).
+  const recordHistory = async (entry: Parameters<HistoryStore['add']>[0]): Promise<void> => {
+    try {
+      await history.add(entry);
+    } catch {
+      emit({ type: 'warning', message: 'Could not record this query in history.' });
     }
   };
 
@@ -390,7 +408,7 @@ export function createAskSql(config: AskSqlConfig): AskSqlEngine {
     await ensureConnected(conn);
     const verdict = guardSql({ sql, dialect: conn.dialect, policy });
     if (!verdict.allowed) {
-      await history.add({
+      await recordHistory({
         id: historyId(),
         at: new Date().toISOString(),
         connectionId: conn.id,
@@ -414,7 +432,7 @@ export function createAskSql(config: AskSqlConfig): AskSqlEngine {
         timeoutMs: opts.timeoutMs ?? DEFAULT_QUERY_TIMEOUT_MS,
         maxRows: cappedMax,
       });
-      await history.add({
+      await recordHistory({
         id: historyId(),
         at: new Date().toISOString(),
         connectionId: conn.id,
@@ -436,8 +454,11 @@ export function createAskSql(config: AskSqlConfig): AskSqlEngine {
       const truncated = result.truncated || (verdict.autoLimited && result.rowCount >= cappedMax);
       return { ...result, warnings, truncated };
     } catch (err) {
-      const mapped = AskSqlError.from(err, 'DB_QUERY_ERROR');
-      await history.add({
+      // A driver may reject a cancelled query with its own AbortError rather than
+      // AskSqlError('CANCELLED'); "the query failed" would be the wrong story for the user.
+      const cancelled = (opts.signal?.aborted ?? false) && !AskSqlError.is(err);
+      const mapped = AskSqlError.from(err, cancelled ? 'CANCELLED' : 'DB_QUERY_ERROR');
+      await recordHistory({
         id: historyId(),
         at: new Date().toISOString(),
         connectionId: conn.id,
@@ -637,7 +658,7 @@ export function createAskSql(config: AskSqlConfig): AskSqlEngine {
       const verdict = guardSql({ sql: extraction.sql, dialect: conn.dialect, policy });
       if (!verdict.allowed) {
         if (attempt >= MAX_REPAIRS) {
-          await history.add({
+          await recordHistory({
             id: historyId(),
             at: new Date().toISOString(),
             connectionId: conn.id,
@@ -776,7 +797,9 @@ export function createAskSql(config: AskSqlConfig): AskSqlEngine {
             return await executeGuarded(finalSql, conn, { ...execOpts, question: q, userId: opts.userId });
           } catch (err) {
             // on a runtime DB error, attach a corrected query for re-approval rather than running it.
-            if (AskSqlError.is(err) && err.code === 'DB_QUERY_ERROR') {
+            // Never after a cancel: a repair would fire a fresh provider request the user just declined to wait for.
+            const wasCancelled = (execOpts?.signal?.aborted ?? false) || (opts.signal?.aborted ?? false);
+            if (AskSqlError.is(err) && err.code === 'DB_QUERY_ERROR' && !wasCancelled) {
               const suggestion = await tryRepairAfterDbError(err);
               if (suggestion) (err as DbErrorWithSuggestion).suggestedSql = suggestion;
             }
@@ -1036,17 +1059,13 @@ export function createAskSql(config: AskSqlConfig): AskSqlEngine {
   };
 }
 
-// ---------------------------------------------------------------------------
-// Unknown-table detection (hallucination floor)
-// ---------------------------------------------------------------------------
+// Unknown-table detection (hallucination floor).
 
 import pkg from 'node-sql-parser';
 const { Parser } = pkg;
 const tableParser = new Parser();
 
-// ---------------------------------------------------------------------------
-// Unknown-column detection (hallucination floor, column level)
-// ---------------------------------------------------------------------------
+// Unknown-column detection (hallucination floor, column level).
 
 export interface UnknownColumn {
   readonly table: string;

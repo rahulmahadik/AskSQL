@@ -27,11 +27,11 @@ What each field means:
 | `apiKey` | Your provider secret, sent as the bearer token. Keep it on the server, never in the browser. | `openai`, `anthropic`, `google`, `azure`, `groq`, `nvidia`. Not required for `ollama` or `openai-compatible` (pass one if your endpoint wants it) |
 | `baseURL` | Full endpoint URL to override the provider default. Point it at a local runtime (Ollama), any OpenAI-compatible host, or an Azure AI Foundry endpoint. | `openai-compatible`; optional for `ollama` (defaults to `http://localhost:11434/v1`) |
 | `resourceName` | Classic Azure OpenAI resource subdomain, from `https://<resourceName>.openai.azure.com`. Used only to build the classic Azure endpoint. | classic `azure` when `baseURL` is not set |
-| `headers` | Extra HTTP headers merged into every request (custom auth, routing tags for a gateway). | never; optional |
+| `headers` | Extra HTTP headers merged into every request (custom auth, routing tags for a gateway). Read only by the OpenAI-compatible family (`nvidia`, `ollama`, `openai-compatible`); ignored by the other providers. | never; optional |
 
 Install only the SDK for the provider you use (they are optional peer deps):
 `pnpm add @ai-sdk/openai` (or `@ai-sdk/anthropic`, `@ai-sdk/google`, `@ai-sdk/groq`,
-`@ai-sdk/openai-compatible`).
+`@ai-sdk/azure`, `@ai-sdk/openai-compatible`).
 
 ## Quick reference
 
@@ -161,7 +161,7 @@ parameter. Either way, reasoning models work with no extra configuration.
 ## Notes
 
 - **Sampling** (`config.llm`: `temperature`, `topP`, `topK`, `seed`, ...) is
-  documented in the main README under Configuration. Unset knobs fall back to the
+  documented in [configuration.md](configuration.md). Unset knobs fall back to the
   provider default.
 - **Errors are actionable:** a bad key surfaces as `LLM_AUTH`; an account that
   is out of credits or over its hard quota surfaces as `LLM_BILLING` and is not

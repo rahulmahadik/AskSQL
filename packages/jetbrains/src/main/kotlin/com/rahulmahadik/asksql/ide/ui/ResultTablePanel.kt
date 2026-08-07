@@ -33,6 +33,9 @@ class ResultTablePanel(private val project: Project, private val resultSet: AskS
         /** Column sizing scans this many rows for the widest value. */
         private const val SIZING_SAMPLE_ROWS = 2_000
         private const val TOOLTIP_MAX_CHARS = 2_000
+
+        /** Hoisted: [flattenLines] runs per cell per repaint; an inline Regex(...) recompiles each time. */
+        private val LINE_BREAK_RUN_RE = Regex("\\s*[\\r\\n]+\\s*")
     }
 
     val component: JPanel = JPanel(BorderLayout())
@@ -74,6 +77,13 @@ class ResultTablePanel(private val project: Project, private val resultSet: AskS
             // Both scrollbar policies are set explicitly.
             scroll.horizontalScrollBarPolicy = javax.swing.ScrollPaneConstants.HORIZONTAL_SCROLLBAR_AS_NEEDED
             scroll.verticalScrollBarPolicy = javax.swing.ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED
+            // Floor, so a horizontal scrollbar cannot cover a one-row result.
+            scroll.minimumSize = java.awt.Dimension(
+                0,
+                table.tableHeader.preferredSize.height +
+                    table.rowHeight * 3 +
+                    scroll.horizontalScrollBar.preferredSize.height,
+            )
             component.add(scroll, BorderLayout.CENTER)
         }
 
@@ -131,6 +141,9 @@ class ResultTablePanel(private val project: Project, private val resultSet: AskS
      * Multi-line values collapse to one line: a JLabel renders an embedded newline as a squashed glyph.
      */
     private inner class CellRenderer : javax.swing.table.DefaultTableCellRenderer() {
+        /** The raw (unflattened) value of the cell most recently prepared, for the lazy tooltip. */
+        private var rawText: String = ""
+
         override fun getTableCellRendererComponent(
             table: javax.swing.JTable,
             value: Any?,
@@ -140,14 +153,18 @@ class ResultTablePanel(private val project: Project, private val resultSet: AskS
             column: Int,
         ): java.awt.Component {
             val text = value?.toString().orEmpty()
-            val c = super.getTableCellRendererComponent(table, flattenLines(text), isSelected, hasFocus, row, column)
-            (c as? javax.swing.JComponent)?.toolTipText = tooltipFor(text)
-            return c
+            rawText = text
+            return super.getTableCellRendererComponent(table, flattenLines(text), isSelected, hasFocus, row, column)
         }
+
+        // Computed on hover only. JTable prepares this renderer for the cell under the cursor and
+        // asks it for the tip; building the escaped HTML eagerly in getTableCellRendererComponent
+        // ran for every visible cell on every repaint, for a popup that is almost never shown.
+        override fun getToolTipText(): String? = tooltipFor(rawText)
     }
 
     private fun flattenLines(text: String): String =
-        if (text.contains('\n') || text.contains('\r')) text.replace(Regex("\\s*[\\r\\n]+\\s*"), " ⏎ ") else text
+        if (text.contains('\n') || text.contains('\r')) text.replace(LINE_BREAK_RUN_RE, " ⏎ ") else text
 
     /** HTML so a multi-line value keeps its line breaks in the tooltip; capped so a large blob can't paint a full-screen popup. */
     private fun tooltipFor(text: String): String? {
@@ -165,7 +182,7 @@ class ResultTablePanel(private val project: Project, private val resultSet: AskS
     /** Builds the tab-separated text off the EDT under a cancellable progress; it is O(rows × columns) up to the connection's `maxRows`. */
     fun copyToClipboard() {
         try {
-            val text = runBlockingWithProgress(project, "Preparing copy") {
+            val text = runBlockingWithProgress(project, "Preparing copy", timeoutMs = EXPORT_TIMEOUT_MS) {
                 val header = resultSet.columns.joinToString("\t") { tsvEscape(it.name) }
                 val body = resultSet.rows.joinToString("\n") { row -> row.joinToString("\t") { tsvEscape(displayString(it)) } }
                 "$header\n$body"
@@ -179,7 +196,7 @@ class ResultTablePanel(private val project: Project, private val resultSet: AskS
     /** Builds the CSV text off the EDT, like [copyToClipboard]. */
     fun openInEditor() {
         try {
-            val text = runBlockingWithProgress(project, "Preparing editor view") {
+            val text = runBlockingWithProgress(project, "Preparing editor view", timeoutMs = EXPORT_TIMEOUT_MS) {
                 val header = resultSet.columns.joinToString(",") { csvEscape(it.name) }
                 val body = resultSet.rows.joinToString("\n") { row -> row.joinToString(",") { csvEscape(displayString(it)) } }
                 "$header\n$body"
@@ -193,13 +210,15 @@ class ResultTablePanel(private val project: Project, private val resultSet: AskS
 
     /** Writes the currently displayed rows - already capped at the connection's `maxRows` - to a CSV file the user picks. */
     fun exportCsv() {
-        val descriptor = FileSaverDescriptor("Export AskSQL Result", "Choose where to save the CSV file", "csv")
+        // Spread: the single-extension overload is 2025.1+, the vararg one exists in every supported build.
+        val descriptor =
+            FileSaverDescriptor("Export AskSQL Result", "Choose where to save the CSV file", *arrayOf("csv"))
         val wrapper = com.intellij.openapi.fileChooser.FileChooserFactory.getInstance()
             .createSaveFileDialog(descriptor, project)
             .save("asksql-result.csv") ?: return
         val file = wrapper.file
         try {
-            runBlockingWithProgress(project, "Exporting CSV") {
+            runBlockingWithProgress(project, "Exporting CSV", timeoutMs = EXPORT_TIMEOUT_MS) {
                 OutputStreamWriter(file.outputStream(), StandardCharsets.UTF_8).use { writer ->
                     writer.write(resultSet.columns.joinToString(",") { csvEscape(it.name) })
                     writer.write("\n")
@@ -217,6 +236,9 @@ class ResultTablePanel(private val project: Project, private val resultSet: AskS
     }
 
 }
+
+/** Exports run over rows already in memory and stay cancellable; the bound only stops a wedged call. */
+private const val EXPORT_TIMEOUT_MS = 10 * 60_000L
 
 /** The fidelity-safe string form of a cell; null and empty string render distinctly. */
 internal fun displayString(value: CellValue): String = when (value) {

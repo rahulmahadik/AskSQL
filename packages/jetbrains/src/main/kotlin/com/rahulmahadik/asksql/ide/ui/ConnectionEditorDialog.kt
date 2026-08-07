@@ -261,7 +261,7 @@ class ConnectionEditorDialog(private val project: Project, private val existing:
 
     /** Matches [JdbcConnectionFactory]'s URL-segment check so a value it would reject fails here, at the field, not at connect time. */
     private fun urlSegmentValidation(field: JTextField, label: String): ValidationInfo? =
-        if (Regex("""[/?#&@\s]""").containsMatchIn(field.text.trim())) {
+        if (URL_SEGMENT_FORBIDDEN_RE.containsMatchIn(field.text.trim())) {
             ValidationInfo("$label must not contain /, ?, #, &, @, or whitespace.", field)
         } else {
             null
@@ -269,7 +269,7 @@ class ConnectionEditorDialog(private val project: Project, private val existing:
 
     /** Matches [JdbcConnectionFactory]'s file-path check: `?`/`#`/`;` carry JDBC-URL meaning even inside a path. */
     private fun filePathValidation(): ValidationInfo? =
-        if (Regex("""[?#;]""").containsMatchIn(filePathField.text.trim())) {
+        if (FILE_PATH_FORBIDDEN_RE.containsMatchIn(filePathField.text.trim())) {
             ValidationInfo("File path must not contain ?, #, or ;.", filePathField)
         } else {
             null
@@ -440,3 +440,8 @@ class ConnectionEditorDialog(private val project: Project, private val existing:
         )
     }
 }
+
+// Hoisted: DialogWrapper's validation alarm re-runs these checks continuously while the dialog is
+// open, and an inline Regex(...) recompiles its Pattern on every pass.
+private val URL_SEGMENT_FORBIDDEN_RE = Regex("""[/?#&@\s]""")
+private val FILE_PATH_FORBIDDEN_RE = Regex("""[?#;]""")

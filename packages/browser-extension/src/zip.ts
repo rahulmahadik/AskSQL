@@ -78,13 +78,31 @@ export async function readZipEntryBytes(buffer: ArrayBuffer, entry: ZipEntry): P
   // jsdom has no Blob.prototype.stream, so this feeds the writer directly.
   const ds = new DecompressionStream('deflate-raw');
   const writer = ds.writable.getWriter();
-  void writer.write(compressed).then(() => writer.close());
-  const out = new Uint8Array(await new Response(ds.readable).arrayBuffer());
-  // The upstream bomb guard trusts DECLARED sizes, so the actual output size is checked here.
-  if (out.byteLength !== entry.uncompressedSize) {
-    throw new Error(
-      `"${entry.name}" decompressed to ${out.byteLength} bytes but declared ${entry.uncompressedSize} - refusing an archive that misdeclares its sizes.`,
+  // Cancelling the read half errors this one; that is the size guard working, not a failure.
+  void writer
+    .write(compressed)
+    .then(() => writer.close())
+    .catch(() => {});
+
+  // Read to the declared size and no further. Buffering the whole stream first would let an entry
+  // that declares 1 KB and inflates to gigabytes exhaust memory before any size check could run.
+  const mismatch = (): Error =>
+    new Error(
+      `"${entry.name}" does not decompress to its declared ${entry.uncompressedSize} bytes - refusing an archive that misdeclares its sizes.`,
     );
+  const out = new Uint8Array(entry.uncompressedSize);
+  const reader = ds.readable.getReader();
+  let written = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (written + value.byteLength > out.byteLength) {
+      await reader.cancel();
+      throw mismatch();
+    }
+    out.set(value, written);
+    written += value.byteLength;
   }
+  if (written !== out.byteLength) throw mismatch();
   return out;
 }

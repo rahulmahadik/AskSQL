@@ -99,7 +99,10 @@ function isLinkLocal(host: string): boolean {
 /** Host names inside a mongodb:// or mongodb+srv:// URI (may list several, comma-separated). */
 export function mongoUriHosts(uri: string): string[] {
   const afterScheme = uri.replace(/^mongodb(\+srv)?:\/\//i, '');
-  const hostPart = afterScheme.split(/[/?]/, 1)[0] ?? '';
+  const authority = afterScheme.split(/[/?]/, 1)[0] ?? '';
+  // Credentials precede the last '@' and may themselves contain '@'. Left in, they are read as
+  // the host, so a filtered address hides behind any username.
+  const hostPart = authority.slice(authority.lastIndexOf('@') + 1);
   return hostPart
     .split(',')
     .map((h) => h.split(':')[0]?.trim().toLowerCase() ?? '')

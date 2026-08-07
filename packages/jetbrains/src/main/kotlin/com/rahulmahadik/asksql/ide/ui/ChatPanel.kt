@@ -41,6 +41,16 @@ internal fun formatModelLabel(provider: com.rahulmahadik.asksql.ide.llm.Provider
     if (provider != null && model.isNotBlank()) "Model: ${provider.wireName} · $model" else "Model: not configured"
 
 /**
+ * The connection a repopulated picker should land on: whichever was selected before, as long as it
+ * still exists. Falling back to the first entry would silently re-target the next question at a
+ * different database. Pure (no Swing/Project access) so [ChatPanelSelectionTest] can cover it.
+ */
+internal fun selectionAfterRefresh(
+    descriptors: List<ConnectionDescriptor>,
+    previouslySelectedId: String?,
+): ConnectionDescriptor? = descriptors.firstOrNull { it.id == previouslySelectedId } ?: descriptors.firstOrNull()
+
+/**
  * The Chat tab: connection/model pickers, transcript, and question input. Owns a UI-lifetime
  * [CoroutineScope] (a plain Swing component has no platform-injected scope), cancelled in [dispose].
  */
@@ -80,6 +90,8 @@ class ChatPanel(private val project: Project) : Disposable {
     private var mongoContextTurns = ArrayDeque<MongoPrompts.ContextTurn>()
     /** Tracks the previously selected connection so switching databases clears the stale conversation history. */
     private var lastSelectedConnectionId: String? = null
+    /** True while [refresh] repopulates the combo, so its intermediate events are not read as a user switch. */
+    private var rebuildingCombo = false
 
     /** A single button that toggles Ask/Cancel rather than two side-by-side buttons; see [beginBusy]/[endBusy]. */
     private val askButton = JButton("Ask", com.intellij.icons.AllIcons.Actions.Execute).apply {
@@ -135,8 +147,16 @@ class ChatPanel(private val project: Project) : Disposable {
         val hasConnection = descriptors.isNotEmpty()
         val hasProvider = AskSqlAppSettings.getInstance().provider.isNotBlank() && AskSqlAppSettings.getInstance().model.isNotBlank()
 
-        connectionCombo.removeAllItems()
-        descriptors.forEach { connectionCombo.addItem(it) }
+        // Repopulating selects the first item, which would silently re-target the question at a
+        // different database and leave the previous one's history on screen and in the prompt.
+        rebuildingCombo = true
+        try {
+            connectionCombo.removeAllItems()
+            descriptors.forEach { connectionCombo.addItem(it) }
+            selectionAfterRefresh(descriptors, lastSelectedConnectionId)?.let { connectionCombo.selectedItem = it }
+        } finally {
+            rebuildingCombo = false
+        }
         updateModelLabel()
         onConnectionSelectionChanged()
 
@@ -171,6 +191,7 @@ class ChatPanel(private val project: Project) : Disposable {
 
     /** Keeps [connectionDetailLabel] in sync, and clears conversation history on a REAL switch to a different connection. */
     private fun onConnectionSelectionChanged() {
+        if (rebuildingCombo) return
         val selected = connectionCombo.selectedItem as? ConnectionDescriptor
         connectionDetailLabel.text = selected?.let { "${it.engine.wireName} · ${it.target()}" } ?: ""
         val selectedId = selected?.id
@@ -548,10 +569,13 @@ class ChatPanel(private val project: Project) : Disposable {
     }
 
     private fun onEngineEvent(turn: TurnPanel, event: EngineEvent) {
+        // Raw tokens are the model's unparsed reply; the stage label and spinner already show
+        // progress. Dropped BEFORE the EDT hop: one token arrives per SSE frame, and scheduling a
+        // no-op invokeLater for each would queue thousands of EDT dispatches per answer.
+        if (event is EngineEvent.Token) return
         onEdt {
             when (event) {
                 is EngineEvent.StageEvent -> turn.updateStatus(stageLabel(event.stage))
-                // Raw tokens are the model's unparsed reply; the stage label and spinner already show progress.
                 is EngineEvent.Token -> Unit
                 is EngineEvent.Warning -> turn.updateStatus(event.message)
                 EngineEvent.Done -> turn.updateStatus("")

@@ -343,3 +343,36 @@ describe('raw body handling', () => {
     expect(JSON.parse(r.body).error.code).toBe('INVALID_INPUT');
   });
 });
+
+describe('client disconnect mid-body', () => {
+  // A socket that closes after the headers but before the body's 'end' used to leave
+  // readRawJson's promise pending forever - the request context (and buffered chunks)
+  // leaked, and repeated half-requests were a slow memory leak.
+  it('settles the request instead of hanging forever', async () => {
+    const mw = asksqlMiddleware(config(), {});
+    const handlers: Record<string, (c?: unknown) => void> = {};
+    const req = {
+      method: 'POST',
+      path: '/execute',
+      url: '/execute',
+      headers: { 'content-type': 'application/json' },
+      query: {},
+      on(event: string, cb: (c?: unknown) => void) {
+        handlers[event] = cb;
+        if (event === 'error') {
+          setImmediate(() => {
+            handlers['data']?.(Buffer.from('{"sql": "SELECT id'));
+            handlers['close']?.(); // the disconnect: 'end' never comes
+          });
+        }
+      },
+    };
+    const { res, done } = fakeRes();
+    mw(req as never, res, () => {});
+    const outcome = await Promise.race([
+      done.then(() => 'settled' as const),
+      new Promise<'hung'>((r) => setTimeout(() => r('hung'), 500)),
+    ]);
+    expect(outcome).toBe('settled');
+  });
+});

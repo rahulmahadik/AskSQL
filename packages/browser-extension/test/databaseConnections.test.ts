@@ -5,6 +5,7 @@ import {
   ENGINE_PROFILES,
   createRemoteDatabaseConnection,
   defaultsFor,
+  testRemoteDatabaseConnection,
   type DatabaseForm,
 } from '../src/databaseConnections.js';
 
@@ -105,5 +106,28 @@ describe('creating the connection', () => {
   it('refuses plaintext http to a remote host', async () => {
     vi.stubGlobal('fetch', reply(200, { connection: { id: 'x', engine: 'postgres' } }));
     await expect(createRemoteDatabaseConnection('http://example.com', undefined, 'Shop', form())).rejects.toThrow();
+  });
+});
+
+// The server answers 415 to any non-GET request without a JSON content-type, so a cleanup that
+// omitted it was always rejected and every connection test left a live connection behind.
+describe('test-connection cleanup', () => {
+  it('sends the content-type the server requires on the cleanup DELETE', async () => {
+    const fetcher = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(
+      async () =>
+        ({
+          status: 200,
+          ok: true,
+          json: async () => ({ connection: { id: 'c1', engine: 'postgres' } }),
+        }) as unknown as Response,
+    );
+    vi.stubGlobal('fetch', fetcher);
+    await testRemoteDatabaseConnection(BASE, 'Bearer t', form({ database: 'shop' }));
+
+    const del = fetcher.mock.calls.find(([, init]) => (init as RequestInit | undefined)?.method === 'DELETE');
+    expect(del, 'no cleanup DELETE was issued').toBeTruthy();
+    const headers = (del![1] as RequestInit).headers as Record<string, string>;
+    expect(headers['Content-Type']).toBe('application/json');
+    expect(headers['Authorization']).toBe('Bearer t');
   });
 });

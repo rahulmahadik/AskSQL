@@ -127,7 +127,7 @@ class DuckDbIntegrationTest {
             async {
                 registry.withConnection(descriptor(), null) { connection ->
                     JdbcExecutor.execute(connection, "SELECT $n AS n", maxRows = 1, timeoutMs = 5000, EngineKind.DUCKDB)
-                        .rows.first().first().let { it as CellValue.Number }.value
+                        .rows.first().first().let { com.rahulmahadik.asksql.ide.test.numericOrNull(it) ?: error("expected a number, got $it") }
                 }
             }
         }.awaitAll()

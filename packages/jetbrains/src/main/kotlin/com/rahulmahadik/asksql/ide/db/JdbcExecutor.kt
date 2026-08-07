@@ -71,6 +71,13 @@ object JdbcExecutor {
                     return rs.use { resultSet ->
                         val meta = resultSet.metaData
                         val columns = (1..meta.columnCount).map { columnInfo(meta, it) }
+                        // Types are loop-invariant except on SQLite, whose driver reports the
+                        // current row's storage class and so must be read per row.
+                        val perRowTypes = engine == EngineKind.SQLITE
+                        val columnTypes = if (perRowTypes) IntArray(0) else IntArray(meta.columnCount) { meta.getColumnType(it + 1) }
+                        val singleBit = if (perRowTypes) BooleanArray(0) else BooleanArray(meta.columnCount) {
+                            columnTypes[it] == Types.BIT && isSingleBit(meta, it + 1)
+                        }
                         val rows = mutableListOf<List<CellValue>>()
                         var truncated = false
                         var count = 0
@@ -79,7 +86,11 @@ object JdbcExecutor {
                                 truncated = true
                                 break
                             }
-                            rows += (1..meta.columnCount).map { readCell(resultSet, meta, it) }
+                            rows += (1..meta.columnCount).map {
+                                val sqlType = if (perRowTypes) meta.getColumnType(it) else columnTypes[it - 1]
+                                val bit = if (perRowTypes) sqlType == Types.BIT && isSingleBit(meta, it) else singleBit[it - 1]
+                                readCell(resultSet, sqlType, bit, it)
+                            }
                             count++
                         }
                         AskSqlResultSet(
@@ -164,14 +175,13 @@ object JdbcExecutor {
         return ResultColumn(name = meta.getColumnLabel(index), dbType = meta.getColumnTypeName(index), kind = kind)
     }
 
-    private fun readCell(rs: java.sql.ResultSet, meta: ResultSetMetaData, index: Int): CellValue {
-        val sqlType = meta.getColumnType(index)
+    private fun readCell(rs: java.sql.ResultSet, sqlType: Int, singleBit: Boolean, index: Int): CellValue {
         return when (sqlType) {
-            Types.BIGINT, Types.DECIMAL, Types.NUMERIC -> {
+            Types.BIGINT, Types.DECIMAL, Types.NUMERIC, Types.INTEGER, Types.SMALLINT, Types.TINYINT -> {
                 val text = rs.getString(index)
                 if (rs.wasNull() || text == null) CellValue.Null else CellValue.ExactNumeric(text)
             }
-            Types.INTEGER, Types.SMALLINT, Types.TINYINT, Types.FLOAT, Types.REAL, Types.DOUBLE -> {
+            Types.FLOAT, Types.REAL, Types.DOUBLE -> {
                 val value = rs.getDouble(index)
                 if (rs.wasNull()) CellValue.Null else CellValue.Number(value)
             }
@@ -179,7 +189,7 @@ object JdbcExecutor {
                 val value = rs.getBoolean(index)
                 if (rs.wasNull()) CellValue.Null else CellValue.Boolean(value)
             }
-            Types.BIT -> if (isSingleBit(meta, index)) {
+            Types.BIT -> if (singleBit) {
                 val value = rs.getBoolean(index)
                 if (rs.wasNull()) CellValue.Null else CellValue.Boolean(value)
             } else {
@@ -198,7 +208,7 @@ object JdbcExecutor {
                 } else {
                     val length = blob.length()
                     val previewBytes = blob.getBytes(1, minOf(HEX_PREVIEW_BYTES.toLong(), length).toInt())
-                    CellValue.Binary(BinaryPreview(length, previewBytes.joinToString("") { "%02x".format(it) }))
+                    CellValue.Binary(BinaryPreview(length, toHex(previewBytes)))
                 }
             }
             else -> {
@@ -211,6 +221,18 @@ object JdbcExecutor {
 
     private fun binaryPreview(bytes: ByteArray): CellValue.Binary {
         val preview = bytes.copyOf(minOf(HEX_PREVIEW_BYTES, bytes.size))
-        return CellValue.Binary(BinaryPreview(bytes.size.toLong(), preview.joinToString("") { "%02x".format(it) }))
+        return CellValue.Binary(BinaryPreview(bytes.size.toLong(), toHex(preview)))
+    }
+
+    private val hexDigits = "0123456789abcdef".toCharArray()
+
+    /** Lookup-table hex: `"%02x".format(b)` builds a Formatter per byte, which is per-cell hot-path cost. */
+    private fun toHex(bytes: ByteArray): String {
+        val sb = StringBuilder(bytes.size * 2)
+        for (b in bytes) {
+            val v = b.toInt() and 0xff
+            sb.append(hexDigits[v ushr 4]).append(hexDigits[v and 0xf])
+        }
+        return sb.toString()
     }
 }

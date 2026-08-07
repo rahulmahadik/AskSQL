@@ -76,6 +76,17 @@ describe('readZipEntryBytes', () => {
     expect(new TextDecoder().decode(bytes)).toBe('SECOND');
   });
 
+  // A zip bomb declares a small uncompressed size and inflates to gigabytes. The declared size is
+  // all the upstream ratio guard can see, so decompression itself has to stop at it.
+  it('stops decompressing at the declared size instead of buffering the whole stream', async () => {
+    const huge = 'A'.repeat(4 * 1024 * 1024);
+    const zip = buildTestZip([{ name: 'bomb.txt', content: huge }]);
+    const [entry] = listZipEntries(zip);
+    // Understate the size the way a crafted archive would; the real output is far larger.
+    const lying = { ...entry!, uncompressedSize: 64 };
+    await expect(readZipEntryBytes(zip, lying)).rejects.toThrow(/misdeclares its sizes/);
+  });
+
   it('throws for an unsupported compression method', async () => {
     const zip = buildTestZip([{ name: 'a.txt', content: 'x', methodOverride: 99 }]);
     const [entry] = listZipEntries(zip);

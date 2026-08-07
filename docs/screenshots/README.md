@@ -1,14 +1,13 @@
-# AskSQL - real screenshots
+# AskSQL screenshots
 
-Captured from the **actual running app** in headless Chrome:
-Chrome -> built Vite bundle -> Express sidecar -> live PostgreSQL -> Groq
-(`llama-3.3-70b`).
+The numbered shots are the full-page chat against a PostgreSQL database. The `web-*` shots are
+the zero-backend demo, where DuckDB-WASM queries a file in the browser tab with no server.
 
 ### Full-page chat - ask, review SQL, results (light)
 Connection picker (two DBs), the generated SQL shown before it runs, the plain-language
 explanation, and the result table. Note the BIGINT value `1000000249999` preserved exactly.
 
-![Results table, light](01-empty-light.png)
+![Empty state, light](01-empty-light.png)
 ![Results table, light](02-results-table-light.png)
 
 ### One-click chart from the same result
@@ -46,4 +45,18 @@ Upload a CSV, ask a question - DuckDB-WASM parses and queries it in a Web Worker
 engine + guard run client-side, and **nothing leaves the tab**. The result
 (`NA = 2480.25`, computed in-browser) proves the whole loop with no server.
 
-![Browser DuckDB-WASM](07-browser-duckdb.png)
+![Browser DuckDB-WASM](web-01-query-and-table.png)
+
+The same result as a chart. A label column and a numeric column is a bar chart; the toggle only
+appears when the shape suits one.
+
+![Bar chart in the browser](web-02-chart.png)
+
+A question about the schema rather than the data is answered in prose, with no query to run and
+nothing executed.
+
+![Schema question answered in prose](web-03-prose-answer.png)
+
+Before any file is loaded.
+
+![Starting state](web-00-start.png)

@@ -6,7 +6,8 @@
  */
 import { StrictMode, useEffect, useRef, useState, type JSX } from 'react';
 import { createRoot } from 'react-dom/client';
-import { createAskSql, resolveModel, type AskSqlEngine, type ModelLike } from '@asksql/core';
+import { resolveModel } from '@asksql/core/providers';
+import type { AskSqlEngine, ModelLike } from '@asksql/core';
 import type { DuckDbWasmConnector } from '@asksql/duckdb/browser';
 import { AskSqlChat, HttpTransport, LocalTransport, SchemaBrowser, type Transport } from '@asksql/react';
 import type { SchemaCatalog } from '@asksql/core';
@@ -66,10 +67,12 @@ async function buildFileTransport(
     throw new Error(`"${connection.name}" has no tables left. Remove it and add the files again from Settings.`);
   }
 
+  // The guard's SQL parser is ~2.5MB and is not needed until a file connection is opened.
+  const { createAskSql } = await import('@asksql/core');
   const engine: AskSqlEngine = createAskSql({
     connectors: [connector],
     model,
-    policy: { maxRows: engineSettings.maxRows, allowFileFunctions: true },
+    policy: { maxRows: engineSettings.maxRows },
     pruner: { maxSchemaTokens: engineSettings.maxSchemaTokens },
     ...(engineSettings.customInstructions.trim()
       ? { prompts: { instructions: engineSettings.customInstructions.trim() } }

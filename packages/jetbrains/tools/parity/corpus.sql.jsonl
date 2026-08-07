@@ -34,3 +34,18 @@
 {"sql": "SELECT a.id, b.name FROM a JOIN b ON a.id = b.a_id WHERE a.status = 'active' GROUP BY a.id, b.name HAVING count(*) > 1 ORDER BY a.id", "engine": "postgres"}
 {"sql": "SELECT * FROM (SELECT id FROM users WHERE age > 18) AS adults", "engine": "postgres"}
 {"sql": "SELECT * FROM users WHERE id IN (SELECT user_id FROM orders)", "engine": "postgres"}
+{"sql": "SHOW TABLES WHERE (SELECT 1)", "engine": "mysql"}
+{"sql": "SHOW TABLES LIKE concat('a','b')", "engine": "mysql"}
+{"sql": "SHOW COLUMNS FROM orders WHERE Field = version()", "engine": "mysql"}
+{"sql": "(SELECT a FROM t LIMIT 900) UNION ALL (SELECT b FROM u LIMIT 900)", "engine": "postgres"}
+{"sql": "(SELECT a FROM t LIMIT 5000) UNION ALL (SELECT b FROM u LIMIT 5000)", "engine": "postgres"}
+{"sql": "(SELECT a FROM t LIMIT 900) UNION ALL (SELECT b FROM u LIMIT 900) LIMIT 100", "engine": "postgres"}
+{"sql": "SELECT a FROM t UNION ALL SELECT b FROM u", "engine": "postgres"}
+{"sql": "SELECT a FROM t UNION ALL SELECT b FROM u LIMIT 999999", "engine": "postgres"}
+{"sql": "SELECT a FROM t INTERSECT SELECT b FROM u", "engine": "postgres"}
+{"sql": "SELECT a FROM t EXCEPT SELECT b FROM u", "engine": "postgres"}
+{"sql": "(SELECT a FROM t LIMIT 900) UNION ALL (SELECT b FROM u LIMIT 900)", "engine": "mysql"}
+{"sql": "SELECT id FROM users LIMIT ALL", "engine": "postgres"}
+{"sql": "(SELECT id FROM users) UNION (SELECT id FROM admins) LIMIT ALL", "engine": "postgres"}
+{"sql": "(SELECT id FROM users LIMIT ALL) UNION (SELECT id FROM admins) LIMIT ALL", "engine": "postgres"}
+{"sql": "(SELECT id FROM users) UNION (SELECT id FROM admins) LIMIT (SELECT 5)", "engine": "postgres"}

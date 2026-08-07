@@ -13,7 +13,7 @@ import {
   type ResultColumn,
   type SchemaCatalog,
   type TableInfo,
-} from '@asksql/core';
+} from '@asksql/core/runtime';
 
 export type FileFormat = 'csv' | 'json' | 'ndjson' | 'parquet' | 'xlsx' | 'sql' | 'auto';
 
@@ -178,10 +178,36 @@ function blankLiterals(sql: string, keepComments = false): string {
       i += 2;
       continue;
     }
+    // $tag$ ... $tag$ is a DuckDB string. Without this, a quote inside one opened a literal scan
+    // that blanked the statements after it, hiding them from every check below.
+    if (sql[i] === '$') {
+      let j = i + 1;
+      while (j < sql.length && /[A-Za-z0-9_]/.test(sql[j]!)) j++;
+      if (sql[j] === '$') {
+        const tag = sql.slice(i, j + 1);
+        const close = sql.indexOf(tag, j + 1);
+        const end = close === -1 ? sql.length : close + tag.length;
+        while (i < end) {
+          out += sql[i] === '\n' ? '\n' : ' ';
+          i++;
+        }
+        continue;
+      }
+    }
     if (sql[i] === "'" || sql[i] === '"') {
       const quote = sql[i]!;
       out += sql[i++];
-      blankWhile(() => sql[i] === quote);
+      // A doubled quote is an escape, not the end of the literal.
+      while (i < sql.length) {
+        if (sql[i] === quote && sql[i + 1] === quote) {
+          out += '  ';
+          i += 2;
+          continue;
+        }
+        if (sql[i] === quote) break;
+        out += sql[i] === '\n' ? '\n' : ' ';
+        i++;
+      }
       if (i < sql.length) out += sql[i++];
       continue;
     }
@@ -246,7 +272,9 @@ export function readerFor(file: FileSource, format: Exclude<FileFormat, 'auto'>)
     case 'csv':
     default: {
       const enc = file.encoding ? `, encoding=${sqlStr(file.encoding)}` : '';
-      return `read_csv_auto(${p}${enc})`;
+      // null_padding: without it a row with too few columns makes the sniffer re-read the file as
+      // a different shape and drop rows, with no error.
+      return `read_csv_auto(${p}${enc}, null_padding=true)`;
     }
   }
 }
@@ -332,8 +360,14 @@ export function shapeDuckValue(v: unknown, kind: ResultColumn['kind']): CellValu
   }
   if (v instanceof Date) return v.toISOString();
   if (kind === 'bigint' || kind === 'decimal') return typeof v === 'string' ? v : String(v);
-  if (typeof v === 'number' || typeof v === 'boolean') return v;
-  if (typeof v === 'object') return JSON.stringify(v);
+  // DOUBLE supports 'nan'/'inf'; non-finite numbers are not legal JSON (they become null).
+  if (typeof v === 'number') return Number.isFinite(v) ? v : String(v);
+  if (typeof v === 'boolean') return v;
+  // LIST/STRUCT/MAP wrappers can hold bigint members, which JSON.stringify refuses to
+  // serialize - and the throw would escape execute() as a raw TypeError. Stringify them.
+  if (typeof v === 'object') {
+    return JSON.stringify(v, (_key, x: unknown) => (typeof x === 'bigint' ? x.toString() : x));
+  }
   return String(v);
 }
 

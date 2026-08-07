@@ -31,7 +31,13 @@ object CommonIntrospection {
     )
 
     /** @param schemaPattern an EXACT schema name, escaped internally despite the pattern-shaped JDBC parameter; null means every schema. */
-    fun listTables(connection: Connection, catalog: String?, schemaPattern: String?): List<RawTable> {
+    fun listTables(
+        connection: Connection,
+        catalog: String?,
+        schemaPattern: String?,
+        /** False when the caller loads keys and indexes itself in one pass instead of three per table. */
+        loadConstraints: Boolean = true,
+    ): List<RawTable> {
         val meta = connection.metaData
         val result = mutableListOf<RawTable>()
         val escapedSchemaPattern = schemaPattern?.let { meta.escapePattern(it) }
@@ -56,9 +62,11 @@ object CommonIntrospection {
         val columnsByTable = loadAllColumns(meta, catalog, escapedSchemaPattern)
         for (table in result) {
             table.columns.addAll(columnsByTable[table.schema to table.name].orEmpty())
-            table.primaryKey = loadPrimaryKey(meta, catalog, table.schema, table.name)
-            table.foreignKeys = loadForeignKeys(meta, catalog, table.schema, table.name)
-            table.indexes = loadIndexes(meta, catalog, table.schema, table.name)
+            if (loadConstraints) {
+                table.primaryKey = loadPrimaryKey(meta, catalog, table.schema, table.name)
+                table.foreignKeys = loadForeignKeys(meta, catalog, table.schema, table.name)
+                table.indexes = loadIndexes(meta, catalog, table.schema, table.name)
+            }
         }
         return result
     }

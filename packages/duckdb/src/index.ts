@@ -13,7 +13,7 @@ import {
   type ExecuteOptions,
   type ResultSet,
   type SchemaCatalog,
-} from '@asksql/core';
+} from '@asksql/core/runtime';
 import { readFile } from 'node:fs/promises';
 import {
   assertSafeFilePath,

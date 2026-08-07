@@ -293,6 +293,14 @@ function mapConnectError(err: unknown): AskSqlError {
   ) {
     return new AskSqlError('DB_AUTH', { detail: msg, cause: err });
   }
+  // The listener answered and knows no such service; the host and port are fine. The thin driver
+  // reports this as NJS-518 rather than the ORA-12514 the thick client raises.
+  if (
+    num === 12514 ||
+    /ORA-12514|NJS-518|listener does not currently know of service|is not registered with the listener/i.test(msg)
+  ) {
+    return new AskSqlError('DB_NOT_FOUND', { detail: msg, cause: err });
+  }
   return new AskSqlError('DB_UNREACHABLE', { detail: msg, cause: err });
 }
 

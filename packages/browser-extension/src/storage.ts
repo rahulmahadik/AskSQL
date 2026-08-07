@@ -4,7 +4,7 @@
  * before the first key is saved; sidecar mode never stores a DB password here,
  * only a base URL and an optional auth header.
  */
-import type { ProviderName } from '@asksql/core';
+import type { ProviderName } from '@asksql/core/providers';
 import { removeAllGrantedOriginPermissions } from './permissions.js';
 import { removeAllPersistedDatabases } from './persistence.js';
 import { clearProviderOriginStripRule } from './originHeaderRule.js';

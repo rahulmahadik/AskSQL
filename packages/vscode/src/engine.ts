@@ -211,8 +211,25 @@ async function openSqlite(file: string): Promise<SqliteHandle> {
     );
   }
   try {
-    return new mod.DatabaseSync(resolved, { readOnly: true });
+    const db = new mod.DatabaseSync(resolved, { readOnly: true });
+    // node:sqlite ignores an option key it does not know, which would open the file read-write and
+    // report nothing. readOnly does not set query_only, so set it, then read it back as the proof.
+    const handle = db as unknown as {
+      exec?(sql: string): void;
+      prepare(sql: string): { all(): Record<string, unknown>[] };
+    };
+    try {
+      handle.exec?.('PRAGMA query_only = ON');
+    } catch {
+      // Some drivers refuse exec() on a read-only handle; the read-back below is the real check.
+    }
+    const rows = handle.prepare('PRAGMA query_only').all();
+    if (Number(Object.values(rows[0] ?? {})[0]) !== 1) {
+      throw new UserFacingError(`The SQLite file "${file}" did not open read-only, so AskSQL will not use it.`);
+    }
+    return db;
   } catch (err) {
+    if (err instanceof UserFacingError) throw err;
     throw new UserFacingError(
       `Could not open the SQLite file "${file}": ${err instanceof Error ? err.message : String(err)}. Check that the path exists and is readable.`,
     );

@@ -176,7 +176,7 @@ describe('file sources', () => {
       "read_xlsx('/d/x.xlsx', sheet = 'Q1')",
     );
     expect(readerFor({ table: 't', path: "/d/o'brien.csv", encoding: 'latin-1' }, 'csv')).toBe(
-      "read_csv_auto('/d/o''brien.csv', encoding='latin-1')",
+      "read_csv_auto('/d/o''brien.csv', encoding='latin-1', null_padding=true)",
     );
     expect(thrown(() => readerFor({ table: 't', path: '/d/x.sql' }, 'sql')).code).toBe('FILE_PARSE');
   });
@@ -291,4 +291,19 @@ describe('error shaping', () => {
     expect(basename('/a/b/c.csv')).toBe('c.csv');
     expect(basename('C:\\data\\c.csv')).toBe('c.csv');
   });
+});
+
+// A `.sql` upload is the one place user-supplied multi-statement SQL is executed, so the validator
+// must see every statement. Quote handling it did not know about blanked the ones that followed.
+describe('validateSqlDump literal handling', () => {
+  const rejects = (sql: string) => expect(() => validateSqlDump(sql)).toThrow();
+  const accepts = (sql: string) => expect(() => validateSqlDump(sql)).not.toThrow();
+
+  it('sees a COPY hidden behind a dollar-quoted string', () => rejects("SELECT $$a'b$$; COPY t TO '/tmp/x.csv';"));
+  it('sees an ATTACH hidden behind a dollar-quoted string', () => rejects("SELECT $$a'b$$; ATTACH 'x.db' AS x;"));
+  it('sees an INSTALL hidden behind a tagged dollar quote', () => rejects("SELECT $q$it's$q$; INSTALL httpfs;"));
+  it('sees a COPY hidden behind a doubled quote', () => rejects("SELECT 'it''s'; COPY t TO '/tmp/x.csv';"));
+
+  it('still accepts an ordinary dump', () => accepts('CREATE TABLE t(x INT); INSERT INTO t VALUES (1);'));
+  it('still accepts genuine dollar-quoted data', () => accepts('INSERT INTO t VALUES ($$hello$$);'));
 });

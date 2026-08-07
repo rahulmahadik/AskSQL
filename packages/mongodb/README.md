@@ -1,12 +1,16 @@
 # @asksql/mongodb
 
 The MongoDB connector for [AskSQL](https://github.com/rahulmahadik/AskSQL): sampling-based
-schema inference across collections and guarded read-only aggregation pipelines.
-The driver (mongodb) is a peer dependency, so you install it yourself.
+schema inference across collections and guarded read-only aggregation pipelines. This is
+the non-SQL path: the model emits a (collection, pipeline) pair, not SQL, and the engine
+entry point differs (see below). The driver (mongodb) is a peer dependency, so you
+install it yourself.
 
 ```bash
 npm i @asksql/core @asksql/mongodb mongodb
 ```
+
+Requires Node 20+ and mongodb 6.0 or newer.
 
 ```ts
 import { MongodbConnector } from '@asksql/mongodb';
@@ -15,52 +19,56 @@ const connector = new MongodbConnector({
   id: 'main',
   name: 'Main DB',
   connectionString: process.env.MONGODB_URI!, // mongodb:// or mongodb+srv://
-  database: 'app',
+  database: 'app', // required: names the DB to introspect and query
 });
 ```
 
+Pass the connector to `createMongoAskSql` from `@asksql/core/mongo`, not to
+`createAskSql`.
+
 ## Connecting
 
-MongoDB is configured by connection string (which encodes the host set, replica set, TLS and
-auth), so it's the primary field - the same URI you'd give `mongosh` or Compass.
+The connection string encodes the host set, replica set, TLS and auth: the same URI you
+would give `mongosh` or Compass. You can also pass `user` and `password` separately;
+the auth database then defaults to `admin` (where root and Atlas users live), override
+with `authSource`.
 
 ```ts
-// Local
 connectionString: 'mongodb://localhost:27017'
-
-// Local with auth
 connectionString: 'mongodb://user:password@localhost:27017'
-
-// Remote / Atlas (SRV)
 connectionString: 'mongodb+srv://user:password@cluster0.abc12.mongodb.net'
 ```
 
-You can also pass `user` and `password` separately instead of embedding them in the URI:
+The two most common Atlas failures:
 
-```ts
-new MongodbConnector({ id, name, database: 'app',
-  connectionString: 'mongodb+srv://cluster0.abc12.mongodb.net', user: 'reader', password: process.env.MONGO_PW! });
-```
+- IP allow-list. Add your current IP under Atlas -> Network Access (or `0.0.0.0/0` to
+  test). A blocked IP shows up as a TLS/connection error, not an auth error.
+- The `<password>` placeholder. Atlas copies the URI with a literal `<password>`;
+  replace it, drop the angle brackets, and URL-encode any `@ : / ?` in it.
 
-**Atlas gotchas** (the two most common connection failures):
+## Read-only enforcement
 
-- **IP allow-list** - add your current IP under Atlas → **Network Access** (or `0.0.0.0/0` to test).
-  A blocked IP shows up as a TLS/connection error, not an auth error.
-- **The `<password>` placeholder** - Atlas copies the URI with a literal `<password>`; replace it
-  with the real password (no angle brackets), and URL-encode any `@ : / ?` in it.
+MongoDB has no read-only session flag, so the core pipeline guard is the only safety
+floor, and it is re-run on every execute. It is a fail-closed allowlist over the parsed
+pipeline: write stages (`$out`, `$merge`) are simply absent from the allowlist, the
+JS-execution operators (`$where`, `$function`, `$accumulator`) are refused at any
+depth, regexes are bounded against ReDoS, and a trailing `$limit` is injected or
+lowered to the row cap, including inside every `$facet` branch. The connector adds a
+database-side `$limit` and `maxTimeMS` on top.
 
-Because MongoDB has no fixed schema, `introspect()` samples up to 200 documents
-per collection and infers each field's type, how often it is present, and (opt-in
-via `sampleColumnValues`) a small set of example values. Queries are single
-read-only aggregation pipelines; there is no read-only session, so the core
-pipeline guard is the safety floor.
+## Schema inference
 
-Those example values are gated twice. `sampleColumnValues` decides whether the connector
-collects them at all, and the engine's `allowDataInPrompt` (default off) decides whether they
-survive the catalog exit and reach a prompt. With either off, the model sees field names, types
-and presence percentages only.
+MongoDB has no fixed schema, so `introspect()` samples up to 200 documents per
+collection and infers each field's type and how often it is present. Example values
+are gated twice: `sampleColumnValues` (opt-in) decides whether the connector collects
+them, and the engine's `allowDataInPrompt` (default off) decides whether they reach a
+prompt. With either off, the model sees field names, types and presence percentages
+only.
 
-Pass the connector to `createMongoAskSql` from `@asksql/core/mongo`.
+## Values
+
+Extended JSON in pipelines is deserialized in strict mode, and Long promotion is off,
+so 64-bit integers and Decimal128 survive as strings instead of lossy JS numbers.
 
 Full documentation: [https://github.com/rahulmahadik/AskSQL](https://github.com/rahulmahadik/AskSQL)
 
