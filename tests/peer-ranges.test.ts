@@ -114,10 +114,9 @@ describe('@asksql/core is a peer wherever it is imported at runtime', () => {
       expect(meta['@asksql/core']?.optional, `${path}: the core peer must not be optional`).not.toBe(true);
       // pnpm publishes `workspace:0.6.0` as the exact version, which the next core release puts
       // straight back into conflict.
-      expect(
-        peers['@asksql/core'],
-        `${path}: the core peer must be a range, not an exact pin`,
-      ).toMatch(/^workspace:(>=|\^|~)/);
+      expect(peers['@asksql/core'], `${path}: the core peer must be a range, not an exact pin`).toMatch(
+        /^workspace:(>=|\^|~)/,
+      );
     });
   }
 });
