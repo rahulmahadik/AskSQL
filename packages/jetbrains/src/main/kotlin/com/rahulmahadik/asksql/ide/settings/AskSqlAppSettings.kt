@@ -10,24 +10,24 @@ import com.intellij.openapi.components.service
 private const val CURRENT_STATE_VERSION = 1
 
 data class AskSqlAppState(
-    @JvmField val stateVersion: Int = CURRENT_STATE_VERSION,
-    @JvmField val provider: String = "",
-    @JvmField val model: String = "",
-    @JvmField val baseUrl: String? = null,
-    @JvmField val maxRows: Int = 100,
+    @JvmField var stateVersion: Int = CURRENT_STATE_VERSION,
+    @JvmField var provider: String = "",
+    @JvmField var model: String = "",
+    @JvmField var baseUrl: String? = null,
+    @JvmField var maxRows: Int = 100,
     /** Token budget for the schema sent to the model (estimate at ~4 chars/token). Higher fits more tables for complex joins; lower keeps prompts small for limited-context models. */
-    @JvmField val maxSchemaTokens: Int = 5000,
+    @JvmField var maxSchemaTokens: Int = 5000,
     /** Send a few example values per field to the model. Off by default: only the schema leaves the machine. */
-    @JvmField val allowDataInPrompt: Boolean = false,
-    @JvmField val requireApproval: Boolean = false,
+    @JvmField var allowDataInPrompt: Boolean = false,
+    @JvmField var requireApproval: Boolean = false,
     /** Auto-generate a plain-language description of each answer (one extra model call per query); the "Explain" button also produces it on demand. */
-    @JvmField val explainAutomatically: Boolean = true,
+    @JvmField var explainAutomatically: Boolean = true,
     /** When a question can't become SQL, answer it in prose from the schema instead of erroring; a write request comes back as a statement to run yourself, never executed. */
-    @JvmField val answerSchemaQuestions: Boolean = true,
-    @JvmField val connections: List<ConnectionState> = emptyList(),
+    @JvmField var answerSchemaQuestions: Boolean = true,
+    @JvmField var connections: List<ConnectionState> = emptyList(),
     /** Appended verbatim after the default system-prompt rules (see [com.rahulmahadik.asksql.ide.engine.Prompts.buildSqlSystem]). */
-    @JvmField val customInstructions: String = "",
-    @JvmField val glossary: String = "",
+    @JvmField var customInstructions: String = "",
+    @JvmField var glossary: String = "",
 )
 
 /** Application-scoped settings: AI provider/model/key selection and global engine defaults, held per machine (`RoamingType.DISABLED`). */

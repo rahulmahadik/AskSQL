@@ -7,18 +7,18 @@ import com.rahulmahadik.asksql.ide.model.EngineKind
 
 /** The persisted (XML-serializable) shape of a connection, kept separate from [ConnectionDescriptor]. Never carries a password. */
 data class ConnectionState(
-    @JvmField val id: String = "",
-    @JvmField val name: String = "",
-    @JvmField val engine: String = "",
-    @JvmField val host: String? = null,
-    @JvmField val port: Int? = null,
-    @JvmField val database: String? = null,
-    @JvmField val user: String? = null,
-    @JvmField val filePath: String? = null,
-    @JvmField val connectionString: String? = null,
-    @JvmField val isSample: Boolean = false,
+    @JvmField var id: String = "",
+    @JvmField var name: String = "",
+    @JvmField var engine: String = "",
+    @JvmField var host: String? = null,
+    @JvmField var port: Int? = null,
+    @JvmField var database: String? = null,
+    @JvmField var user: String? = null,
+    @JvmField var filePath: String? = null,
+    @JvmField var connectionString: String? = null,
+    @JvmField var isSample: Boolean = false,
     /** [SslMode.name]; null falls back to [SslMode.TRUST]. */
-    @JvmField val sslMode: String? = null,
+    @JvmField var sslMode: String? = null,
 )
 
 fun ConnectionState.toDescriptor(scope: ConnectionScope): ConnectionDescriptor = ConnectionDescriptor(
