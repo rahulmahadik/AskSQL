@@ -84,8 +84,9 @@ writeFileSync(
 );
 
 console.log(`installing into ${consumer} (nested, no hoisting)`);
-// --legacy-peer-deps stops npm auto-installing peers: only what a package truly declares as a
-// dependency is present, so an undeclared import has nothing to accidentally resolve against.
+// --legacy-peer-deps stops npm auto-installing peers, so an undeclared third-party import has
+// nothing to resolve against. @asksql imports are exempt: every @asksql tarball is installed at
+// the consumer root. tests/peer-install-conflict.test.ts covers the core peer instead.
 run(
   'npm',
   [

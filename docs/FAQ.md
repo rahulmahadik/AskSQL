@@ -43,9 +43,11 @@ new DuckDbConnector({ id: 'book', name: 'Workbook', files: [
 
 ### What file types and sizes can it handle?
 
-Five formats: **CSV**, **JSON**, **NDJSON**, **Parquet**, and **Excel** (`.xlsx` / `.xls`). The
-format is inferred from the extension, or you can set `format` explicitly. You can register as
-many files as you like - there is no file-count limit, and each becomes its own joinable table.
+Six formats: **CSV**, **JSON**, **NDJSON**, **Parquet**, **Excel** (`.xlsx` / `.xls`), and a
+portable **`.sql`** dump (its CREATE TABLE + INSERT statements are run and the tables they build
+become queryable). The format is inferred from the extension, or you can set `format` explicitly.
+You can register as many files as you like - there is no file-count limit, and each becomes its
+own joinable table.
 
 There is **no fixed size cap** in AskSQL itself. In the browser the file is streamed into
 DuckDB-WASM (bounded by the tab's available memory, or persistent OPFS storage if enabled), and
@@ -251,7 +253,7 @@ entirely. The guard still enforces read-only regardless of what any prompt says.
 
 ### Is it production-ready?
 
-It is an early (pre-1.0; `@asksql/core` is at `0.5.x`) but functional release: the pipeline
+It is an early (pre-1.0; `@asksql/core` is at `0.6.x`) but functional release: the pipeline
 (schema to SQL to guard to execute), the safety guard, the six database adapters, the server
 sidecar, the React UI, and the MCP server are all working and tested against live databases
 and multiple providers. Treat

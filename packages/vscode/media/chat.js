@@ -25,6 +25,7 @@
   /** In-flight plan requests, mapped to the turn whose button asked for them. */
   const planTurns = new Map();
   let planSeq = 0;
+  let copySeq = 0;
 
   const el = (tag, cls, text) => {
     const n = document.createElement(tag);
@@ -60,9 +61,14 @@
         i++;
         while (i < lines.length && !/^\s*```/u.test(lines[i])) code.push(lines[i++]);
         i++; // skip the closing fence
+        const text = code.join('\n');
         const pre = el('pre', 'md-code');
-        pre.textContent = code.join('\n');
+        pre.textContent = text;
         box.appendChild(pre);
+        // Copy only: a prose fence has passed neither the guard nor the unknown-name checks.
+        const acts = el('div', 'actions md-codeacts');
+        acts.appendChild(copyBtn('Copy', () => text));
+        box.appendChild(acts);
         continue;
       }
       const bullet = /^\s*[-*]\s+/u.test(lines[i]);
@@ -100,6 +106,15 @@
     return svg;
   }
 
+  /** A copy button for a block of text. The host's ack finds the button by its id. */
+  function copyBtn(label, getText) {
+    const b = el('button', 'secondary', label);
+    const copyId = 'c' + ++copySeq;
+    b.dataset.copy = copyId;
+    b.addEventListener('click', () => vscode.postMessage({ type: 'copyText', text: getText(), copyId }));
+    return b;
+  }
+
   const nearBottom = () => $log.scrollHeight - $log.scrollTop - $log.clientHeight < 80;
   // Soft scroll: follow new content only when the user is already at the bottom.
   const scroll = () => {
@@ -122,10 +137,13 @@
     applyLock();
   }
 
-  /** Drop the transient progress line once real content arrives. */
+  /** The progress row of a plan request, or the turn's own. The two are independent. */
+  const progressSel = (planId) => (planId ? '.progress[data-plan="' + planId + '"]' : '.progress:not([data-plan])');
+
+  /** Drop the transient progress line once real content arrives. Plan progress is not ours to drop. */
   function clearProgress() {
     if (!turn) return;
-    const p = turn.querySelector('.progress');
+    const p = turn.querySelector(progressSel());
     if (p) p.remove();
   }
 
@@ -315,11 +333,18 @@
     lastSqlBlock = { turn: myTurn, el: block };
     block.appendChild(el('pre', 'sql', sql));
     if (m.explanation) block.appendChild(renderMarkdown('explain', m.explanation));
-    if (m.autoLimited) block.appendChild(el('div', 'note', 'A row limit was added automatically.'));
+    if (m.autoLimited) {
+      // The host names the cap it applied.
+      const limit = typeof m.rowLimit === 'number' && m.rowLimit > 0 ? m.rowLimit : null;
+      const text = limit ? `A row limit of ${limit} was added automatically.` : 'A row limit was added automatically.';
+      block.appendChild(el('div', 'note', text));
+    }
     const actions = el('div', 'actions');
     const open = el('button', 'secondary', 'Open SQL in editor');
     open.addEventListener('click', () => vscode.postMessage({ type: 'openSql', sql }));
     actions.appendChild(open);
+    actions.appendChild(copyBtn('Copy SQL', () => sql));
+    if (m.explanation) actions.appendChild(copyBtn('Copy explanation', () => m.explanation));
     // A query plan comes from the database, not the model, so it is a button rather than a question.
     const plan = el('button', 'secondary', 'Explain plan');
     plan.addEventListener('click', () => {
@@ -441,10 +466,23 @@
     }
 
     if (m.type === 'copied') {
-      const btn = $log.querySelector('button.iconbtn[data-result="' + m.resultId + '"]');
+      const btn = m.copyId
+        ? $log.querySelector('button[data-copy="' + m.copyId + '"]')
+        : $log.querySelector('button.iconbtn[data-result="' + m.resultId + '"]');
       if (btn) {
         btn.classList.add('ok');
-        setTimeout(() => btn.classList.remove('ok'), 1000);
+        // The icon button has no label to swap, only the tint.
+        if (!btn.classList.contains('iconbtn') && btn.dataset.label === undefined) {
+          btn.dataset.label = btn.textContent;
+          btn.textContent = 'Copied';
+        }
+        setTimeout(() => {
+          btn.classList.remove('ok');
+          if (btn.dataset.label !== undefined) {
+            btn.textContent = btn.dataset.label;
+            delete btn.dataset.label;
+          }
+        }, 1000);
       }
       return;
     }
@@ -463,8 +501,12 @@
     }
 
     if (m.type === 'cancelled') {
+      // turnEnd can be seconds away while a request is still in flight.
       clearProgress();
       if (turn) turn.appendChild(el('div', 'note', 'Cancelled.'));
+      for (const a of $log.querySelectorAll('.approval')) a.remove();
+      setBusy(false);
+      $q.focus();
       return;
     }
 
@@ -492,9 +534,12 @@
         t = planTurns.get(m.planId);
         if (!t) return;
       }
-      const p = t.querySelector('.progress');
+      const p = t.querySelector(progressSel(m.planId));
       if (p) p.remove();
-      t.appendChild(el('div', 'progress', m.label));
+      const row = el('div', 'progress', m.label);
+      // Tagged, so a plan's progress and the turn's own progress cannot replace each other.
+      if (m.planId) row.dataset.plan = m.planId;
+      t.appendChild(row);
       scroll();
       return;
     }
@@ -540,6 +585,8 @@
           const actions = el('div', 'actions');
           // Bind this turn's result id, so the buttons act on this turn's rows.
           const rid = m.resultId;
+          // A result-store error posts back this id to find the turn.
+          actions.dataset.result = rid;
           const copy = el('button', 'secondary iconbtn');
           copy.title = 'Copy table with headers';
           copy.setAttribute('aria-label', 'Copy table with headers');
@@ -588,7 +635,7 @@
         planTurns.delete(m.planId);
         if (!t) return;
       }
-      const p = t.querySelector('.progress');
+      const p = t.querySelector(progressSel(m.planId));
       if (p) p.remove();
       t.appendChild(el('div', 'note', 'Query plan, straight from the database:'));
       t.appendChild(renderTable(m.columns, m.rows));
@@ -608,22 +655,26 @@
             'div',
             'note',
             m.isSchemaChange
-              ? 'Proposed names not in your current schema: ' + names + '. AskSQL is read-only and ran nothing.'
+              ? 'Proposed names not in your current schema: ' + names + '.'
               : 'Heads up: this mentioned names not in your schema (' + names + '), so treat those with caution.',
           ),
         );
       }
-      // The query in a prose answer is the same artifact as a generated one, so it gets the same action.
+      const saActions = el('div', 'actions');
+      saActions.appendChild(copyBtn('Copy answer', () => m.answer));
+      // The query in a prose answer is the same artifact as a generated one.
       if (m.proposedSql) {
-        const actions = el('div', 'actions');
         const open = el('button', 'secondary', 'Open SQL in editor');
         open.addEventListener('click', () => vscode.postMessage({ type: 'openSql', sql: m.proposedSql }));
-        actions.appendChild(open);
-        turn.appendChild(actions);
+        saActions.appendChild(open);
+        saActions.appendChild(copyBtn('Copy SQL', () => m.proposedSql));
       }
-      turn.appendChild(
-        el('div', 'note', 'Generated from your schema by the model - no query was run, so treat it as guidance.'),
-      );
+      turn.appendChild(saActions);
+      if (!String(m.answer ?? '').includes('AskSQL is read-only')) {
+        turn.appendChild(
+          el('div', 'note', 'Generated from your schema by the model - no query was run, so treat it as guidance.'),
+        );
+      }
       scroll();
       return;
     }
@@ -633,9 +684,34 @@
       const t = planTurns.get(m.planId);
       planTurns.delete(m.planId);
       if (!t) return;
-      const p = t.querySelector('.progress');
+      const p = t.querySelector(progressSel(m.planId));
       if (p) p.remove();
       t.appendChild(el('div', 'err', m.message));
+      scroll();
+      return;
+    }
+
+    // A result-store failure belongs to the turn whose button was clicked, not the live turn.
+    if (m.type === 'error' && m.resultId) {
+      const acts = $log.querySelector('.actions[data-result="' + m.resultId + '"]');
+      const t = acts && acts.closest('.turn');
+      if (!t) return;
+      // Repeat clicks replace the banner.
+      const prior = t.querySelector('.err.result-gone');
+      if (prior) prior.remove();
+      t.appendChild(el('div', 'err result-gone', m.message));
+      scroll();
+      return;
+    }
+
+    // A copy belongs to the turn holding the clicked button, not the live turn.
+    if (m.type === 'error' && m.copyId) {
+      const btn = $log.querySelector('button[data-copy="' + m.copyId + '"]');
+      const t = btn && btn.closest('.turn');
+      if (!t) return;
+      const prior = t.querySelector('.err.copy-failed');
+      if (prior) prior.remove();
+      t.appendChild(el('div', 'err copy-failed', m.message));
       scroll();
       return;
     }
@@ -654,18 +730,21 @@
       const box = el('div', m.guard ? 'err guard' : 'err', m.message);
       turn.appendChild(box);
       if (m.guard) {
-        turn.appendChild(
-          el('div', 'note', 'AskSQL only runs read-only queries, so this was refused before it reached the database.'),
-        );
+        turn.appendChild(el('div', 'note', 'This was refused before it reached the database.'));
       }
       if (m.suggestedSql) {
         turn.appendChild(el('div', 'note', 'Corrected to match your schema:'));
         turn.appendChild(el('pre', 'sql', m.suggestedSql));
         const acts = el('div', 'actions');
-        const open = el('button', 'secondary', 'Open SQL in editor');
         const sql = m.suggestedSql;
+        // Running it asks again with this query as the question.
+        const run = el('button', null, 'Run this query');
+        run.addEventListener('click', () => ask(sql));
+        acts.appendChild(run);
+        const open = el('button', 'secondary', 'Open SQL in editor');
         open.addEventListener('click', () => vscode.postMessage({ type: 'openSql', sql }));
         acts.appendChild(open);
+        acts.appendChild(copyBtn('Copy SQL', () => sql));
         turn.appendChild(acts);
       }
       if (m.action) {

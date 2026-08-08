@@ -12,6 +12,9 @@ and reads it back, and refuses a database it cannot put into read-only mode.
 npm i @asksql/core @asksql/sqlite
 ```
 
+`@asksql/core` is a peer dependency, and yarn (or npm with `legacy-peer-deps`) will not install it
+for you, so name it explicitly as above.
+
 ```ts
 import { SqliteConnector } from '@asksql/sqlite';
 

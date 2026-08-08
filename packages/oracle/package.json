@@ -18,13 +18,12 @@
   "scripts": {
     "build": "tsc -b"
   },
-  "dependencies": {
-    "@asksql/core": "workspace:^"
-  },
   "peerDependencies": {
+    "@asksql/core": "workspace:>=0.6.0",
     "oracledb": ">=6.0"
   },
   "devDependencies": {
+    "@asksql/core": "workspace:>=0.6.0",
     "oracledb": "^6.5.0"
   },
   "license": "Apache-2.0",

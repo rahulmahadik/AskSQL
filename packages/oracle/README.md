@@ -9,6 +9,9 @@ pure-JS Thin mode: no Oracle Instant Client, no native libraries.
 npm i @asksql/core @asksql/oracle oracledb
 ```
 
+`@asksql/core` is a peer dependency, and yarn (or npm with `legacy-peer-deps`) will not install it
+for you, so name it explicitly as above.
+
 Requires Node 20+ and oracledb 6.0 or newer.
 
 ```ts

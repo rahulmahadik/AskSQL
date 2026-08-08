@@ -311,11 +311,10 @@ importers:
         version: 3.0.9(zod@4.4.3)
 
   packages/duckdb:
-    dependencies:
-      '@asksql/core':
-        specifier: workspace:^
-        version: link:../core
     devDependencies:
+      '@asksql/core':
+        specifier: workspace:>=0.6.0
+        version: link:../core
       '@duckdb/duckdb-wasm':
         specifier: ^1.32.0
         version: 1.32.0
@@ -324,51 +323,46 @@ importers:
         version: 1.5.4-r.1
 
   packages/mcp:
-    dependencies:
-      '@asksql/core':
-        specifier: workspace:^
-        version: link:../core
     devDependencies:
+      '@asksql/core':
+        specifier: workspace:>=0.6.0
+        version: link:../core
       '@modelcontextprotocol/sdk':
         specifier: ^1.29.0
         version: 1.29.0(zod@4.4.3)
 
   packages/mongodb:
-    dependencies:
-      '@asksql/core':
-        specifier: workspace:^
-        version: link:../core
     devDependencies:
+      '@asksql/core':
+        specifier: workspace:>=0.6.0
+        version: link:../core
       mongodb:
         specifier: ^6.10.0
         version: 6.21.0
 
   packages/mysql:
-    dependencies:
-      '@asksql/core':
-        specifier: workspace:^
-        version: link:../core
     devDependencies:
+      '@asksql/core':
+        specifier: workspace:>=0.6.0
+        version: link:../core
       mysql2:
         specifier: ^3.22.6
         version: 3.22.6(@types/node@26.1.1)
 
   packages/oracle:
-    dependencies:
-      '@asksql/core':
-        specifier: workspace:^
-        version: link:../core
     devDependencies:
+      '@asksql/core':
+        specifier: workspace:>=0.6.0
+        version: link:../core
       oracledb:
         specifier: ^6.5.0
         version: 6.10.0
 
   packages/postgres:
-    dependencies:
-      '@asksql/core':
-        specifier: workspace:^
-        version: link:../core
     devDependencies:
+      '@asksql/core':
+        specifier: workspace:>=0.6.0
+        version: link:../core
       '@types/pg':
         specifier: ^8.20.0
         version: 8.20.0
@@ -377,11 +371,10 @@ importers:
         version: 8.22.0
 
   packages/react:
-    dependencies:
-      '@asksql/core':
-        specifier: workspace:^
-        version: link:../core
     devDependencies:
+      '@asksql/core':
+        specifier: workspace:>=0.6.0
+        version: link:../core
       '@types/react':
         specifier: ^19.2.17
         version: 19.2.17
@@ -400,10 +393,10 @@ importers:
       '@ai-sdk/openai-compatible':
         specifier: ^3.0.9
         version: 3.0.9(zod@4.4.3)
-      '@asksql/core':
-        specifier: workspace:^
-        version: link:../core
     devDependencies:
+      '@asksql/core':
+        specifier: workspace:>=0.6.0
+        version: link:../core
       '@asksql/duckdb':
         specifier: workspace:>=0.2.7
         version: link:../duckdb
@@ -425,12 +418,13 @@ importers:
 
   packages/sqlite:
     dependencies:
-      '@asksql/core':
-        specifier: workspace:^
-        version: link:../core
       better-sqlite3:
         specifier: '>=11'
         version: 12.11.1
+    devDependencies:
+      '@asksql/core':
+        specifier: workspace:>=0.6.0
+        version: link:../core
 
   packages/vscode:
     dependencies:

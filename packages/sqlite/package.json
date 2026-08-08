@@ -18,16 +18,17 @@
   "scripts": {
     "build": "tsc -b"
   },
-  "dependencies": {
-    "@asksql/core": "workspace:^"
-  },
   "peerDependencies": {
+    "@asksql/core": "workspace:>=0.6.0",
     "better-sqlite3": ">=11"
   },
   "peerDependenciesMeta": {
     "better-sqlite3": {
       "optional": true
     }
+  },
+  "devDependencies": {
+    "@asksql/core": "workspace:>=0.6.0"
   },
   "license": "Apache-2.0",
   "engines": {

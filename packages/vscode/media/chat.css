@@ -169,7 +169,8 @@ button:focus-visible {
 
 /* SQL --------------------------------------------------------------------- */
 
-pre.sql {
+pre.sql,
+pre.md-code {
   margin: 0;
   padding: 8px;
   overflow-x: auto;
@@ -180,6 +181,16 @@ pre.sql {
   font-family: var(--vscode-editor-font-family);
   font-size: var(--vscode-editor-font-size);
   white-space: pre;
+}
+
+/* A fenced block sits inside prose and needs its own breathing room. */
+pre.md-code {
+  margin: 6px 0;
+}
+
+/* The fence's own Copy row, kept tight against its block. */
+.md-codeacts {
+  margin: 0 0 8px;
 }
 
 .explain {
@@ -375,8 +386,11 @@ button.iconbtn {
   padding: 4px 6px;
 }
 
-button.iconbtn.ok {
+/* Copy ack; a colour swap alone is invisible on a text button. */
+button.ok {
   color: var(--vscode-testing-iconPassed, var(--vscode-charts-green, currentColor));
+  outline: 1px solid var(--vscode-testing-iconPassed, var(--vscode-charts-green, currentColor));
+  outline-offset: 1px;
 }
 
 button:disabled {

@@ -8,6 +8,8 @@
  * Needs Ollama and the Chinook data from tools/real-db-load.mjs. Each question has a known answer
  * computed from the data, so a fluent but wrong answer fails. Exit code 1 on a wrong answer, an
  * altered value, or any change to the stored data.
+ *
+ * One repair round is allowed and scored `recovered`, matching what the shipped surfaces offer.
  */
 import { PostgresConnector } from '@asksql/postgres';
 import { MysqlConnector } from '@asksql/mysql';
@@ -45,6 +47,9 @@ const cell = (v) => {
 
 /** A value that arrived as 1.0 where the database holds 1 has been altered on the way back. */
 const looksLikeFloatedInteger = (s) => /^-?\d+\.0+$/.test(s);
+
+/** The corrected query core attaches to a rejected one. Absent unless the database itself rejected it. */
+const suggestionAfter = (err) => (err?.code === 'DB_QUERY_ERROR' ? (err.suggestedSql ?? '') : '');
 
 const ENGINES = [
   {
@@ -138,9 +143,13 @@ const ENGINES = [
 
 const model = await resolveModel({ provider: 'ollama', model: MODEL });
 const rows = [];
+let asked = 0;
+let correct = 0;
+let recovered = 0;
 let wrong = 0;
 let altered = 0;
 let mutated = 0;
+let unreachable = 0;
 
 for (const engine of ENGINES) {
   let connector;
@@ -152,12 +161,23 @@ for (const engine of ENGINES) {
     const before = await engine.count();
 
     for (const { q, expect, forbidFloat } of QUESTIONS) {
+      asked++;
       let verdict;
       let detail = '';
       try {
         const answer = await askSql.ask(q);
-        // The SQL engine hands back a runnable result; the Mongo engine hands back a pipeline.
-        const result = engine.mongo ? await askSql.execute(answer.pipelineJson, answer.collection) : await answer.run();
+        let repairedFrom = '';
+        let result;
+        try {
+          // The SQL engine hands back a runnable result; the Mongo engine hands back a pipeline.
+          result = engine.mongo ? await askSql.execute(answer.pipelineJson, answer.collection) : await answer.run();
+        } catch (dbErr) {
+          const suggested = suggestionAfter(dbErr);
+          if (!suggested) throw dbErr;
+          // Guarded again on the way in, the same as the surfaces' re-approval path.
+          result = await askSql.execute(suggested);
+          repairedFrom = (dbErr.detail ?? dbErr.userMessage ?? dbErr.message ?? '').split('\n')[0].slice(0, 40);
+        }
         const cells = (result.rows ?? []).flat().map(cell);
         const missing = expect.filter((want) => !cells.some((c) => c === want || c.includes(want)));
         const floated = forbidFloat ? cells.filter(looksLikeFloatedInteger) : [];
@@ -170,8 +190,13 @@ for (const engine of ENGINES) {
           verdict = 'WRONG';
           wrong++;
           detail = `expected ${missing.join(', ')}; got ${cells.slice(0, 4).join(' | ').slice(0, 60)}`;
+        } else if (repairedFrom) {
+          verdict = 'recovered';
+          recovered++;
+          detail = `${result.rows.length} rows after repair of: ${repairedFrom}`;
         } else {
           verdict = 'ok';
+          correct++;
           detail = `${result.rows.length} rows, ${answer.repairs} repairs`;
         }
       } catch (err) {
@@ -196,7 +221,7 @@ for (const engine of ENGINES) {
       'ERROR',
       (err.userMessage ?? err.message ?? String(err)).split('\n')[0].slice(0, 70),
     ]);
-    wrong++;
+    unreachable++;
   } finally {
     await connector?.close?.().catch(() => {});
   }
@@ -207,10 +232,10 @@ console.log('| Engine | Question | Result | Detail |');
 console.log('|---|---|---|---|');
 for (const [a, b, c, d] of rows) console.log(`| ${a} | ${b} | ${c} | ${d} |`);
 
-const asked = rows.filter(([, b]) => b !== 'stored data unchanged' && b !== 'connect').length;
-const ok = rows.filter(([, , v]) => v === 'ok').length;
-console.log(`\n${asked} questions asked, ${ok - (rows.length - asked)} answered correctly.`);
+console.log(
+  `\n${asked} questions asked: ${correct} correct first try, ${recovered} recovered after one repair, ${wrong} wrong or failed.`,
+);
 if (altered) console.log(`${altered} ALTERED VALUE(S)`);
 if (mutated) console.log(`${mutated} ENGINE(S) HAD DATA CHANGE`);
-if (wrong) console.log(`${wrong} wrong or failed answer(s)`);
-process.exit(altered === 0 && mutated === 0 && wrong === 0 ? 0 : 1);
+if (unreachable) console.log(`${unreachable} ENGINE(S) UNREACHABLE`);
+process.exit(altered === 0 && mutated === 0 && wrong === 0 && unreachable === 0 ? 0 : 1);

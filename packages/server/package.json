@@ -23,7 +23,6 @@
     "build": "tsc -b"
   },
   "dependencies": {
-    "@asksql/core": "workspace:^",
     "@ai-sdk/openai-compatible": "^3.0.9"
   },
   "license": "Apache-2.0",
@@ -63,6 +62,7 @@
     "text2sql"
   ],
   "devDependencies": {
+    "@asksql/core": "workspace:>=0.6.0",
     "@asksql/postgres": "workspace:>=0.2.7",
     "@asksql/mysql": "workspace:>=0.2.6",
     "@asksql/oracle": "workspace:>=0.1.4",
@@ -71,6 +71,7 @@
     "@asksql/duckdb": "workspace:>=0.2.7"
   },
   "peerDependencies": {
+    "@asksql/core": "workspace:>=0.6.0",
     "@asksql/postgres": "workspace:>=0.1.0",
     "@asksql/mysql": "workspace:>=0.1.0",
     "@asksql/oracle": "workspace:>=0.1.0",

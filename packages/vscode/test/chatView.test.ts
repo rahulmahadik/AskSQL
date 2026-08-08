@@ -1,10 +1,15 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { JSDOM } from 'jsdom';
 import { AskSqlError } from '@asksql/core';
 import { resetVscodeMock, setInspect, setConfig, commands, window, workspace, env, lm, Uri } from './vscode-mock.js';
 import { ChatViewProvider } from '../src/chatView.js';
 import { UserFacingError } from '../src/errors.js';
 
 const tick = () => new Promise((r) => setTimeout(r, 0));
+
+const chatSource = readFileSync(fileURLToPath(new URL('../media/chat.js', import.meta.url)), 'utf8');
 
 /** A fake WebviewView that records posted messages and exposes the message sink. */
 function fakeView() {
@@ -311,6 +316,76 @@ describe('ask - model path', () => {
     expect(answer.run).toHaveBeenCalled();
   });
 
+  it('sends the row cap alongside an auto-limited query, so the panel can name it', async () => {
+    const answer = {
+      sql: 'select 1',
+      explanation: '',
+      guard: { autoLimited: true },
+      run: vi.fn(async () => oneRowResult),
+    };
+    const engines = fakeEngines({ forConfiguredModel: vi.fn(async () => answeringEngine(answer)) });
+    setConfig({ requireApproval: false, sqlDisplay: 'after', maxRows: 250 });
+    const p = new ChatViewProvider(fakeCtx(), engines);
+    const { view, posted } = fakeView();
+    p.resolveWebviewView(view);
+    await (p as unknown as { ask: (t: string, c?: string) => Promise<void> }).ask('how many orders');
+    const sql = posted.find((m) => m.type === 'sql') as { autoLimited: boolean; rowLimit: number };
+    expect(sql.autoLimited).toBe(true);
+    expect(sql.rowLimit).toBe(250);
+  });
+
+  it('names the capped row limit, not a setting above the engine cap', async () => {
+    const answer = {
+      sql: 'select 1',
+      explanation: '',
+      guard: { autoLimited: true },
+      run: vi.fn(async () => oneRowResult),
+    };
+    const engines = fakeEngines({ forConfiguredModel: vi.fn(async () => answeringEngine(answer)) });
+    setConfig({ requireApproval: false, sqlDisplay: 'after', maxRows: 250_000 });
+    const p = new ChatViewProvider(fakeCtx(), engines);
+    const { view, posted } = fakeView();
+    p.resolveWebviewView(view);
+    await (p as unknown as { ask: (t: string, c?: string) => Promise<void> }).ask('how many orders');
+    expect((posted.find((m) => m.type === 'sql') as { rowLimit: number }).rowLimit).toBe(100_000);
+  });
+
+  it('names the floored row limit for a fractional setting', async () => {
+    const answer = {
+      sql: 'select 1',
+      explanation: '',
+      guard: { autoLimited: true },
+      run: vi.fn(async () => oneRowResult),
+    };
+    const engines = fakeEngines({ forConfiguredModel: vi.fn(async () => answeringEngine(answer)) });
+    setConfig({ requireApproval: false, sqlDisplay: 'after', maxRows: 10.5 });
+    const p = new ChatViewProvider(fakeCtx(), engines);
+    const { view, posted } = fakeView();
+    p.resolveWebviewView(view);
+    await (p as unknown as { ask: (t: string, c?: string) => Promise<void> }).ask('how many orders');
+    expect((posted.find((m) => m.type === 'sql') as { rowLimit: number }).rowLimit).toBe(10);
+  });
+
+  it('posts progress before the first engine stage, so the panel is never silent', async () => {
+    const answer = {
+      sql: 'select 1',
+      explanation: '',
+      guard: { autoLimited: false },
+      run: vi.fn(async () => oneRowResult),
+    };
+    const engines = fakeEngines({ forConfiguredModel: vi.fn(async () => answeringEngine(answer)) });
+    setConfig({ requireApproval: false });
+    const p = new ChatViewProvider(fakeCtx(), engines);
+    const { view, posted } = fakeView();
+    p.resolveWebviewView(view);
+    await (p as unknown as { ask: (t: string, c?: string) => Promise<void> }).ask('how many orders');
+    const first = posted.findIndex((m) => m.type === 'progress');
+    // 'Writing SQL' is the engine's llm stage, relayed as progress.
+    const stage = posted.findIndex((m) => m.type === 'progress' && m.label === 'Writing SQL');
+    expect(first).toBeGreaterThan(-1);
+    expect(stage).toBeGreaterThan(first);
+  });
+
   it('falls back to a schema answer when SQL fails and the setting is on', async () => {
     const engine = {
       ask: vi.fn(async () => {
@@ -492,6 +567,7 @@ describe('ask - model path', () => {
     expect(mongo.execute).toHaveBeenCalled();
   });
 
+
   it('surfaces a recorded build failure instead of a generic error', async () => {
     const engines = fakeEngines({
       forConfiguredModel: vi.fn(async () => {
@@ -644,6 +720,47 @@ describe('message routing', () => {
     expect(gone.length).toBe(3);
   });
 
+  it('carries the resultId on a gone-result error, so it lands in that turn', () => {
+    const p = new ChatViewProvider(fakeCtx(), fakeEngines());
+    const { view, posted, send } = fakeView();
+    p.resolveWebviewView(view);
+    send({ type: 'exportCsv', resultId: 'r7' });
+    send({ type: 'openResult', resultId: 'r7' });
+    send({ type: 'copy', resultId: 'r7' });
+    const gone = posted.filter((m) => m.type === 'error');
+    expect(gone.length).toBe(3);
+    expect(gone.every((m) => m.resultId === 'r7')).toBe(true);
+  });
+
+  it('copies rendered text and acks with the same copyId', async () => {
+    const p = new ChatViewProvider(fakeCtx(), fakeEngines());
+    const { view, posted, send } = fakeView();
+    p.resolveWebviewView(view);
+    send({ type: 'copyText', text: 'select 1', copyId: 'c3' });
+    await tick();
+    expect(env.clipboard.writeText).toHaveBeenCalledWith('select 1');
+    expect(posted.some((m) => m.type === 'copied' && m.copyId === 'c3')).toBe(true);
+  });
+
+  it('reports an error when copying rendered text fails', async () => {
+    const p = new ChatViewProvider(fakeCtx(), fakeEngines());
+    const { view, posted, send } = fakeView();
+    p.resolveWebviewView(view);
+    env.clipboard.writeText.mockRejectedValueOnce(new Error('denied'));
+    send({ type: 'copyText', text: 'select 1', copyId: 'c4' });
+    await tick();
+    expect(posted.some((m) => m.type === 'copied')).toBe(false);
+    expect(posted.some((m) => m.type === 'error' && /Could not copy/.test(String(m.message)))).toBe(true);
+  });
+
+  it('ignores a copyText whose text is not a string', () => {
+    const p = new ChatViewProvider(fakeCtx(), fakeEngines());
+    const { view, send } = fakeView();
+    p.resolveWebviewView(view);
+    send({ type: 'copyText', text: { sql: 'select 1' }, copyId: 'c5' });
+    expect(env.clipboard.writeText).not.toHaveBeenCalled();
+  });
+
   it('stop aborts a live turn once', async () => {
     let resolveRun: (v: unknown) => void = () => {};
     const answer = {
@@ -751,5 +868,130 @@ describe('pickModel', () => {
     await p.pickModel();
     expect(commands.executeCommand).toHaveBeenCalledWith('asksql.selectProvider');
     vi.unstubAllGlobals();
+  });
+});
+
+/** The panel's own HTML plus the real media/chat.js under jsdom, host stubbed, with a turn already open. */
+function panel() {
+  const p = new ChatViewProvider(fakeCtx(), fakeEngines());
+  const { view } = fakeView();
+  p.resolveWebviewView(view);
+  const html = (view as unknown as { webview: { html: string } }).webview.html;
+  const dom = new JSDOM(html, { runScripts: 'outside-only' });
+  const sent: Record<string, unknown>[] = [];
+  (dom.window as unknown as { acquireVsCodeApi: () => unknown }).acquireVsCodeApi = () => ({
+    postMessage: (m: Record<string, unknown>) => sent.push(m),
+  });
+  dom.window.eval(chatSource);
+  const doc = dom.window.document;
+  const post = (m: Record<string, unknown>): void => {
+    dom.window.dispatchEvent(new dom.window.MessageEvent('message', { data: m }));
+  };
+  const button = (label: string, scope: ParentNode = doc): HTMLButtonElement | undefined =>
+    [...scope.querySelectorAll('button')].find((b) => b.textContent === label);
+  post({ type: 'turnStart', question: 'how many orders', connection: 'DB One' });
+  return { doc, sent, post, button, logText: () => doc.getElementById('log')?.textContent ?? '' };
+}
+
+describe('webview rendering', () => {
+  it('gives a fenced block in an explanation its own Copy, and nothing that runs it', () => {
+    const { doc, sent, post, button } = panel();
+    post({
+      type: 'sql',
+      sql: 'select 1',
+      explanation: 'Try this:\n```\nselect id from orders\n```\nIt reads one column.',
+      placement: 'before',
+    });
+    const box = doc.querySelector('.explain') as HTMLElement;
+    expect(box.querySelectorAll('pre.md-code').length).toBe(1);
+    // Copy only: a prose fence has not passed the plan/run paths.
+    expect([...box.querySelectorAll('button')].map((b) => b.textContent)).toEqual(['Copy']);
+    button('Copy', box)!.click();
+    expect(sent.some((m) => m.type === 'copyText' && m.text === 'select id from orders')).toBe(true);
+  });
+
+  it('gives a schema answer fence the same Copy', () => {
+    const { doc, sent, post, button } = panel();
+    post({ type: 'schemaAnswer', answer: 'Like so:\n```\nselect 2\n```', unknownReferences: [] });
+    const box = doc.querySelector('.explain') as HTMLElement;
+    button('Copy', box)!.click();
+    expect(sent.some((m) => m.type === 'copyText' && m.text === 'select 2')).toBe(true);
+  });
+
+  it('runs a corrected query through the ask path', () => {
+    const { sent, post, button } = panel();
+    post({ type: 'error', message: 'the query failed', suggestedSql: 'select name from orders' });
+    post({ type: 'turnEnd' });
+    button('Run this query')!.click();
+    expect(sent.at(-1)).toMatchObject({ type: 'ask', text: 'select name from orders' });
+  });
+
+  it('states a read-only refusal once, in the engine wording', () => {
+    const { post, logText } = panel();
+    post({
+      type: 'error',
+      guard: true,
+      message: 'Blocked for safety: this statement is not allowed in read-only mode.',
+    });
+    const text = logText();
+    expect(text).toContain('Blocked for safety: this statement is not allowed in read-only mode.');
+    expect(text.match(/read-only/gu)?.length).toBe(1);
+    expect(text).toContain('This was refused before it reached the database.');
+  });
+
+  it('names the row cap the host applied', () => {
+    const { doc, post } = panel();
+    post({ type: 'sql', sql: 'select 1', autoLimited: true, rowLimit: 250, placement: 'before' });
+    expect(doc.querySelector('.sqlblock .note')?.textContent).toBe('A row limit of 250 was added automatically.');
+  });
+
+  it("shows the host's copy ack on the button that was clicked, then restores its label", async () => {
+    const { sent, post, button } = panel();
+    post({ type: 'sql', sql: 'select 1', explanation: 'reads one row', placement: 'before' });
+    const copy = button('Copy SQL')!;
+    const other = button('Copy explanation')!;
+    copy.click();
+    post({ type: 'copied', copyId: (sent.at(-1) as { copyId: string }).copyId });
+    expect(copy.textContent).toBe('Copied');
+    expect(copy.classList.contains('ok')).toBe(true);
+    // The ack is correlated, not broadcast.
+    expect(other.textContent).toBe('Copy explanation');
+    expect(other.classList.contains('ok')).toBe(false);
+    await new Promise((r) => setTimeout(r, 1100));
+    expect(copy.textContent).toBe('Copy SQL');
+    expect(copy.classList.contains('ok')).toBe(false);
+  });
+
+  it('confirms a fence Copy the same way', () => {
+    const { doc, sent, post, button } = panel();
+    post({ type: 'sql', sql: 'select 1', explanation: 'Try:\n```\nselect 2\n```', placement: 'before' });
+    const box = doc.querySelector('.explain') as HTMLElement;
+    const copy = button('Copy', box)!;
+    copy.click();
+    post({ type: 'copied', copyId: (sent.at(-1) as { copyId: string }).copyId });
+    expect(copy.textContent).toBe('Copied');
+  });
+
+  it('styles the copy ack on text buttons, not only icon buttons', () => {
+    const css = readFileSync(fileURLToPath(new URL('../media/chat.css', import.meta.url)), 'utf8');
+    const dom = new JSDOM(`<style>${css}</style><button class="secondary ok">Copied</button>`);
+    const btn = dom.window.document.querySelector('button')!;
+    const rules = [...(dom.window.document.styleSheets[0].cssRules as unknown as CSSRule[])];
+    const hit = rules.some((r) => {
+      const sel = (r as CSSStyleRule).selectorText;
+      if (typeof sel !== 'string' || !sel.includes('.ok')) return false;
+      try {
+        return btn.matches(sel);
+      } catch {
+        return false;
+      }
+    });
+    expect(hit).toBe(true);
+  });
+
+  it('keeps the generic notice when the message carries no number', () => {
+    const { doc, post } = panel();
+    post({ type: 'sql', sql: 'select 1', autoLimited: true, placement: 'before' });
+    expect(doc.querySelector('.sqlblock .note')?.textContent).toBe('A row limit was added automatically.');
   });
 });

@@ -10,7 +10,13 @@ import { createRoot } from 'react-dom/client';
 import userEvent from '@testing-library/user-event';
 import { AskSqlBubble, AskSqlChat, ResultTable, SqlBlock } from '../src/components.js';
 import type { ResultSet } from '@asksql/core';
+import type { AskParams } from '../src/client.js';
 import { chatOf, deferred, makeTransport, resultOf } from './helpers.js';
+
+/** jsdom reports every scroll metric as 0. */
+function stubMetric(el: Element, prop: string, value: number) {
+  Object.defineProperty(el, prop, { value, configurable: true });
+}
 
 // Fill jsdom gaps the components rely on: object-URLs (CSV export), element
 // scrolling (thread auto-scroll), and a writable clipboard (Copy).
@@ -105,6 +111,42 @@ describe('AskSqlChat', () => {
     expect(pre!.textContent).toContain('ALTER TABLE t ADD COLUMN x int;');
     // The fence markers are consumed, never shown as literal backticks.
     expect(explain.textContent).not.toContain('```');
+  });
+
+  it('keeps blank lines between paragraphs visible', async () => {
+    const user = userEvent.setup();
+    const transport = makeTransport({
+      chat: chatOf(
+        { type: 'sql', sql: 'SELECT 1', explanation: 'First paragraph.\n\nSecond paragraph.' },
+        { type: 'done' },
+      ),
+    });
+    const { container } = render(<AskSqlChat transport={transport} />);
+    await user.type(screen.getByRole('textbox', { name: /Ask a question/i }), 'q');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    await waitFor(() => expect(container.querySelector('.asksql-explain')).toBeTruthy());
+    const explain = container.querySelector('.asksql-explain')!;
+    expect(explain.querySelectorAll('.asksql-md-blank')).toHaveLength(1);
+    expect(screen.getByText('First paragraph.')).toBeTruthy();
+    expect(screen.getByText('Second paragraph.')).toBeTruthy();
+  });
+
+  it('copies the raw markdown source of an explanation, not the rendered text', async () => {
+    const user = userEvent.setup();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    const explanation = 'Adds a column:\n```sql\nALTER TABLE t ADD COLUMN x int;\n```\n- one\n- two';
+    const transport = makeTransport({
+      chat: chatOf({ type: 'sql', sql: 'SELECT 1', explanation }, { type: 'done' }),
+    });
+    const { container } = render(<AskSqlChat transport={transport} />);
+    await user.type(screen.getByRole('textbox', { name: /Ask a question/i }), 'q');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    await waitFor(() => expect(container.querySelector('.asksql-prose-copy')).toBeTruthy());
+    await user.click(container.querySelector('.asksql-prose-copy') as HTMLButtonElement);
+    expect(writeText).toHaveBeenCalledWith(explanation);
   });
 
   it('approval mode gates results behind a Run query button', async () => {
@@ -454,6 +496,116 @@ describe('AskSqlChat', () => {
     expect(await screen.findByText(/row limit was applied automatically/i)).toBeTruthy();
   });
 
+  it('leaves the view where the reader put it when a turn updates, but follows a new turn', async () => {
+    const user = userEvent.setup();
+    const gate = deferred();
+    const transport = makeTransport({
+      chat: async function* () {
+        yield { type: 'stage', stage: 'llm' } as const;
+        await gate.promise;
+        yield { type: 'sql', sql: 'SELECT 1' } as const;
+        yield { type: 'done' } as const;
+      },
+      execute: async () => resultOf(),
+    });
+    const { container } = render(<AskSqlChat transport={transport} />);
+    await user.type(screen.getByRole('textbox', { name: /Ask a question/i }), 'q');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    const thread = container.querySelector('.asksql-thread') as HTMLElement;
+    const scrollTo = Element.prototype.scrollTo as unknown as ReturnType<typeof vi.fn>;
+    await screen.findByText(/Writing SQL/);
+    expect(scrollTo).toHaveBeenCalled();
+
+    // The reader has scrolled back up.
+    stubMetric(thread, 'scrollHeight', 1000);
+    stubMetric(thread, 'clientHeight', 200);
+    stubMetric(thread, 'scrollTop', 0);
+    scrollTo.mockClear();
+
+    gate.resolve();
+    await waitFor(() => expect(screen.getByText('SELECT 1')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/2 rows/)).toBeTruthy());
+    expect(scrollTo).not.toHaveBeenCalled();
+
+    // Still scrolled back up.
+    scrollTo.mockClear();
+    await user.type(screen.getByRole('textbox', { name: /Ask a question/i }), 'q2');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await waitFor(() => expect(screen.getByText('q2')).toBeTruthy());
+    expect(scrollTo).toHaveBeenCalled();
+  });
+
+  it('shows the streamed model text as plain progress text', async () => {
+    const user = userEvent.setup();
+    const gate = deferred();
+    const transport = makeTransport({
+      chat: async function* () {
+        yield { type: 'stage', stage: 'llm' } as const;
+        yield { type: 'token', text: '<think>maybe ```sql' } as const;
+        await gate.promise;
+        yield { type: 'sql', sql: 'SELECT 1' } as const;
+        yield { type: 'done' } as const;
+      },
+    });
+    const { container } = render(<AskSqlChat transport={transport} />);
+    await user.type(screen.getByRole('textbox', { name: /Ask a question/i }), 'q');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    await waitFor(() => expect(container.querySelector('.asksql-stream')).toBeTruthy());
+    const stream = container.querySelector('.asksql-stream') as HTMLElement;
+    expect(stream.textContent).toBe('<think>maybe ```sql');
+    expect(getComputedStyle(stream).whiteSpace).toBe('pre-wrap');
+    expect(getComputedStyle(stream).maxHeight).toBe('120px');
+
+    gate.resolve();
+    await waitFor(() => expect(container.querySelector('.asksql-stream')).toBeNull());
+  });
+
+  it('names the prompt stage instead of falling through to Thinking', async () => {
+    const user = userEvent.setup();
+    const gate = deferred();
+    const transport = makeTransport({
+      chat: async function* () {
+        yield { type: 'stage', stage: 'prompt' } as const;
+        await gate.promise;
+        yield { type: 'sql', sql: 'SELECT 1' } as const;
+        yield { type: 'done' } as const;
+      },
+    });
+    render(<AskSqlChat transport={transport} />);
+    await user.type(screen.getByRole('textbox', { name: /Ask a question/i }), 'q');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    expect(await screen.findByText(/Building the prompt/)).toBeTruthy();
+    gate.resolve();
+    await waitFor(() => expect(screen.getByText('SELECT 1')).toBeTruthy());
+  });
+
+  it('reports a cancelled turn in the words on the button', async () => {
+    const user = userEvent.setup();
+    const transport = makeTransport({
+      chat: async function* (params: AskParams) {
+        yield { type: 'stage', stage: 'llm' } as const;
+        await new Promise<void>((_, reject) => {
+          params.signal?.addEventListener('abort', () => {
+            const e = new Error('aborted');
+            e.name = 'AbortError';
+            reject(e);
+          });
+        });
+      },
+    });
+    render(<AskSqlChat transport={transport} />);
+    await user.type(screen.getByRole('textbox', { name: /Ask a question/i }), 'q');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    const cancel = await screen.findByRole('button', { name: 'Cancel' });
+    expect(cancel.textContent).toBe('Cancel');
+    await user.click(cancel);
+    expect(await screen.findByText('Cancelled.')).toBeTruthy();
+  });
+
   it('says nothing when the model set its own limit', async () => {
     const user = userEvent.setup();
     const transport = makeTransport({
@@ -465,6 +617,80 @@ describe('AskSqlChat', () => {
     await user.click(screen.getByRole('button', { name: 'Send' }));
     await screen.findByText('SELECT 1');
     expect(screen.queryByText(/row limit was applied/i)).toBeNull();
+  });
+});
+
+/** The schema fallback runs when the model can't produce SQL and the option is on. */
+function schemaAnswerTransport(answer: string, proposedSql?: string) {
+  return makeTransport({
+    chat: chatOf({ type: 'error', code: 'LLM_BAD_OUTPUT', userMessage: "couldn't build a query" }),
+    explainSchema: async () => ({
+      answer,
+      tables: [],
+      grounded: true,
+      unknownReferences: [],
+      isSchemaChange: false,
+      ...(proposedSql ? { proposedSql } : {}),
+    }),
+  });
+}
+
+async function askSchemaQuestion(
+  transport: ReturnType<typeof makeTransport>,
+  user: ReturnType<typeof userEvent.setup>,
+) {
+  const view = render(<AskSqlChat transport={transport} answerSchemaQuestions />);
+  await user.type(screen.getByRole('textbox', { name: /Ask a question/i }), 'q');
+  await user.click(screen.getByRole('button', { name: 'Send' }));
+  return view;
+}
+
+describe('schema answers', () => {
+  it('shows no error while the answer is still in flight', async () => {
+    const user = userEvent.setup();
+    const gate = deferred();
+    const transport = makeTransport({
+      chat: chatOf({ type: 'error', code: 'LLM_BAD_OUTPUT', userMessage: "couldn't build a query" }),
+      explainSchema: async () => {
+        await gate.promise;
+        return {
+          answer: 'orders links to customers via customer_id.',
+          tables: [],
+          grounded: true,
+          unknownReferences: [],
+          isSchemaChange: false,
+        };
+      },
+    });
+    await askSchemaQuestion(transport, user);
+
+    await waitFor(() => expect(screen.getByText(/Answering from your schema/i)).toBeTruthy());
+    expect(screen.queryByRole('alert')).toBeNull();
+
+    gate.resolve();
+    await waitFor(() => expect(screen.getByText(/customer_id/)).toBeTruthy());
+  });
+
+  it('offers a Copy control for a fenced block inside the answer', async () => {
+    const user = userEvent.setup();
+    const transport = schemaAnswerTransport('You could add it:\n```sql\nCREATE TABLE t (id int);\n```\nNothing ran.');
+    const { container } = await askSchemaQuestion(transport, user);
+
+    await waitFor(() => expect(container.querySelector('.asksql-explain .asksql-sqlblock')).toBeTruthy());
+    const block = container.querySelector('.asksql-explain .asksql-sqlblock') as HTMLElement;
+    expect(block.textContent).toContain('CREATE TABLE t (id int);');
+    expect(within(block).getByRole('button', { name: 'Copy' })).toBeTruthy();
+  });
+
+  it('shows a proposed query once when the answer repeats it in a fence', async () => {
+    const user = userEvent.setup();
+    const sql = 'SELECT id FROM orders';
+    const transport = schemaAnswerTransport(`Here it is:\n\`\`\`sql\n${sql}\n\`\`\`\nNothing ran.`, sql);
+    const { container } = await askSchemaQuestion(transport, user);
+
+    await waitFor(() => expect(screen.getByText(sql)).toBeTruthy());
+    expect([...container.querySelectorAll('pre')].filter((p) => p.textContent?.includes(sql))).toHaveLength(1);
+    expect(container.querySelector('.asksql-explain pre')).toBeNull();
   });
 });
 
@@ -555,6 +781,26 @@ describe('AskSqlBubble', () => {
   });
 });
 
+describe('question bubble', () => {
+  it('keeps the line breaks the user typed and wraps a token with no spaces', async () => {
+    const user = userEvent.setup();
+    const question = 'line one\nline two https://example.com/a/very/long/path/that/never/breaks/anywhere';
+    const transport = makeTransport({ chat: chatOf({ type: 'sql', sql: 'SELECT 1' }, { type: 'done' }) });
+    const { container } = render(<AskSqlChat transport={transport} />);
+    await user.type(
+      screen.getByRole('textbox', { name: /Ask a question/i }),
+      question.replace('\n', '{Shift>}{Enter}{/Shift}'),
+    );
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    const bubble = await waitFor(() => container.querySelector('.asksql-q') as HTMLElement);
+    expect(bubble.textContent).toBe(question);
+    const style = getComputedStyle(bubble);
+    expect(style.whiteSpace).toBe('pre-wrap');
+    expect(style.overflowWrap).toBe('anywhere');
+  });
+});
+
 describe('SqlBlock', () => {
   it('copies SQL and flips the button label', async () => {
     const user = userEvent.setup();
@@ -563,7 +809,25 @@ describe('SqlBlock', () => {
     render(<SqlBlock sql="SELECT 1" />);
     await user.click(screen.getByRole('button', { name: 'Copy' }));
     expect(writeText).toHaveBeenCalledWith('SELECT 1');
-    expect(screen.getByRole('button', { name: 'Copied' })).toBeTruthy();
+    expect(await screen.findByRole('button', { name: 'Copied' })).toBeTruthy();
+  });
+
+  it('does not claim success when the clipboard write is rejected', async () => {
+    const user = userEvent.setup();
+    const writeText = vi.fn().mockRejectedValue(new Error('denied'));
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    render(<SqlBlock sql="SELECT 1" />);
+    await user.click(screen.getByRole('button', { name: 'Copy' }));
+    expect(await screen.findByRole('button', { name: 'Copy failed' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Copied' })).toBeNull();
+  });
+
+  it('reports a failure when the page has no clipboard at all', async () => {
+    const user = userEvent.setup();
+    Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true });
+    render(<SqlBlock sql="SELECT 1" />);
+    await user.click(screen.getByRole('button', { name: 'Copy' }));
+    expect(await screen.findByRole('button', { name: 'Copy failed' })).toBeTruthy();
   });
 });
 
@@ -577,6 +841,33 @@ describe('ResultTable', () => {
     expect(screen.getByRole('button', { name: 'Chart' })).toBeTruthy();
     await user.click(screen.getByRole('button', { name: 'Export CSV' }));
     expect(URL.createObjectURL).toHaveBeenCalled();
+  });
+
+  it('confirms an export and keeps the object URL alive past the click', async () => {
+    const user = userEvent.setup();
+    (URL.revokeObjectURL as unknown as ReturnType<typeof vi.fn>).mockClear();
+    render(<ResultTable result={resultOf()} />);
+    await user.click(screen.getByRole('button', { name: 'Export CSV' }));
+    expect(await screen.findByRole('button', { name: 'Exported' })).toBeTruthy();
+    // Revoking in the same tick can cancel the download the click just started.
+    expect(URL.revokeObjectURL).not.toHaveBeenCalled();
+  });
+
+  it('copies the rows as CSV', async () => {
+    const user = userEvent.setup();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    render(<ResultTable result={resultOf()} />);
+    await user.click(screen.getByRole('button', { name: 'Copy' }));
+    expect(writeText).toHaveBeenCalledWith('region,total\nEU,100\nNA,250');
+  });
+
+  it('carries the full value of a clipped cell in its tooltip', () => {
+    const long = 'a-very-long-value-'.repeat(8);
+    render(
+      <ResultTable result={resultOf({ columns: [{ name: 'note', kind: 'text' }], rows: [[long]], rowCount: 1 })} />,
+    );
+    expect(screen.getByText(long).getAttribute('title')).toBe(long);
   });
 
   it('renders an empty state for zero rows', () => {

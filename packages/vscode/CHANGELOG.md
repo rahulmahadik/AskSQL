@@ -4,7 +4,27 @@ All notable changes to the AskSQL VS Code extension are documented here. The for
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.7.0] - 2026-08-09
+
+### Fixed
+- **Cancel no longer leaves the panel unusable.** Stopping a turn cleared the in-flight state only
+  when the engine got round to unwinding, so the composer stayed locked and the button dead for as
+  long as that took. A late event from the abandoned turn can also no longer paint into the new one.
+- An error about a result that is no longer held in memory lands in the turn whose button was
+  clicked. It used to be handled as a general error, which deleted the live turn's progress row,
+  rendered its query in the wrong place, and put the message under the wrong question.
+- The query plan's progress row and the turn's own no longer delete each other. With approval
+  turned on, asking for a plan during the pause left whichever lost the race looking stalled.
+- A fenced code block in an explanation is styled like the rest of the SQL. It had no rule at all,
+  which also made a long line scroll the whole transcript sideways.
+- The automatic row limit names the cap that was applied. It printed the raw setting, so a value
+  above the engine's ceiling, or a fractional one, named a number that was never used.
+
+### Added
+- **Copy controls** on the query, the explanation, a schema answer, a corrected query, and each
+  fenced block inside an answer. Each confirms only once the host reports the clipboard was written.
+- **Run this query** on a corrected query, so a rejected query can be fixed and rerun without
+  copying it out. It re-enters through the normal path, so the guard and the approval step still apply.
 
 ## [0.6.1] - 2026-08-07
 

@@ -97,7 +97,59 @@ describe('useAskSql', () => {
       await asking;
     });
     expect(result.current.turns[0]!.schemaAnswer).toBeUndefined();
-    expect(result.current.turns[0]!.phase).toBe('error');
+    expect(result.current.turns[0]!.phase).toBe('stopped');
+    expect(result.current.turns[0]!.error).toBeUndefined();
+  });
+
+  it('stays in a thinking state while the schema answer is on its way', async () => {
+    const gate = deferred();
+    const explainSchema = vi.fn(async () => {
+      await gate.promise;
+      return {
+        answer: 'orders links to customers via customer_id.',
+        tables: ['orders'],
+        grounded: true,
+        unknownReferences: [] as string[],
+        isSchemaChange: false,
+      };
+    });
+    const transport = makeTransport({
+      chat: chatOf({ type: 'error', code: 'LLM_BAD_OUTPUT', userMessage: "couldn't build a query" }),
+      explainSchema,
+    });
+    const { result } = renderHook(() => useAskSql({ transport, answerSchemaQuestions: true }));
+    let asking!: Promise<void>;
+    act(() => {
+      asking = result.current.ask('how are the tables related?');
+    });
+    await waitFor(() => {
+      expect(explainSchema).toHaveBeenCalled();
+      expect(result.current.turns[0]!.stage).toBe('schema_answer');
+    });
+    expect(result.current.turns[0]!.phase).toBe('thinking');
+    expect(result.current.turns[0]!.error).toBeUndefined();
+
+    gate.resolve();
+    await act(async () => {
+      await asking;
+    });
+    expect(result.current.turns[0]!.phase).toBe('done');
+  });
+
+  it('restores the original error when the schema fallback itself fails', async () => {
+    const transport = makeTransport({
+      chat: chatOf({ type: 'error', code: 'LLM_BAD_OUTPUT', userMessage: "couldn't build a query" }),
+      explainSchema: async () => {
+        throw new Error('no schema answer either');
+      },
+    });
+    const { result } = renderHook(() => useAskSql({ transport, answerSchemaQuestions: true }));
+    await act(async () => {
+      await result.current.ask('how are the tables related?');
+    });
+    const turn = result.current.turns[0]!;
+    expect(turn.phase).toBe('error');
+    expect(turn.error?.userMessage).toBe("couldn't build a query");
   });
 
   it('does not fall back when answerSchemaQuestions is off', async () => {
@@ -529,6 +581,102 @@ describe('useAskSql', () => {
     });
     expect(result.current.busy).toBe(false);
     expect(result.current.turns[0]!.phase).toBe('done');
+  });
+
+  it('shows streamed tokens as progress, per attempt, and drops them once SQL arrives', async () => {
+    const first = deferred();
+    const second = deferred();
+    const transport = makeTransport({
+      chat: async function* (): AsyncIterable<ChatEvent> {
+        yield { type: 'stage', stage: 'llm' };
+        yield { type: 'token', text: 'SEL' };
+        yield { type: 'token', text: 'ECT' };
+        await first.promise;
+        yield { type: 'stage', stage: 'repair' };
+        yield { type: 'token', text: 'FIXED' };
+        await second.promise;
+        yield { type: 'sql', sql: 'SELECT 1' };
+        yield { type: 'done' };
+      },
+    });
+    const { result } = renderHook(() => useAskSql({ transport }));
+    let asking!: Promise<void>;
+    act(() => {
+      asking = result.current.ask('q');
+    });
+    await waitFor(() => expect(result.current.turns[0]!.streamText).toBe('SELECT'));
+
+    first.resolve();
+    await waitFor(() => expect(result.current.turns[0]!.streamText).toBe('FIXED'));
+
+    second.resolve();
+    await act(async () => {
+      await asking;
+    });
+    expect(result.current.turns[0]!.streamText).toBeUndefined();
+    expect(result.current.turns[0]!.phase).toBe('done');
+  });
+
+  // A cancelled ask keeps running until its transport unwinds.
+  it('a cancelled turn neither paints nor erases the next turn stream', async () => {
+    const firstHold = deferred();
+    const tailToken = deferred();
+    const tailSql = deferred();
+    const transport = makeTransport({
+      chat: (params: AskParams): AsyncIterable<ChatEvent> =>
+        params.question === 'q1'
+          ? (async function* (): AsyncIterable<ChatEvent> {
+              yield { type: 'stage', stage: 'llm' };
+              yield { type: 'token', text: 'FIRST-TOKENS' };
+              // The transport ignores the abort; the stream stays open.
+              await firstHold.promise;
+            })()
+          : (async function* (): AsyncIterable<ChatEvent> {
+              yield { type: 'stage', stage: 'llm' };
+              yield { type: 'token', text: 'SECOND-' };
+              await tailToken.promise;
+              yield { type: 'token', text: 'TOKENS' };
+              await tailSql.promise;
+              yield { type: 'sql', sql: 'SELECT 2' };
+              yield { type: 'done' };
+            })(),
+    });
+    const { result } = renderHook(() => useAskSql({ transport }));
+
+    let asking1!: Promise<void>;
+    act(() => {
+      asking1 = result.current.ask('q1');
+    });
+    await waitFor(() => expect(result.current.turns[0]!.streamText).toBe('FIRST-TOKENS'));
+
+    act(() => {
+      result.current.cancel();
+    });
+    let asking2!: Promise<void>;
+    act(() => {
+      asking2 = result.current.ask('q2');
+    });
+    await waitFor(() => expect(result.current.turns[1]!.streamText).toBe('SECOND-'));
+    // Several flush ticks of the cancelled turn's timer.
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 3 * 80));
+    });
+    expect(result.current.turns[1]!.streamText).toBe('SECOND-');
+    expect(result.current.turns[0]!.streamText).not.toBe('SECOND-');
+
+    firstHold.resolve();
+    await act(async () => {
+      await asking1;
+    });
+    expect(result.current.turns[0]!.phase).toBe('stopped');
+
+    tailToken.resolve();
+    await waitFor(() => expect(result.current.turns[1]!.streamText).toBe('SECOND-TOKENS'));
+    tailSql.resolve();
+    await act(async () => {
+      await asking2;
+    });
+    expect(result.current.turns[1]!.sql).toBe('SELECT 2');
   });
 
   it('reset clears the conversation', async () => {

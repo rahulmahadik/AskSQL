@@ -23,6 +23,9 @@ MongoDB uses the separate `createMongoAskSql` engine and is not exposed over MCP
 npm i @asksql/core @asksql/mcp @modelcontextprotocol/sdk
 ```
 
+`@asksql/core` is a peer dependency, and yarn (or npm with `legacy-peer-deps`) will not install it
+for you, so name it explicitly as above.
+
 ## Setting it up in an MCP host
 
 An MCP host launches your server as a subprocess and talks to it over stdin/stdout, so you

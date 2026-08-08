@@ -45,7 +45,7 @@ how many appointments were booked last week?
   question ("appoinments") resolves to the real table instead of a refusal.
 - **You are in control.** Every answer shows the SQL that produced it - below the results by
   default, or above them with `asksql.sqlDisplay`. Require a click before anything runs
-  (`asksql.requireApproval`), cap rows (`asksql.maxRows`), and **Stop** a running query at any time.
+  (`asksql.requireApproval`), cap rows (`asksql.maxRows`), and **Cancel** a running query at any time.
 - **Many databases, one panel.** Keep several connections and switch between them from the panel;
   each answer is labelled with the database it ran against.
 - **Bring your own model.** A chat model you already have in VS Code (no API key), a fully local

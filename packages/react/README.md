@@ -23,6 +23,9 @@ Turn on `answerSchemaQuestions` and questions that aren't a data query - "how ar
 npm i @asksql/core @asksql/react
 ```
 
+`@asksql/core` is a peer dependency, and yarn (or npm with `legacy-peer-deps`) will not install it
+for you, so name it explicitly as above.
+
 ## Drop-in chat
 
 ```tsx

@@ -7,6 +7,7 @@
 
 import pkg from 'node-sql-parser';
 import { AskSqlError } from './errors.js';
+import { clampMaxRows } from './row-cap.js';
 import { hasMultipleStatements, maskCommentsAndStrings, stripCommentsAndStrings, trimTrailingNoise } from './strip.js';
 import type { DialectInfo, EngineKind, GuardPolicy, GuardVerdict } from './types.js';
 
@@ -774,9 +775,6 @@ export interface GuardInput {
   readonly policy?: Partial<GuardPolicy>;
 }
 
-/** Nothing a caller asks for may exceed this; a row cap is a memory bound, not a preference. */
-const MAX_ROW_CAP = 100_000;
-
 export function resolveGuardPolicy(partial?: Partial<GuardPolicy>): GuardPolicy {
   const merged: { -readonly [K in keyof GuardPolicy]: GuardPolicy[K] } = {
     ...DEFAULT_GUARD_POLICY,
@@ -786,11 +784,7 @@ export function resolveGuardPolicy(partial?: Partial<GuardPolicy>): GuardPolicy 
   };
   // maxRows reaches here straight from an HTTP client, so it is clamped rather than trusted:
   // a NaN or a billion would otherwise become the row cap.
-  const requested = merged.maxRows;
-  merged.maxRows =
-    Number.isFinite(requested) && requested >= 1
-      ? Math.min(Math.floor(requested), MAX_ROW_CAP)
-      : DEFAULT_GUARD_POLICY.maxRows;
+  merged.maxRows = clampMaxRows(merged.maxRows, DEFAULT_GUARD_POLICY.maxRows);
   if ((partial as { mode?: string } | undefined)?.mode && partial?.mode !== 'read-only') {
     throw new AskSqlError('CONFIG_ERROR', {
       detail: `GuardPolicy.mode '${String(partial?.mode)}' is not supported - the read-only floor is immovable in v1.`,

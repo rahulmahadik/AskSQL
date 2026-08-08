@@ -5,6 +5,8 @@
  * $limit injected or lowered to the row cap. Fail-closed.
  */
 
+import { clampMaxRows } from '../row-cap.js';
+
 export interface MongoGuardPolicy {
   readonly maxRows: number;
   readonly maxDepth: number;
@@ -16,6 +18,12 @@ export const DEFAULT_MONGO_GUARD_POLICY: MongoGuardPolicy = Object.freeze({
   maxDepth: 400,
   maxRegexPatternLength: 200,
 });
+
+/** MongoDB rejects a non-integer or non-positive $limit. */
+export function resolveMongoGuardPolicy(partial?: Partial<MongoGuardPolicy>): MongoGuardPolicy {
+  const merged = { ...DEFAULT_MONGO_GUARD_POLICY, ...partial };
+  return { ...merged, maxRows: clampMaxRows(merged.maxRows, DEFAULT_MONGO_GUARD_POLICY.maxRows) };
+}
 
 export interface MongoGuardVerdict {
   readonly allowed: boolean;
@@ -407,7 +415,11 @@ export function guardPipeline(
   if (walk.violation) return blocked(walk.violation.ruleId, walk.violation.reason);
 
   const capped = [...pipeline];
-  const { autoLimited, loweredLimit } = capPipeline(capped, policy.maxRows);
+  // guardPipeline is public, so a direct caller's policy is clamped here too.
+  const { autoLimited, loweredLimit } = capPipeline(
+    capped,
+    clampMaxRows(policy.maxRows, DEFAULT_MONGO_GUARD_POLICY.maxRows),
+  );
 
   return {
     allowed: true,

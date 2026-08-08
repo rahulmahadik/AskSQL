@@ -9,6 +9,9 @@ included.
 npm i @asksql/core @asksql/server @asksql/postgres pg express @ai-sdk/groq
 ```
 
+`@asksql/core` is a peer dependency, and yarn (or npm with `legacy-peer-deps`) will not install it
+for you, so name it explicitly as above.
+
 ## Run it as a server (no code)
 
 ```bash

@@ -36,6 +36,8 @@ export interface Turn {
   /** EXPLAIN-plan text, populated on demand. */
   plan?: string;
   planning?: boolean;
+  /** Raw model output for the stage in flight; unparsed, and dropped once the stage settles. */
+  streamText?: string;
   error?: { code: string; userMessage: string; retryable: boolean };
   /** A corrected query the server suggested after a failed run (apply to retry). */
   suggestedSql?: string;
@@ -76,6 +78,10 @@ const CONTEXT_TURNS = 4;
 /** Older turns keep their text but drop their rows: a long session otherwise retains every result set. */
 const MAX_TURNS_WITH_ROWS = 20;
 const MAX_TURNS = 200;
+/** Streamed tokens land far faster than the UI needs. */
+const STREAM_FLUSH_MS = 80;
+/** Only the tail of the model's output is shown as progress. */
+const MAX_STREAM_CHARS = 400;
 
 function trimTranscript(turns: Turn[]): Turn[] {
   const kept = turns.length > MAX_TURNS ? turns.slice(-MAX_TURNS) : turns;
@@ -176,7 +182,7 @@ export function useAskSql(opts: UseAskSqlOptions): UseAskSqlResult {
         if (abortRef.current === controller) abortRef.current = null;
       }
     },
-    [opts.transport, opts.connectionId, patch],
+    [opts.transport, opts.connectionId, opts.maxRows, patch],
   );
 
   const ask = useCallback(
@@ -198,8 +204,19 @@ export function useAskSql(opts: UseAskSqlOptions): UseAskSqlResult {
       let generatedSql: string | undefined;
       let generatedCollection: string | undefined;
       let askErrorCode: string | undefined;
+      let askError: Turn['error'] | undefined;
       // Whether the stream left the turn in a state the UI can render.
       let settled = false;
+      let flushTimer: ReturnType<typeof setInterval> | null = null;
+      let flushed = '';
+      // Per ask: tokens arrive between renders and `patch` cannot append.
+      let stream = '';
+      const stopFlush = () => {
+        if (flushTimer !== null) {
+          clearInterval(flushTimer);
+          flushTimer = null;
+        }
+      };
       try {
         for await (const ev of opts.transport.chat({
           question: q,
@@ -221,24 +238,24 @@ export function useAskSql(opts: UseAskSqlOptions): UseAskSqlResult {
         const e = err as { name?: string; code?: string; userMessage?: string; retryable?: boolean };
         askErrorCode = e.code;
         settled = true;
-        // A user Stop aborts the stream; surface a neutral stopped state, not a red error.
+        stopFlush();
+        // A user Cancel aborts the stream; surface a neutral stopped state, not a red error.
         if (e.name === 'AbortError' || controller.signal.aborted) {
-          patch(id, { phase: 'stopped', error: undefined });
+          patch(id, { phase: 'stopped', error: undefined, streamText: undefined });
         } else {
-          patch(id, {
-            phase: 'error',
-            error: {
-              code: e.code ?? 'LLM_UNAVAILABLE',
-              userMessage: e.userMessage ?? 'Something went wrong.',
-              retryable: e.retryable ?? false,
-            },
-          });
+          askError = {
+            code: e.code ?? 'LLM_UNAVAILABLE',
+            userMessage: e.userMessage ?? 'Something went wrong.',
+            retryable: e.retryable ?? false,
+          };
+          patch(id, { phase: 'error', error: askError, streamText: undefined });
         }
       }
 
       // A stream that ends with neither SQL nor an error would leave the turn spinning forever.
       if (!settled) {
-        if (controller.signal.aborted) patch(id, { phase: 'stopped', error: undefined });
+        stopFlush();
+        if (controller.signal.aborted) patch(id, { phase: 'stopped', error: undefined, streamText: undefined });
         else
           patch(id, {
             phase: 'error',
@@ -247,6 +264,7 @@ export function useAskSql(opts: UseAskSqlOptions): UseAskSqlResult {
               userMessage: 'The response ended before an answer arrived.',
               retryable: true,
             },
+            streamText: undefined,
           });
       }
 
@@ -256,28 +274,35 @@ export function useAskSql(opts: UseAskSqlOptions): UseAskSqlResult {
         opts.answerSchemaQuestions &&
         (askErrorCode === 'LLM_BAD_OUTPUT' || askErrorCode === 'LLM_REFUSAL')
       ) {
-        try {
-          const sa = await opts.transport.explainSchema(q, opts.connectionId, context, controller.signal);
-          patch(id, {
-            phase: 'done',
-            error: undefined,
-            // Recorded as this turn's sql too, so a follow-up like "run that" has it as context.
-            ...(sa.proposedSql ? { sql: sa.proposedSql } : {}),
-            schemaAnswer: {
-              answer: sa.answer,
-              grounded: sa.grounded,
-              unknownReferences: [...sa.unknownReferences],
-              isSchemaChange: sa.isSchemaChange,
-              ...(sa.proposedSql ? { proposedSql: sa.proposedSql } : {}),
-            },
-          });
-        } catch {
-          /* keep the original error */
+        // The fallback is a second round-trip, so the turn goes back to thinking.
+        if (!controller.signal.aborted) {
+          patch(id, { phase: 'thinking', stage: 'schema_answer', error: undefined });
+          try {
+            const sa = await opts.transport.explainSchema(q, opts.connectionId, context, controller.signal);
+            patch(id, {
+              phase: 'done',
+              error: undefined,
+              // Recorded as this turn's sql too, so a follow-up like "run that" has it as context.
+              ...(sa.proposedSql ? { sql: sa.proposedSql } : {}),
+              schemaAnswer: {
+                answer: sa.answer,
+                grounded: sa.grounded,
+                unknownReferences: [...sa.unknownReferences],
+                isSchemaChange: sa.isSchemaChange,
+                ...(sa.proposedSql ? { proposedSql: sa.proposedSql } : {}),
+              },
+            });
+          } catch {
+            // A cancel during the fallback is an abort, not a failure.
+            if (controller.signal.aborted) patch(id, { phase: 'stopped', error: undefined });
+            else patch(id, { phase: 'error', error: askError });
+          }
         }
       }
-      // Cleared after the fallback, so Stop still reaches it; only the owner clears it, because a
-      // Stop plus a new question can leave this turn unwinding behind the next one.
+      // Cleared after the fallback, so Cancel still reaches it; only the owner clears it, because a
+      // Cancel plus a new question can leave this turn unwinding behind the next one.
       if (abortRef.current === controller) abortRef.current = null;
+      stopFlush();
       // Stay busy across the auto-run so Stop stays available; skip a query the user just cancelled.
       if (generatedSql && !opts.requireApproval && !controller.signal.aborted) {
         await doRun(id, generatedSql, generatedCollection);
@@ -288,24 +313,46 @@ export function useAskSql(opts: UseAskSqlOptions): UseAskSqlResult {
       }
 
       function applyEvent(turnId: string, ev: ChatEvent) {
-        if (ev.type === 'stage') patch(turnId, { stage: ev.stage });
-        else if (ev.type === 'sql')
+        if (ev.type === 'stage') {
+          // The engine re-emits llm/repair per attempt, so a stage starts the tail over.
+          stream = '';
+          patch(turnId, { stage: ev.stage });
+        } else if (ev.type === 'token') {
+          stream = (stream + (ev.text ?? '')).slice(-MAX_STREAM_CHARS);
+          if (flushTimer === null) {
+            flushTimer = setInterval(() => {
+              // A cancelled ask keeps ticking until its transport unwinds.
+              if (abortRef.current !== controller || controller.signal.aborted) {
+                stopFlush();
+                return;
+              }
+              const text = stream;
+              if (text === flushed) return;
+              flushed = text;
+              setTurns((prev) => prev.map((t) => (t.id === turnId ? { ...t, streamText: text } : t)));
+            }, STREAM_FLUSH_MS);
+          }
+        } else if (ev.type === 'sql') {
+          stopFlush();
+          stream = '';
           patch(turnId, {
             phase: 'sql_ready',
             sql: ev.sql,
             explanation: ev.explanation,
             autoLimited: ev.autoLimited,
+            streamText: undefined,
             ...(ev.collection ? { collection: ev.collection } : {}),
           });
-        else if (ev.type === 'error')
-          patch(turnId, {
-            phase: 'error',
-            error: {
-              code: ev.code ?? 'LLM_UNAVAILABLE',
-              userMessage: ev.userMessage ?? 'Something went wrong.',
-              retryable: ev.retryable ?? false,
-            },
-          });
+        } else if (ev.type === 'error') {
+          stopFlush();
+          stream = '';
+          askError = {
+            code: ev.code ?? 'LLM_UNAVAILABLE',
+            userMessage: ev.userMessage ?? 'Something went wrong.',
+            retryable: ev.retryable ?? false,
+          };
+          patch(turnId, { phase: 'error', error: askError, streamText: undefined });
+        }
       }
     },
     [turns, opts.transport, opts.connectionId, opts.requireApproval, opts.answerSchemaQuestions, patch, doRun],

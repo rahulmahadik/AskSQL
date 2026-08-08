@@ -9,6 +9,9 @@ the same driver here; only the JetBrains plugin ships the MariaDB JDBC client in
 npm i @asksql/core @asksql/mysql mysql2
 ```
 
+`@asksql/core` is a peer dependency, and yarn (or npm with `legacy-peer-deps`) will not install it
+for you, so name it explicitly as above.
+
 Requires Node 20+ and mysql2 3.6 or newer.
 
 ```ts

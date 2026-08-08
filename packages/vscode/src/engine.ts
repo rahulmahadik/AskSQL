@@ -17,7 +17,12 @@ import {
   type ResultSet,
   type SchemaCatalog,
 } from '@asksql/core';
-import { createMongoAskSql, type MongoAskEngine, type MongoConnector } from '@asksql/core/mongo';
+import {
+  createMongoAskSql,
+  resolveMongoGuardPolicy,
+  type MongoAskEngine,
+  type MongoConnector,
+} from '@asksql/core/mongo';
 import { PostgresConnector } from '@asksql/postgres';
 import { MysqlConnector } from '@asksql/mysql';
 import { SqliteConnector } from '@asksql/sqlite';
@@ -485,7 +490,8 @@ export class EngineManager {
       const engine = createMongoAskSql({
         connector,
         model: resolved,
-        policy: { maxRows: cfg().get<number>('maxRows') ?? 1000 },
+        // Mirrors package.json's declared asksql.maxRows default.
+        policy: resolveMongoGuardPolicy({ maxRows: cfg().get<number>('maxRows') ?? 100 }),
       });
       this.mongoEngines.set(cacheKey, engine);
       return engine;
@@ -643,7 +649,7 @@ export class EngineManager {
       const engine = createAskSql({
         connectors,
         model: resolved,
-        policy: { maxRows: cfg().get<number>('maxRows') ?? 1000 },
+        policy: { maxRows: cfg().get<number>('maxRows') ?? 100 },
         pruner: { maxSchemaTokens: cfg().get<number>('maxSchemaTokens') ?? 6000 },
         // The setting that lets the connector sample values also tells the engine it may prompt with them.
         allowDataInPrompt: cfg().get<boolean>('sampleColumnValues') ?? false,
@@ -688,7 +694,7 @@ export class EngineManager {
       throw new UserFacingError('This database cannot show a query plan.');
     }
     // The SQL arrives over the webview channel: every string reaching a database passes the guard first.
-    const maxRows = cfg().get<number>('maxRows') ?? 1000;
+    const maxRows = cfg().get<number>('maxRows') ?? 100;
     const verdict = guardSql({ sql, dialect: conn.dialect, policy: { mode: 'read-only', maxRows } });
     if (!verdict.allowed) {
       throw new UserFacingError(`That query cannot be explained: ${verdict.reason ?? 'it is not a read-only query'}.`);

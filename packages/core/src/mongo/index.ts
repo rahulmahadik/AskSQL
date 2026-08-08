@@ -8,6 +8,7 @@ export {
   DEFAULT_MONGO_GUARD_POLICY,
   guardPipeline,
   parsePipeline,
+  resolveMongoGuardPolicy,
   type MongoGuardPolicy,
   type MongoGuardVerdict,
 } from './guard.js';
