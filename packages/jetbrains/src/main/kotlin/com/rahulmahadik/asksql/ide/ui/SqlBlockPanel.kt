@@ -11,8 +11,18 @@ import java.awt.datatransfer.StringSelection
 import javax.swing.JButton
 import javax.swing.JPanel
 
-/** Read-only query display: an [EditorTextField] over a platform file type ("sql" or "json"), highlighted only when the host IDE bundles that language. */
-class SqlBlockPanel(private val project: Project, sql: String, fileExtension: String = "sql", languageId: String = "SQL") {
+/**
+ * Read-only query display: an [EditorTextField] over a platform file type ("sql" or "json"), highlighted
+ * only when the host IDE bundles that language. [clipboardText] defaults to the shown text; a MongoDB
+ * pipeline overrides it so the clipboard also carries the collection the JSON does not name.
+ */
+class SqlBlockPanel(
+    private val project: Project,
+    sql: String,
+    fileExtension: String = "sql",
+    languageId: String = "SQL",
+    private val clipboardText: String = sql,
+) {
 
     val component: JPanel = JPanel(BorderLayout())
     val sqlText: String = sql
@@ -28,7 +38,7 @@ class SqlBlockPanel(private val project: Project, sql: String, fileExtension: St
         component.add(field, BorderLayout.CENTER)
 
         val toolbar = JPanel(FlowLayout(FlowLayout.LEFT, 4, 0))
-        toolbar.add(JButton("Copy").apply { addActionListener { copyToClipboard() } })
+        toolbar.add(copyButton("Copy") { clipboardText })
         toolbar.add(
             JButton("Open in Scratch").apply {
                 addActionListener { OpenSqlInScratchAction.open(project, sqlText, "asksql-query.$fileExtension", languageId) }
@@ -38,6 +48,6 @@ class SqlBlockPanel(private val project: Project, sql: String, fileExtension: St
     }
 
     fun copyToClipboard() {
-        CopyPasteManager.getInstance().setContents(StringSelection(sqlText))
+        CopyPasteManager.getInstance().setContents(StringSelection(clipboardText))
     }
 }

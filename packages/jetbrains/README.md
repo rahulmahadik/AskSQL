@@ -16,9 +16,13 @@ plain language, review the generated SQL, approve it, and get results.
 
 ![Schema tree browsing a connected MySQL database above the chat panel, with sample questions to get started](https://github.com/rahulmahadik/AskSQL/raw/HEAD/packages/jetbrains/images/schema-and-chat.png)
 
-![AskSQL settings configured against a local Ollama model, no API key needed](https://github.com/rahulmahadik/AskSQL/raw/HEAD/packages/jetbrains/images/settings-ollama.png)
+![AskSQL settings configured against a local Ollama model, no API key needed](https://github.com/rahulmahadik/AskSQL/raw/HEAD/packages/jetbrains/images/settings.png)
 
-![The AI provider dropdown in settings, listing OpenAI, Anthropic, Gemini, Groq, Ollama and the rest](https://github.com/rahulmahadik/AskSQL/raw/HEAD/packages/jetbrains/images/settings-providers.png)
+![The AI provider dropdown in settings, listing OpenAI, Anthropic, Google, Groq, Ollama, an OpenAI-compatible endpoint, LM Studio and NVIDIA](https://github.com/rahulmahadik/AskSQL/raw/HEAD/packages/jetbrains/images/settings-ai-providers.png)
+
+![A query result drawn as a bar chart, with a Table toggle beside Export CSV, Copy, Open in Editor and Explain](https://github.com/rahulmahadik/AskSQL/raw/HEAD/packages/jetbrains/images/show-chart.png)
+
+![Adding a database connection from the AskSQL settings page](https://github.com/rahulmahadik/AskSQL/raw/HEAD/packages/jetbrains/images/settings-add-db-connection.png)
 
 ## Getting started (using the plugin)
 
@@ -28,7 +32,7 @@ plain language, review the generated SQL, approve it, and get results.
    `build/distributions/asksql-jetbrains-<version>.zip`, which installs via
    **Plugins → ⚙ → Install Plugin from Disk...**.)
 2. Restart the IDE when prompted.
-3. Open the **AskSQL** tool window (usually a tab on the right/bottom edge).
+3. Open the **AskSQL** tool window (a tab on the right edge).
 4. **Add a connection**: on the empty-state screen, click **Add Connection** (Postgres,
    MySQL, SQLite, DuckDB, Oracle, or MongoDB), or click **Try sample data** for a
    ready-made SQLite database with no setup, good for a first look.
@@ -131,8 +135,11 @@ These hold on every engine (the plan doc carries the full list):
   unless **Send sample column values to the model** is turned on in Settings. It defaults to off,
   so out of the box the model sees field names, types and presence percentages only. Full row
   data (arbitrary query results) is never sent on any engine.
-- Chat history and query results are **in-memory only**; nothing is written to disk
-  except settings, and secrets live only in the OS keychain via PasswordSafe.
+- Chat history and query results are **in-memory only**, and secrets live only in the OS
+  keychain via PasswordSafe. Apart from settings, the only things the plugin writes to disk
+  are under the IDE's system directory and are ones you asked for: the JDBC driver jars it
+  downloads on demand (`asksql/drivers`), the DuckDB database built when you load data files
+  (`asksql/uploads`), the sample SQLite database (`asksql/sample`), and a CSV you export.
 - Zero telemetry.
 
 ## Requirements
@@ -142,7 +149,8 @@ These hold on every engine (the plan doc carries the full list):
 - Docker, only if you want to run the Testcontainers-backed integration tests
   (`./gradlew test -PintegrationTests=true`). Everything else (build, unit tests,
   `runIde`) needs no Docker.
-- Node.js 18+, only for `./gradlew parityVectors` (see below). Never required to build
+- Node.js 20+ (the monorepo's `engines` floor; CI uses 22), only for
+  `./gradlew parityVectors` (see below), which builds `@asksql/core` from this repo. Never required to build
   or run the plugin itself.
 
 ## Compatibility
@@ -157,9 +165,16 @@ Every release is run through the JetBrains **Plugin Verifier**: 15 verifications
 
 | IDE | Versions verified |
 | --- | --- |
-| IntelliJ IDEA Community | 2024.2 (floor), 2024.3, 2025.1, 2025.2, 2025.3 |
-| IntelliJ IDEA Ultimate, PyCharm Professional, WebStorm, PhpStorm, GoLand, Rider, CLion, RubyMine, RustRover | 2026.1 (latest stable) |
+| IntelliJ IDEA Community | 2024.2 (floor), 2024.3, 2025.1 (251.29188.72), 2025.2.6.2 (252.28539.54), 2025.3 (253.28294.334) |
+| IntelliJ IDEA Ultimate, PyCharm Professional, WebStorm, PhpStorm, GoLand, Rider, CLion, RubyMine, RustRover | 2026.1.4 (latest stable) |
 | Android Studio | whichever build is installed locally |
+
+The IC entries from 2025.1 on are pinned by build number because ideaIC publishes both build-number
+and marketing-version artifacts; the other IDEs publish marketing versions only.
+
+`untilBuild` is deliberately open-ended (`null`), so the plugin stays installable on IntelliJ
+majors that did not exist when it was published. The Plugin Verifier is the safety net: a
+verification failure blocks the release.
 
 2024.1 is out of reach: `com.intellij.util.net.JdkProxyProvider`, which routes model calls through
 the IDE's proxy settings, arrives in 242.

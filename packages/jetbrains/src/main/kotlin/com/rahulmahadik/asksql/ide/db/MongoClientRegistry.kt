@@ -1,5 +1,6 @@
 package com.rahulmahadik.asksql.ide.db
 
+import com.intellij.openapi.Disposable
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.project.Project
@@ -13,7 +14,7 @@ import java.util.concurrent.atomic.AtomicInteger
 
 /** Owns the lifecycle of every configured [MongoClient] for a project. */
 @Service(Service.Level.PROJECT)
-class MongoClientRegistry(private val project: Project, private val scope: CoroutineScope) {
+class MongoClientRegistry(private val project: Project, private val scope: CoroutineScope) : Disposable {
 
     private val log = logger<MongoClientRegistry>()
 
@@ -101,7 +102,11 @@ class MongoClientRegistry(private val project: Project, private val scope: Corou
         }
     }
 
-    /** Called by [com.rahulmahadik.asksql.ide.AskSqlProjectCloseListener] to release every client deterministically before the scope is torn down. */
+    /** [closeNowOrCancel] is synchronous, so it is safe at dispose time. */
+    override fun dispose() {
+        closeAll()
+    }
+
     fun closeAll() {
         slots.keys.toList().forEach { id ->
             slots.remove(id)?.let {

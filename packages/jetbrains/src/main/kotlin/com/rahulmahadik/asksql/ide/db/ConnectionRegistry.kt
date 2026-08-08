@@ -1,5 +1,6 @@
 package com.rahulmahadik.asksql.ide.db
 
+import com.intellij.openapi.Disposable
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.project.Project
@@ -17,7 +18,7 @@ import java.util.concurrent.atomic.AtomicInteger
  * in-flight [withConnection] still uses: each [Slot] tracks a lease count and closes only once the last lease ends.
  */
 @Service(Service.Level.PROJECT)
-class ConnectionRegistry(private val project: Project, private val scope: CoroutineScope) {
+class ConnectionRegistry(private val project: Project, private val scope: CoroutineScope) : Disposable {
 
     private val log = logger<ConnectionRegistry>()
 
@@ -140,7 +141,11 @@ class ConnectionRegistry(private val project: Project, private val scope: Corout
         }
     }
 
-    /** Called by [com.rahulmahadik.asksql.ide.AskSqlProjectCloseListener] to release every connection deterministically before the scope is torn down. */
+    /** [closeNowOrCancel] is synchronous, so it is safe at dispose time. */
+    override fun dispose() {
+        closeAll()
+    }
+
     fun closeAll() {
         slots.keys.toList().forEach { id ->
             slots.remove(id)?.let {

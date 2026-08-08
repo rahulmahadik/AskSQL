@@ -36,8 +36,8 @@
                 the rows in your tables, unless you switch on sample column values yourself. Secrets
                 live in your OS keychain.</li>
             <li><b>Costs nothing until you ask.</b> Installed and idle, it loads no classes, adds
-                nothing to IDE startup, and sits at 0.2% CPU. Connecting to a wide schema takes three
-                catalog queries rather than one per table.</li>
+                nothing to IDE startup, and sits at 0.2% CPU. Connecting to a wide Postgres schema
+                reads its keys and indexes in three catalog queries rather than three per table.</li>
             <li><b>Every JetBrains IDE.</b> IntelliJ IDEA, DataGrip, PyCharm, WebStorm, GoLand, PhpStorm,
                 Rider, CLion, RubyMine, RustRover and Android Studio (2024.2 and newer).</li>
         </ul>
@@ -94,10 +94,8 @@
 
     </extensions>
 
-    <applicationListeners>
-        <listener class="com.rahulmahadik.asksql.ide.AskSqlProjectCloseListener"
-                  topic="com.intellij.openapi.project.ProjectCloseListener"/>
-    </applicationListeners>
+    <!-- Live JDBC/Mongo connections are released by ConnectionRegistry.dispose()/MongoClientRegistry.dispose(),
+         which the platform calls when the project's services are disposed. No project-close listener. -->
 
     <actions resource-bundle="messages.AskSqlBundle">
         <!-- Also shown as the AskSQL tool window's title-bar icons (see AskSqlToolWindowFactory.init).

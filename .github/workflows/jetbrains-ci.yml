@@ -89,6 +89,9 @@ jobs:
           distribution: temurin
           java-version: 21
       - uses: gradle/actions/setup-gradle@v6
+        with:
+          # One cache writer: two filled the repo quota and evicted the pnpm caches.
+          cache-read-only: true
       - run: ./gradlew test -PintegrationTests=true --stacktrace
         env:
           # Rootful Docker on the runner; skip the rootless strategy, whose JNA collides with the IntelliJ Platform's bundled jnidispatch.

@@ -49,4 +49,13 @@ class TurnPanelMarkdownTest {
         assertTrue(out.contains("SELECT a,<br>"))
         assertTrue(!out.contains("```"))
     }
+
+    @Test fun `the question is right-aligned, opposite the assistant side`() {
+        val out = questionHtml("show 10 rows from customers")
+        assertEquals("<div align='right'><b>show 10 rows from customers</b></div>", out)
+    }
+
+    @Test fun `a question with html stays escaped`() {
+        assertTrue(questionHtml("<b>hi</b>").contains("&lt;b&gt;hi&lt;/b&gt;"))
+    }
 }

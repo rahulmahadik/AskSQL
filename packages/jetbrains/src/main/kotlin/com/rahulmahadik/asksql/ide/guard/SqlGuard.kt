@@ -6,6 +6,7 @@ import com.rahulmahadik.asksql.ide.model.GuardPolicy
 import com.rahulmahadik.asksql.ide.model.GuardVerdict
 import com.rahulmahadik.asksql.ide.model.LimitStyle
 import net.sf.jsqlparser.JSQLParserException
+import net.sf.jsqlparser.expression.AllValue
 import net.sf.jsqlparser.expression.Expression
 import net.sf.jsqlparser.expression.ExpressionVisitorAdapter
 import net.sf.jsqlparser.expression.Function
@@ -535,13 +536,12 @@ object SqlGuard {
             return LimitStatus.Ok
         }
         val limit = target?.limit ?: return LimitStatus.None
-        // `LIMIT ALL` parses to a Limit with no row count. Reading that as "no limit present" left
-        // the statement uncapped, since the clause is already there for an append to bind to.
-        if (limit.isLimitAll) {
-            return LimitStatus.Unbounded {
-                limit.isLimitAll = false
-                limit.rowCount = LongValue(maxRows.toLong())
-            }
+        // `LIMIT ALL` parses to a Limit whose row count is an AllValue, which bounds nothing. Reading
+        // that as "no limit present" left the statement uncapped, since the clause is already there
+        // for an append to bind to. Overwriting the row count is what clears it (the deprecated
+        // setLimitAll(false) was a no-op).
+        if (limit.rowCount is AllValue) {
+            return LimitStatus.Unbounded { limit.rowCount = LongValue(maxRows.toLong()) }
         }
         val rowCount: Expression = limit.rowCount ?: return LimitStatus.None
         val value = (rowCount as? LongValue)?.value ?: return LimitStatus.NonLiteral

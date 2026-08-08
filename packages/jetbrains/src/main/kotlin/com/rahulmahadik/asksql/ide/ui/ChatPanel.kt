@@ -50,6 +50,18 @@ internal fun selectionAfterRefresh(
     previouslySelectedId: String?,
 ): ConnectionDescriptor? = descriptors.firstOrNull { it.id == previouslySelectedId } ?: descriptors.firstOrNull()
 
+/** Matches the VS Code extension's `STAGE_LABEL` wording, except where MongoDB has no SQL to name. */
+internal fun stageLabel(stage: Stage, isSql: Boolean): String = when (stage) {
+    Stage.CATALOG -> "Reading schema…"
+    Stage.PRUNE -> if (isSql) "Finding relevant tables…" else "Finding relevant collections…"
+    Stage.LLM -> if (isSql) "Writing SQL…" else "Writing the pipeline…"
+    Stage.REPAIR -> if (isSql) "Correcting the SQL…" else "Correcting the pipeline…"
+    Stage.EXTRACT -> "Reading the reply…"
+    Stage.GUARD -> "Checking safety…"
+    Stage.EXECUTE -> "Running the query…"
+    Stage.DONE -> ""
+}
+
 /**
  * The Chat tab: connection/model pickers, transcript, and question input. Owns a UI-lifetime
  * [CoroutineScope] (a plain Swing component has no platform-injected scope), cancelled in [dispose].
@@ -300,6 +312,8 @@ class ChatPanel(private val project: Project) : Disposable {
 
         val turn = TurnPanel(project, question)
         transcript.addTurn(turn)
+        // Reading the keychain and building the LLM client both precede the first StageEvent.
+        turn.updateStatus("Getting ready…")
         val sqlContext = contextTurns.toList()
         val mongoContext = mongoContextTurns.toList()
 
@@ -320,7 +334,7 @@ class ChatPanel(private val project: Project) : Disposable {
                             password = password,
                             llmClient = llmClient,
                             context = sqlContext,
-                            onEvent = { event -> onEngineEvent(turn, event) },
+                            onEvent = { event -> onEngineEvent(turn, event, descriptor.engine.isSql) },
                             customInstructions = AskSqlAppSettings.getInstance().customInstructions,
                             glossaryText = AskSqlAppSettings.getInstance().glossary,
                         )
@@ -331,6 +345,7 @@ class ChatPanel(private val project: Project) : Disposable {
                             AskSqlAppSettings.getInstance().answerSchemaQuestions &&
                             (code == AskSqlErrorCode.LLM_CANNOT_ANSWER || code == AskSqlErrorCode.LLM_REFUSAL)
                         ) {
+                            onEdt { turn.updateStatus("Answering from your schema…") }
                             val sa = engineService.pipeline.explainSchema(question, descriptor, password, llmClient, sqlContext)
                             onEdt { turn.showSchemaAnswer(sa.answer, sa.unknownReferences, sa.isSchemaChange, sa.proposedSql) }
                             // A prose turn is still a turn: without it, "run that query" has nothing to refer to.
@@ -368,7 +383,7 @@ class ChatPanel(private val project: Project) : Disposable {
                             password = password,
                             llmClient = llmClient,
                             context = mongoContext,
-                            onEvent = { event -> onEngineEvent(turn, event) },
+                            onEvent = { event -> onEngineEvent(turn, event, descriptor.engine.isSql) },
                             customInstructions = AskSqlAppSettings.getInstance().customInstructions,
                         )
                     } catch (e: Exception) {
@@ -378,6 +393,7 @@ class ChatPanel(private val project: Project) : Disposable {
                             AskSqlAppSettings.getInstance().answerSchemaQuestions &&
                             (code == AskSqlErrorCode.LLM_CANNOT_ANSWER || code == AskSqlErrorCode.LLM_REFUSAL)
                         ) {
+                            onEdt { turn.updateStatus("Answering from your schema…") }
                             val sa = engineService.mongoPipeline.explainSchema(question, descriptor, password, llmClient, mongoContext)
                             onEdt { turn.showSchemaAnswer(sa.answer, sa.unknownReferences, sa.isSchemaChange, sa.proposedSql, proposedIsPipeline = true) }
                             return@launch
@@ -451,12 +467,13 @@ class ChatPanel(private val project: Project) : Disposable {
                 onEdt { turn.updateStatus(""); turn.showCannotAnswer("Cancelled.", leadIn = null) }
             } catch (e: Exception) {
                 val presented = ErrorPresenter.present(e)
-                onEdt { turn.updateStatus("") }
                 // Only a query the DATABASE itself rejected is worth asking the model to repair.
                 if (presented.code == AskSqlErrorCode.DB_QUERY_ERROR) {
+                    // Another model round-trip; showError and its suggested-fix twin clear this.
+                    onEdt { turn.updateStatus("Correcting the SQL…") }
                     trySuggestSqlFix(turn, descriptor, password, sql, question, presented)
                 } else {
-                    onEdt { turn.showError(presented.userMessage) }
+                    onEdt { turn.updateStatus(""); turn.showError(presented.userMessage) }
                 }
             } finally {
                 endBusy()
@@ -530,11 +547,11 @@ class ChatPanel(private val project: Project) : Disposable {
                 onEdt { turn.updateStatus(""); turn.showCannotAnswer("Cancelled.", leadIn = null) }
             } catch (e: Exception) {
                 val presented = ErrorPresenter.present(e)
-                onEdt { turn.updateStatus("") }
                 if (presented.code == AskSqlErrorCode.DB_QUERY_ERROR) {
+                    onEdt { turn.updateStatus("Correcting the pipeline…") }
                     trySuggestMongoFix(turn, descriptor, password, pipelineJson, question, presented)
                 } else {
-                    onEdt { turn.showError(presented.userMessage) }
+                    onEdt { turn.updateStatus(""); turn.showError(presented.userMessage) }
                 }
             } finally {
                 endBusy()
@@ -568,31 +585,19 @@ class ChatPanel(private val project: Project) : Disposable {
         }
     }
 
-    private fun onEngineEvent(turn: TurnPanel, event: EngineEvent) {
+    private fun onEngineEvent(turn: TurnPanel, event: EngineEvent, isSql: Boolean) {
         // Raw tokens are the model's unparsed reply; the stage label and spinner already show
         // progress. Dropped BEFORE the EDT hop: one token arrives per SSE frame, and scheduling a
         // no-op invokeLater for each would queue thousands of EDT dispatches per answer.
         if (event is EngineEvent.Token) return
         onEdt {
             when (event) {
-                is EngineEvent.StageEvent -> turn.updateStatus(stageLabel(event.stage))
+                is EngineEvent.StageEvent -> turn.updateStatus(stageLabel(event.stage, isSql))
                 is EngineEvent.Token -> Unit
                 is EngineEvent.Warning -> turn.updateStatus(event.message)
                 EngineEvent.Done -> turn.updateStatus("")
             }
         }
-    }
-
-    /** Matches the VS Code extension's `STAGE_LABEL` wording. */
-    private fun stageLabel(stage: Stage): String = when (stage) {
-        Stage.CATALOG -> "Reading schema…"
-        Stage.PRUNE -> "Finding relevant tables…"
-        Stage.LLM -> "Writing SQL…"
-        Stage.REPAIR -> "Correcting the SQL…"
-        Stage.EXTRACT -> "Reading the reply…"
-        Stage.GUARD -> "Checking safety…"
-        Stage.EXECUTE -> "Running the query…"
-        Stage.DONE -> ""
     }
 
     private inline fun onEdt(crossinline block: () -> Unit) {
@@ -602,7 +607,7 @@ class ChatPanel(private val project: Project) : Disposable {
     /** Shows the turn's spinner for the whole model round-trip. */
     private fun explainSql(turn: TurnPanel, descriptor: ConnectionDescriptor, password: String?, sql: String) {
         scope.launch {
-            onEdt { turn.updateStatus("Describing the query…") }
+            onEdt { turn.explainStarted(); turn.updateStatus("Describing the query…") }
             try {
                 val engineService = AskSqlEngineService.getInstance(project)
                 val llmClient = engineService.currentLlmClient()
@@ -617,7 +622,7 @@ class ChatPanel(private val project: Project) : Disposable {
 
     private fun explainMongoPipeline(turn: TurnPanel, descriptor: ConnectionDescriptor, password: String?, pipelineJson: String) {
         scope.launch {
-            onEdt { turn.updateStatus("Describing the pipeline…") }
+            onEdt { turn.explainStarted(); turn.updateStatus("Describing the pipeline…") }
             try {
                 val engineService = AskSqlEngineService.getInstance(project)
                 val llmClient = engineService.currentLlmClient()

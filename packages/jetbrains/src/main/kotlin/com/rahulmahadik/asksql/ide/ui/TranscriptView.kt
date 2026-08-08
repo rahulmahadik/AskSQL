@@ -94,10 +94,17 @@ class TranscriptView(project: Project, private val onSamplePick: (String) -> Uni
     fun addTurn(turn: TurnPanel) {
         if (turns.isEmpty()) showTranscript()
         turns.addLast(turn)
+        // Follow the answer only while already at the bottom.
+        turn.onContentAppended = { if (isNearBottom()) scrollToBottom() }
         val wrapper = JPanel().apply {
             layout = BoxLayout(this, BoxLayout.Y_AXIS)
+            // The rule belongs to the turn above it, so it sits inside the strut.
+            border = JBUI.Borders.compound(
+                JBUI.Borders.emptyBottom(8),
+                JBUI.Borders.customLine(com.intellij.ui.JBColor.border(), 0, 0, 1, 0),
+            )
             add(turn.component)
-            add(javax.swing.Box.createVerticalStrut(4))
+            add(javax.swing.Box.createVerticalStrut(JBUI.scale(8)))
         }
         wrappers.addLast(wrapper)
         turnsContainer.add(wrapper)
@@ -117,6 +124,12 @@ class TranscriptView(project: Project, private val onSamplePick: (String) -> Uni
         turnsContainer.revalidate()
         turnsContainer.repaint()
         showEmptyState()
+    }
+
+    /** Within one line of the end counts as "following along"; an exact test never matches mid-layout. */
+    private fun isNearBottom(): Boolean {
+        val bar = scrollPane.verticalScrollBar
+        return bar.value + bar.visibleAmount >= bar.maximum - JBUI.scale(48)
     }
 
     private fun scrollToBottom() {
