@@ -4,7 +4,30 @@ All notable changes to the browser extension are documented here. Versions match
 `manifest.json`. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.3.0] - 2026-08-09
+
+### Fixed
+- **No red error while the answer is still being written.** When a question was answered from the
+  schema rather than as a query, the turn was marked failed for the whole second round trip, telling
+  you to rephrase a question that was in the middle of being answered.
+- The transcript stays where you put it. It scrolled to the bottom on every update, which pulled you
+  away from an earlier turn six to ten times per question. A new question still scrolls into view.
+- Copy reports failure instead of success when the clipboard is unavailable, which is the normal
+  case on a page served over plain http.
+- Blank lines between paragraphs are kept, so a long answer is no longer one solid block.
+- A multi-line question is shown as you typed it, and a long unbroken value no longer overflows.
+- A truncated cell shows its full value on hover.
+- Export CSV says whether it worked, and no longer releases the file before the browser has read it.
+- Raising the row cap takes effect on the next question instead of waiting for the connection to change.
+
+### Added
+- **The model's output is shown as it streams**, so a local model no longer looks frozen on
+  "Writing SQL" for a minute with nothing moving.
+- Copy controls on explanations, schema answers, the query plan and the result grid.
+
+### Changed
+- Stopping a turn is called **Cancel**, and the stopped turn reads "Cancelled.", matching the
+  VS Code extension and the JetBrains plugin.
 
 ## [0.2.1] - 2026-08-07
 
