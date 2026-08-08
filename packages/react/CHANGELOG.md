@@ -1,5 +1,35 @@
 # @asksql/react
 
+## 0.3.0
+
+### Minor Changes
+
+- 3e7cb1b: Depend on `@asksql/core` as a peer rather than a regular dependency. As a regular dependency, a
+  consumer pinned to a different core minor got a second copy of core installed under the connector
+  instead of a resolution error. Structural types survive that; identity does not, so
+  `error instanceof AskSqlError` was false for every error the connector threw and consumer error
+  handling silently stopped matching. The peer range is `>=0.6.0`, so npm and pnpm install one shared
+  core and report a real conflict when the consumer's pin cannot satisfy it.
+
+  Yarn (classic and berry) and npm with `legacy-peer-deps` do not install peers, so on those
+  `@asksql/core` must now be installed explicitly alongside the package.
+
+- 3e7cb1b: Clamp the MongoDB row cap the way the SQL side already did. A `maxRows` that was fractional, zero or
+  negative was passed straight into `$limit`, which MongoDB rejects outright, so the query failed
+  rather than returning fewer rows; a value above the engine's ceiling was injected unclamped while
+  the surrounding warning text named the capped number. Both engines now resolve the cap through one
+  shared function, so the prompt, the injected limit and the warning always name the same figure.
+
+  Stop reporting a backticked placeholder as a name missing from your schema. Backticks wrap more than
+  identifiers, so `` `?` ``, a date, or `:param` were each reported as a table or column that does not
+  exist. Hyphenated names, which are legal inside backticks, are still checked.
+
+  React: copy controls on explanations, schema answers, the query plan and the result grid; the
+  model's output is shown as it streams; the thread only follows new content when you are already at
+  the bottom; a schema answer no longer renders a red error while it is still being written; truncated
+  cells carry their full value; and `maxRows` takes effect on the next question rather than when the
+  connection changes.
+
 ## 0.2.3
 
 ### Patch Changes

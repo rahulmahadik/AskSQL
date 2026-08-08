@@ -1,6 +1,6 @@
 {
   "name": "@asksql/mysql",
-  "version": "0.2.6",
+  "version": "0.3.0",
   "description": "MySQL connector for AskSQL. information_schema introspection + read-only session enforcement.",
   "type": "module",
   "main": "./dist/index.js",
@@ -23,7 +23,7 @@
     "mysql2": ">=3.6"
   },
   "devDependencies": {
-    "@asksql/core": "workspace:>=0.6.0",
+    "@asksql/core": "workspace:>=0.6.1",
     "mysql2": "^3.22.6"
   },
   "license": "Apache-2.0",
