@@ -1,27 +1,30 @@
 package com.rahulmahadik.asksql.ide.ui
 
+import com.intellij.icons.AllIcons
+import com.intellij.openapi.ide.CopyPasteManager
 import com.intellij.openapi.project.Project
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBPanel
 import com.intellij.util.ui.JBUI
+import com.intellij.util.ui.accessibility.AccessibleAnnouncerUtil
+import com.intellij.util.ui.accessibility.ScreenReader
 import com.rahulmahadik.asksql.ide.model.AskSqlResultSet
 import java.awt.BorderLayout
+import java.awt.Dimension
 import java.awt.FlowLayout
+import java.awt.datatransfer.StringSelection
 import javax.swing.BoxLayout
 import javax.swing.JButton
 import javax.swing.JEditorPane
 import javax.swing.JPanel
+import javax.swing.JTextField
+import javax.swing.Timer
+import javax.swing.text.View
 
 internal fun escapeHtml(text: String): String =
     text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
-/**
- * Models answer in Markdown, so raw `**bold**` and backticks would render as literal asterisks.
- * Escape first, then translate the few marks that actually show up in an explanation.
- */
-private val FENCED_BLOCK_RE = Regex("""```[A-Za-z0-9]*\n?[\s\S]*?```""")
-
-// Hoisted like FENCED_BLOCK_RE: markdownToHtml runs on the EDT as each answer renders, and an
+// Hoisted: markdownToHtml runs on the EDT as each answer renders, and an
 // inline Regex(...) recompiles its Pattern on every call.
 private val EXPLANATION_HEADING_RE = Regex("""^\s*(\*\*|__)?\s*Explanation\s*(\*\*|__)?\s*:\s*""", RegexOption.IGNORE_CASE)
 private val FENCED_CAPTURE_RE = Regex("""```[A-Za-z0-9]*\n?([\s\S]*?)```""")
@@ -30,6 +33,7 @@ private val BOLD_UNDERSCORES_RE = Regex("""(?<!\w)__(.+?)__(?!\w)""", RegexOptio
 private val INLINE_CODE_RE = Regex("""`([^`]+)`""")
 private val BULLET_RE = Regex("""(?m)^\s*[-*]\s+""")
 
+/** Models answer in Markdown. Escape first, then translate the few marks an explanation actually uses. */
 internal fun markdownToHtml(text: String): String = escapeHtml(text)
     // A leading "Explanation:" heading is redundant: this block already sits under the result.
     .replace(EXPLANATION_HEADING_RE, "")
@@ -44,6 +48,128 @@ internal fun markdownToHtml(text: String): String = escapeHtml(text)
     .replace("\n", "<br>")
 
 /**
+ * Bubble tint for the question: an explicit light/dark pair, so it stays distinct from the
+ * transcript background under any theme, including custom ones.
+ */
+internal val QUESTION_BUBBLE_BACKGROUND = com.intellij.ui.JBColor(java.awt.Color(0xE8F0FE), java.awt.Color(0x2E3641))
+internal val QUESTION_BUBBLE_BORDER = com.intellij.ui.JBColor(java.awt.Color(0xCFDFF8), java.awt.Color(0x3C4657))
+
+/** The question sits on the right of the turn, opposite the assistant. */
+internal fun questionHtml(question: String): String = "<div align='right'><b>${escapeHtml(question)}</b></div>"
+
+/** One run of a model answer: prose to render as HTML, or the body of a fenced block to render as code. */
+internal sealed interface AnswerSegment {
+    data class Prose(val text: String) : AnswerSegment
+    data class Code(val code: String, val tag: String) : AnswerSegment
+}
+
+// Three or more: a model quoting fenced content emits a four-backtick fence.
+private val FENCED_SEGMENT_RE = Regex("""`{3,}([A-Za-z0-9+#_-]*)[ \t]*\r?\n?([\s\S]*?)`{3,}""")
+
+/** An unterminated fence stays prose, so a half-streamed answer never loses its text. */
+internal fun splitFencedSegments(answer: String): List<AnswerSegment> {
+    val segments = mutableListOf<AnswerSegment>()
+    var cursor = 0
+    for (m in FENCED_SEGMENT_RE.findAll(answer)) {
+        answer.substring(cursor, m.range.first).takeIf { it.isNotBlank() }?.let { segments += AnswerSegment.Prose(it) }
+        m.groupValues[2].trim('\n', '\r').takeIf { it.isNotBlank() }?.let { segments += AnswerSegment.Code(it, m.groupValues[1].lowercase()) }
+        cursor = m.range.last + 1
+    }
+    answer.substring(cursor).takeIf { it.isNotBlank() }?.let { segments += AnswerSegment.Prose(it) }
+    return segments
+}
+
+private val SQL_FENCE_TAGS = setOf("sql", "postgres", "postgresql", "psql", "mysql", "mariadb", "sqlite", "tsql", "plsql", "oracle")
+
+/** Fence tag to the file type [SqlBlockPanel] highlights with; an unknown tag stays plain text. */
+internal fun fenceLanguage(tag: String, defaultIsJson: Boolean): Pair<String, String> = when {
+    tag == "json" || (tag.isEmpty() && defaultIsJson) -> "json" to "JSON"
+    tag in SQL_FENCE_TAGS || tag.isEmpty() -> "sql" to "SQL"
+    else -> "txt" to "TEXT"
+}
+
+/** Each block is a real editor on the EDT, so a runaway reply renders the rest as plain text instead. */
+internal const val MAX_INLINE_CODE_BLOCKS = 5
+
+/** The `mongosh` call MongoExtract accepts; the collection is outside the JSON. */
+internal fun mongoShellSnippet(collection: String, pipelineJson: String): String {
+    val quoted = collection.replace("\\", "\\\\").replace("\"", "\\\"")
+    return "db.getCollection(\"$quoted\").aggregate($pipelineJson)"
+}
+
+/** Selectable one-line text that reads as a label; a [JBLabel]'s content cannot be copied out. */
+internal fun selectableText(text: String): JTextField =
+    object : JTextField(text) {
+        // Otherwise the column hands this field any leftover vertical space.
+        override fun getMaximumSize(): Dimension = Dimension(Int.MAX_VALUE, preferredSize.height)
+    }.apply {
+        isEditable = false
+        isOpaque = false
+        border = JBUI.Borders.empty(0, 2, 4, 2)
+        alignmentX = 0f
+        font = com.intellij.util.ui.UIUtil.getLabelFont()
+        foreground = com.intellij.util.ui.UIUtil.getLabelForeground()
+    }
+
+private const val EXPLAIN_BUSY_TEXT = "Describing…"
+
+/** The sentence the engine appends to a proposed write. */
+internal const val READ_ONLY_LINE_MARKER = "AskSQL is read-only"
+
+/** How long a copy button shows its outcome icon before it reverts to the copy icon. */
+private const val COPY_FEEDBACK_MS = 1200
+
+internal const val COPY_TOOLTIP = "Copy to clipboard"
+internal const val COPY_FAILED_TOOLTIP = "Copy failed"
+
+/**
+ * Copy control for one answer: [source] is read on click, so the clipboard gets the model's raw
+ * text, not the rendered HTML. A null [label] gives the borderless icon-only form.
+ */
+internal fun copyButton(label: String?, source: () -> String): JButton =
+    JButton(label, AllIcons.Actions.Copy).apply {
+        toolTipText = COPY_TOOLTIP
+        isFocusPainted = false
+        // The icon-only form has no text, so a screen reader has nothing else to read.
+        accessibleContext.accessibleName = label ?: COPY_TOOLTIP
+        if (label == null) {
+            isContentAreaFilled = false
+            isBorderPainted = false
+            isOpaque = false
+            border = JBUI.Borders.empty(2)
+            cursor = java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.HAND_CURSOR)
+        }
+        addActionListener {
+            val copied = runCatching {
+                CopyPasteManager.getInstance().setContents(StringSelection(source()))
+            }.isSuccess
+            icon = if (copied) AllIcons.Actions.Checked else AllIcons.General.Error
+            toolTipText = if (copied) COPY_TOOLTIP else COPY_FAILED_TOOLTIP
+            val revert = Timer(COPY_FEEDBACK_MS) {
+                icon = AllIcons.Actions.Copy
+                toolTipText = COPY_TOOLTIP
+            }
+            revert.isRepeats = false
+            revert.start()
+        }
+    }
+
+/**
+ * Copy affordance under one answer, hugging the right edge through its own FlowLayout.RIGHT: in a
+ * BoxLayout Y_AXIS column a child with a different alignmentX is offset, which indents the column.
+ */
+internal fun copyRow(source: () -> String): JPanel =
+    object : JPanel(FlowLayout(FlowLayout.RIGHT, 0, 0)) {
+        // Otherwise the column hands this row any leftover vertical space.
+        override fun getMaximumSize(): Dimension = Dimension(Int.MAX_VALUE, preferredSize.height)
+    }.apply {
+        isOpaque = false
+        border = JBUI.Borders.empty(0, 8, 2, 8)
+        alignmentX = 0.5f
+        add(copyButton(null, source))
+    }
+
+/**
  * One question-answer turn in the transcript. All mutation methods must run on the EDT;
  * [ChatPanel]'s coroutine callbacks hop back via `invokeLater` before touching this class.
  */
@@ -54,7 +180,24 @@ class TurnPanel(private val project: Project, question: String) {
         border = JBUI.Borders.empty(6, 8)
     }
 
-    private val questionLabel = wrappingHtml("<b>${escapeHtml(question)}</b>")
+    private val questionLabel = wrappingHtml(questionHtml(question))
+
+    /**
+     * The question reads as a bubble. Only the question is tinted: [SqlBlockPanel]'s editor,
+     * [ResultTablePanel]'s table and the progress icon all paint their own backgrounds.
+     */
+    private val questionBubble = object : JPanel(BorderLayout()) {
+        // Otherwise the column hands the bubble any leftover vertical space.
+        override fun getMaximumSize(): Dimension = Dimension(Int.MAX_VALUE, preferredSize.height)
+    }.apply {
+        isOpaque = true
+        background = QUESTION_BUBBLE_BACKGROUND
+        border = JBUI.Borders.compound(
+            JBUI.Borders.customLine(QUESTION_BUBBLE_BORDER, 1),
+            JBUI.Borders.empty(6, 8),
+        )
+        add(questionLabel, BorderLayout.CENTER)
+    }
     private val statusLabel = JBLabel(" ").apply { foreground = com.intellij.ui.JBColor.GRAY }
     /** Animated "working" indicator, visible only while [statusLabel] is non-blank. */
     private val statusIcon = com.intellij.util.ui.AsyncProcessIcon("askSqlTurnProgress").apply { isVisible = false }
@@ -73,34 +216,71 @@ class TurnPanel(private val project: Project, question: String) {
     var resultTablePanel: ResultTablePanel? = null
         private set
 
+    /** Set by [TranscriptView]: a turn keeps growing after it is added. */
+    internal var onContentAppended: (() -> Unit)? = null
+
+    private fun refresh() {
+        component.revalidate()
+        component.repaint()
+        onContentAppended?.invoke()
+    }
+
     init {
         // BoxLayout Y_AXIS aligns children by alignmentX; keep every row left-aligned so nothing indents.
         questionLabel.alignmentX = 0f
+        questionBubble.alignmentX = 0f
         statusRow.alignmentX = 0f
         bodyPanel.alignmentX = 0f
-        component.add(roleHeader("You", com.intellij.icons.AllIcons.General.User))
-        component.add(questionLabel)
+        component.add(roleHeader("You", com.intellij.icons.AllIcons.General.User, rightAligned = true))
+        component.add(questionBubble)
         component.add(javax.swing.Box.createVerticalStrut(8))
         component.add(roleHeader("AskSQL", AskSqlIcons.ASSISTANT))
         component.add(statusRow)
         component.add(bodyPanel)
     }
 
-    /** A small "You"/"AskSQL" row above each side of the turn, so who said what is obvious at a glance. */
-    private fun roleHeader(name: String, icon: javax.swing.Icon): JPanel =
-        JPanel(FlowLayout(FlowLayout.LEFT, 4, 0)).apply {
+    /**
+     * A small "You"/"AskSQL" row above each side of the turn. The user's row hugs the right edge
+     * through its own FlowLayout.RIGHT while keeping alignmentX 0f: mixing alignmentX values in a
+     * BoxLayout column indents it.
+     */
+    private fun roleHeader(name: String, icon: javax.swing.Icon, rightAligned: Boolean = false): JPanel =
+        JPanel(FlowLayout(if (rightAligned) FlowLayout.RIGHT else FlowLayout.LEFT, 4, 0)).apply {
             isOpaque = false
             border = JBUI.Borders.emptyBottom(2)
             alignmentX = 0f
-            add(JBLabel(icon))
-            add(JBLabel(name).apply { font = font.deriveFont(java.awt.Font.BOLD); foreground = com.intellij.ui.JBColor.GRAY })
+            val nameLabel = JBLabel(name).apply { font = font.deriveFont(java.awt.Font.BOLD); foreground = com.intellij.ui.JBColor.GRAY }
+            // Mirrored so the icon stays on the outer edge of each side.
+            if (rightAligned) {
+                add(nameLabel)
+                add(JBLabel(icon))
+            } else {
+                add(JBLabel(icon))
+                add(nameLabel)
+            }
         }
 
     fun updateStatus(text: String) {
         statusLabel.text = text
         val busy = text.isNotBlank()
         statusIcon.isVisible = busy
-        if (busy) statusIcon.resume() else statusIcon.suspend()
+        if (busy) {
+            announce(text)
+            statusIcon.resume()
+        } else {
+            statusIcon.suspend()
+        }
+    }
+
+    /**
+     * Setting the label's text fires only ACCESSIBLE_VISIBLE_DATA_PROPERTY, which no reader speaks
+     * for an unfocused, non-focusable label; the platform announcer speaks it, queued so a run of
+     * stage labels is not clipped. Off the JBR there is no announcer and this is a no-op.
+     */
+    private fun announce(message: String) {
+        if (ScreenReader.isActive() && AccessibleAnnouncerUtil.isAnnouncingAvailable()) {
+            AccessibleAnnouncerUtil.announce(statusLabel, message, false)
+        }
     }
 
     fun showSqlPendingApproval(sql: String, explanation: String? = null, onRun: () -> Unit, onCancel: () -> Unit) {
@@ -110,12 +290,12 @@ class TurnPanel(private val project: Project, question: String) {
         stack.add(SqlBlockPanel(project, sql).component)
         explanation?.takeIf { it.isNotBlank() }?.let {
             stack.add(wrappingHtml("<i>${markdownToHtml(it)}</i>").apply { border = JBUI.Borders.empty(4, 2) })
+            stack.add(copyRow { it })
             explanationShown = true
         }
         stack.add(ApprovalBar(onRun, onCancel).component)
         bodyPanel.add(stack)
-        component.revalidate()
-        component.repaint()
+        refresh()
     }
 
     fun showSqlOnly(sql: String, explanation: String?) {
@@ -123,25 +303,34 @@ class TurnPanel(private val project: Project, question: String) {
         bodyPanel.add(SqlBlockPanel(project, sql).component)
         // Stashed, not shown yet: showResult appends it AFTER the result table, so a turn reads question, query, result, explanation.
         pendingAskExplanation = explanation
-        component.revalidate()
-        component.repaint()
+        refresh()
     }
 
-    /** MongoDB counterpart to [showSqlPendingApproval]; the pipeline's target collection lives outside the JSON text, so it is shown as its own label above the block. */
+    /** The block shows the pipeline JSON but copies the full shell call, so a paste into mongosh runs. */
+    private fun mongoBlock(collection: String, pipelineJson: String) =
+        SqlBlockPanel(
+            project,
+            pipelineJson,
+            fileExtension = "json",
+            languageId = "JSON",
+            clipboardText = mongoShellSnippet(collection, pipelineJson),
+        )
+
+    /** MongoDB counterpart to [showSqlPendingApproval]; the collection sits above the block. */
     fun showMongoPipelinePendingApproval(collection: String, pipelineJson: String, explanation: String? = null, onRun: () -> Unit, onCancel: () -> Unit) {
         bodyPanel.removeAll()
         val stack = JPanel()
         stack.layout = BoxLayout(stack, BoxLayout.Y_AXIS)
-        stack.add(JBLabel("Collection: $collection").apply { border = JBUI.Borders.empty(0, 2, 4, 2) })
-        stack.add(SqlBlockPanel(project, pipelineJson, fileExtension = "json", languageId = "JSON").component)
+        stack.add(selectableText("Collection: $collection"))
+        stack.add(mongoBlock(collection, pipelineJson).component)
         explanation?.takeIf { it.isNotBlank() }?.let {
             stack.add(wrappingHtml("<i>${markdownToHtml(it)}</i>").apply { border = JBUI.Borders.empty(4, 2) })
+            stack.add(copyRow { it })
             explanationShown = true
         }
         stack.add(ApprovalBar(onRun, onCancel).component)
         bodyPanel.add(stack)
-        component.revalidate()
-        component.repaint()
+        refresh()
     }
 
     /** MongoDB counterpart to [showSqlOnly]. */
@@ -149,17 +338,32 @@ class TurnPanel(private val project: Project, question: String) {
         bodyPanel.removeAll()
         val stack = JPanel()
         stack.layout = BoxLayout(stack, BoxLayout.Y_AXIS)
-        stack.add(JBLabel("Collection: $collection").apply { border = JBUI.Borders.empty(0, 2, 4, 2) })
-        stack.add(SqlBlockPanel(project, pipelineJson, fileExtension = "json", languageId = "JSON").component)
+        stack.add(selectableText("Collection: $collection"))
+        stack.add(mongoBlock(collection, pipelineJson).component)
         bodyPanel.add(stack)
         pendingAskExplanation = explanation
-        component.revalidate()
-        component.repaint()
+        refresh()
     }
 
     private var explanationShown = false
-    /** The single failure label currently shown for this turn, if any; see [showFailure]. */
+    /** Toggles the Explain button between idle and in-flight; null until [showResult] builds one. */
+    private var setExplainBusy: ((Boolean) -> Unit)? = null
+    /** The button is shared by the click path and the automatic one, so it only idles when both are done. */
+    private var explainsInFlight = 0
+
+    /** Called by every explain request for this turn, automatic or clicked. */
+    fun explainStarted() {
+        explainsInFlight++
+        setExplainBusy?.invoke(true)
+    }
+
+    private fun explainSettled() {
+        if (explainsInFlight > 0) explainsInFlight--
+        if (explainsInFlight == 0) setExplainBusy?.invoke(false)
+    }
+    /** The failure currently shown for this turn: its label and copy row. */
     private var failureLabel: JEditorPane? = null
+    private var failureCopyRow: JPanel? = null
 
     fun showResult(
         resultSet: AskSqlResultSet,
@@ -176,7 +380,7 @@ class TurnPanel(private val project: Project, question: String) {
 
         val toolbar = JPanel(FlowLayout(FlowLayout.LEFT, 4, 0))
         toolbar.add(JButton("Export CSV").apply { addActionListener { onExportCsv(panel) } })
-        toolbar.add(JButton("Copy").apply { addActionListener { onCopyResult(panel) } })
+        toolbar.add(JButton("Copy", AllIcons.Actions.Copy).apply { addActionListener { onCopyResult(panel) } })
         toolbar.add(JButton("Open in Editor").apply { addActionListener { onOpenInEditor(panel) } })
         // Table stays the default; the button only appears when [Charts.infer] finds something to draw.
         Charts.infer(resultSet)?.let { spec ->
@@ -196,8 +400,20 @@ class TurnPanel(private val project: Project, question: String) {
             )
         }
         if (onExplain != null) {
+            // The turn's spinner sits above a tall result, so the button itself carries the in-flight state.
             val explainButton = JButton("Explain")
-            explainButton.addActionListener { explainButton.isEnabled = false; onExplain() }
+            explainButton.preferredSize = Dimension(
+                explainButton.getFontMetrics(explainButton.font).stringWidth(EXPLAIN_BUSY_TEXT) + JBUI.scale(28),
+                explainButton.preferredSize.height,
+            )
+            // Restored on both outcomes: a failed explain must not remove the feature for this turn.
+            setExplainBusy = { busy ->
+                explainButton.isEnabled = !busy
+                explainButton.text = if (busy) EXPLAIN_BUSY_TEXT else "Explain"
+            }
+            // An automatic explain may already be running by the time this button exists.
+            if (explainsInFlight > 0) setExplainBusy?.invoke(true)
+            explainButton.addActionListener { onExplain() }
             toolbar.add(explainButton)
         }
         if (resultSet.warnings.isNotEmpty()) {
@@ -210,24 +426,51 @@ class TurnPanel(private val project: Project, question: String) {
         pendingAskExplanation?.let { explanation ->
             if (explanation.isNotBlank()) {
                 bodyPanel.add(wrappingHtml("<i>${markdownToHtml(explanation)}</i>").apply { border = JBUI.Borders.empty(4, 2) })
+                bodyPanel.add(copyRow { explanation })
                 explanationShown = true
             }
             pendingAskExplanation = null
         }
-        component.revalidate()
-        component.repaint()
+        refresh()
     }
 
     /** True once any description has been shown for this turn (inline prose or a dedicated Explain call); lets the caller skip a redundant auto-explain. */
     fun hasExplanation(): Boolean = explanationShown
 
+    /** Renders an answer with each fenced block as a real code block with its own Copy, bounded in height. */
+    private fun addProseWithCodeBlocks(text: String, defaultIsJson: Boolean, extracted: String? = null): Int {
+        var blocks = 0
+        for (segment in splitFencedSegments(text)) {
+            when (segment) {
+                is AnswerSegment.Prose ->
+                    bodyPanel.add(wrappingHtml(markdownToHtml(segment.text)).apply { border = JBUI.Borders.empty(6, 8) })
+                is AnswerSegment.Code -> if (blocks < MAX_INLINE_CODE_BLOCKS) {
+                    blocks++
+                    val (extension, language) = fenceLanguage(segment.tag, defaultIsJson)
+                    // The extracted statement has had trailing prose stripped.
+                    val code = extracted?.takeIf { segment.code.trim().startsWith(it.trim()) }?.trim() ?: segment.code
+                    bodyPanel.add(boundedBlock(SqlBlockPanel(project, code, fileExtension = extension, languageId = language).component))
+                } else {
+                    bodyPanel.add(wrappingHtml(markdownToHtml("```\n${segment.code}\n```")).apply { border = JBUI.Borders.empty(6, 8) })
+                }
+            }
+        }
+        return blocks
+    }
+
+    /** Bounded height: [SqlBlockPanel]'s panel has an unbounded maximum. */
+    private fun boundedBlock(component: JPanel): JPanel =
+        object : JPanel(BorderLayout()) {
+            override fun getMaximumSize(): Dimension = Dimension(Int.MAX_VALUE, preferredSize.height)
+        }.apply { isOpaque = false; add(component, BorderLayout.CENTER) }
+
     /** Appends the model's plain-language explanation below the result; called by the "Explain" button or the auto-explain path. */
     fun appendExplanation(text: String) {
-        val label = wrappingHtml(markdownToHtml(text)).apply { border = JBUI.Borders.empty(6, 8) }
         explanationShown = true
-        bodyPanel.add(label)
-        component.revalidate()
-        component.repaint()
+        addProseWithCodeBlocks(text, defaultIsJson = false)
+        bodyPanel.add(copyRow { text })
+        explainSettled()
+        refresh()
     }
 
     fun showExplanationError(userMessage: String) {
@@ -246,60 +489,53 @@ class TurnPanel(private val project: Project, question: String) {
         updateStatus("")
         // A query in a prose answer is the same artifact as a generated one, so it gets the same
         // block and the same Copy button rather than being flattened into the text.
-        val fence = if (proposedSql != null) FENCED_BLOCK_RE.find(answer) else null
-        if (fence != null) {
-            val before = answer.substring(0, fence.range.first).trimEnd()
-            val after = answer.substring(fence.range.last + 1).trimStart()
-            if (before.isNotBlank()) {
-                bodyPanel.add(wrappingHtml(markdownToHtml(before)).apply { border = JBUI.Borders.empty(6, 8) })
-            }
-            bodyPanel.add(
-                if (proposedIsPipeline) {
-                    SqlBlockPanel(project, proposedSql!!, fileExtension = "json", languageId = "JSON").component
-                } else {
-                    SqlBlockPanel(project, proposedSql!!).component
-                },
-            )
-            if (after.isNotBlank()) {
-                bodyPanel.add(wrappingHtml(markdownToHtml(after)).apply { border = JBUI.Borders.empty(6, 8) })
-            }
-        } else {
-            bodyPanel.add(wrappingHtml(markdownToHtml(answer)).apply { border = JBUI.Borders.empty(6, 8) })
+        val blocks = addProseWithCodeBlocks(answer, defaultIsJson = proposedIsPipeline, extracted = proposedSql)
+        // The model can propose a statement without fencing it.
+        if (blocks == 0 && proposedSql != null) {
+            val (extension, language) = fenceLanguage(if (proposedIsPipeline) "json" else "sql", proposedIsPipeline)
+            bodyPanel.add(boundedBlock(SqlBlockPanel(project, proposedSql, fileExtension = extension, languageId = language).component))
         }
         if (unknownReferences.isNotEmpty()) {
             val names = escapeHtml(unknownReferences.joinToString(", "))
             val note = if (isSchemaChange) {
-                "<i>Proposed names not in your current schema: $names. AskSQL is read-only and ran nothing.</i>"
+                "<i>Proposed names not in your current schema: $names.</i>"
             } else {
                 "<i>Heads up: this mentioned names not in your schema ($names), so treat those with caution.</i>"
             }
             bodyPanel.add(wrappingHtml(note).apply { border = JBUI.Borders.empty(2, 8) })
         }
-        bodyPanel.add(
-            wrappingHtml("<i>Generated from your schema by the model - no query was run, so treat it as guidance.</i>")
-                .apply { border = JBUI.Borders.empty(2, 8) },
-        )
-        component.revalidate()
-        component.repaint()
+        if (!answer.contains(READ_ONLY_LINE_MARKER)) {
+            bodyPanel.add(
+                wrappingHtml("<i>Generated from your schema by the model - no query was run, so treat it as guidance.</i>")
+                    .apply { border = JBUI.Borders.empty(2, 8) },
+            )
+        }
+        // One row for the whole answer: the clipboard gets the model's text, not the notes around it.
+        bodyPanel.add(copyRow { answer })
+        refresh()
     }
 
     fun showError(userMessage: String) {
         updateStatus("")
-        showFailure(wrappingHtml(errorHtml(userMessage)))
+        showFailure(wrappingHtml(errorHtml(userMessage)), userMessage)
     }
 
     /** A turn has at most one outcome: a new failure replaces the previous one, and a real result clears it. */
-    private fun showFailure(label: JEditorPane) {
-        failureLabel?.let { bodyPanel.remove(it) }
+    private fun showFailure(label: JEditorPane, message: String) {
+        clearFailure()
         failureLabel = label
+        val copy = copyRow { message }
+        failureCopyRow = copy
         bodyPanel.add(label)
-        component.revalidate()
-        component.repaint()
+        bodyPanel.add(copy)
+        refresh()
     }
 
     private fun clearFailure() {
         failureLabel?.let { bodyPanel.remove(it) }
+        failureCopyRow?.let { bodyPanel.remove(it) }
         failureLabel = null
+        failureCopyRow = null
     }
 
     /**
@@ -318,9 +554,8 @@ class TurnPanel(private val project: Project, question: String) {
                 if (e.eventType == javax.swing.event.HyperlinkEvent.EventType.ACTIVATED) onOpenSettings()
             }
         }
-        showFailure(label)
-        component.revalidate()
-        component.repaint()
+        showFailure(label, userMessage)
+        refresh()
     }
 
     /** Replaces the rejected query with the corrected one; a turn shows a single statement. Approved like any other SQL. */
@@ -341,7 +576,7 @@ class TurnPanel(private val project: Project, question: String) {
         replaceBodyWithSuggestion(
             errorMessage = errorMessage,
             heading = "Corrected to match your schema - collection: $collection",
-            block = SqlBlockPanel(project, pipelineJson, fileExtension = "json", languageId = "JSON").component,
+            block = mongoBlock(collection, pipelineJson).component,
             onRunFix = onRunFix,
             onDismiss = onDismiss,
         )
@@ -356,30 +591,89 @@ class TurnPanel(private val project: Project, question: String) {
     ) {
         bodyPanel.removeAll()
         failureLabel = null
+        failureCopyRow = null
         // Clears the rejected query's explanation; the caller auto-explains the corrected one.
         pendingAskExplanation = null
         explanationShown = false
         val stack = JPanel()
         stack.layout = BoxLayout(stack, BoxLayout.Y_AXIS)
         stack.add(wrappingHtml(errorHtml(errorMessage)).apply { border = JBUI.Borders.empty(2) })
-        stack.add(JBLabel(heading).apply { border = JBUI.Borders.empty(6, 2, 2, 2) })
+        stack.add(selectableText(heading).apply { border = JBUI.Borders.empty(6, 2, 2, 2) })
         stack.add(block)
         // Dismiss drops the stack; the caller re-shows the error.
         stack.add(ApprovalBar(onRunFix, { bodyPanel.remove(stack); onDismiss() }).component)
         bodyPanel.add(stack)
-        component.revalidate()
-        component.repaint()
+        refresh()
     }
 
 
-    /** A rich-text label that actually word-wraps, unlike [JBLabel] with HTML content. */
-    private fun wrappingHtml(innerHtml: String): JEditorPane = JEditorPane("text/html", "<html><body>$innerHtml</body></html>").apply {
-        isEditable = false
-        isOpaque = false
-        border = null
-        putClientProperty(JEditorPane.HONOR_DISPLAY_PROPERTIES, true)
-        font = com.intellij.util.ui.UIUtil.getLabelFont()
-    }
+    /**
+     * A rich-text label that word-wraps, unlike [JBLabel] with HTML content. Its height is measured
+     * against the width the column gives it, not its natural unwrapped width.
+     */
+    private fun wrappingHtml(innerHtml: String): JEditorPane =
+        object : JEditorPane("text/html", "<html><body>$innerHtml</body></html>") {
+            private var wrappedWidth = -1
+
+            /**
+             * On a resize this pane is measured before its own width has caught up, so the height
+             * comes from the width it wrapped at last time; a second measure after that pass settles it.
+             */
+            override fun setBounds(x: Int, y: Int, w: Int, h: Int) {
+                val rewrapped = w != wrappedWidth
+                super.setBounds(x, y, w, h)
+                if (!rewrapped) return
+                wrappedWidth = w
+                javax.swing.SwingUtilities.invokeLater {
+                    invalidate()
+                    revalidate()
+                    repaint()
+                }
+            }
+
+            /**
+             * The width this pane will be given. A turn is measured before anything in it has bounds,
+             * so the column is the first ancestor with a width; the pane is stretched to that, less
+             * the borders in between.
+             */
+            private fun wrapWidth(): Int {
+                var borders = insets.left + insets.right
+                if (width > 0) return width - borders
+                var ancestor: java.awt.Container? = parent
+                while (ancestor != null) {
+                    val ancestorInsets = ancestor.insets
+                    if (ancestor.width > 0) {
+                        return ancestor.width - ancestorInsets.left - ancestorInsets.right - borders
+                    }
+                    borders += ancestorInsets.left + ancestorInsets.right
+                    ancestor = ancestor.parent
+                }
+                return 0
+            }
+
+            override fun getPreferredSize(): Dimension {
+                val insets = insets
+                val inner = wrapWidth()
+                // Nothing is sized yet: the natural, unwrapped size is the only answer available.
+                if (inner <= 0) return super.getPreferredSize()
+                // getUI(), not the inherited `ui` field: that one is typed ComponentUI and has no root view.
+                val root = getUI().getRootView(this)
+                root.setSize(inner.toFloat(), 0f)
+                return Dimension(
+                    inner + insets.left + insets.right,
+                    root.getPreferredSpan(View.Y_AXIS).toInt() + insets.top + insets.bottom,
+                )
+            }
+
+            // Otherwise the column hands the pane its leftover vertical space.
+            override fun getMaximumSize(): Dimension = Dimension(Int.MAX_VALUE, preferredSize.height)
+        }.apply {
+            isEditable = false
+            isOpaque = false
+            border = null
+            putClientProperty(JEditorPane.HONOR_DISPLAY_PROPERTIES, true)
+            font = com.intellij.util.ui.UIUtil.getLabelFont()
+        }
 
     /** A theme-aware error color. */
     private fun errorHtml(message: String): String {

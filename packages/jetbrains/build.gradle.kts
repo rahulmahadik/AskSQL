@@ -223,6 +223,11 @@ tasks {
             }
         }
         systemProperty("idea.force.use.core.classloader", "true")
+        // Painting Swing to a PNG needs real font metrics and a window peer: opt in with -PrenderUi=true.
+        if (providers.gradleProperty("renderUi").orNull == "true") {
+            systemProperty("java.awt.headless", "false")
+            systemProperty("renderUi", "true")
+        }
         maxHeapSize = "2g"
     }
 

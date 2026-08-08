@@ -610,7 +610,24 @@ class SqlGuardTest {
             println("LIMITALL allowed=${v.allowed} rule=${v.ruleId} sql=${v.sql.replace("\n", " | ")}")
             if (v.allowed) {
                 assertEquals(sql, 1, Regex("(?i)\\bLIMIT\\b").findAll(v.sql).count())
+                assertTrue("$sql -> ${v.sql}: cap not applied", v.sql.contains("LIMIT 1000"))
+                assertFalse("$sql -> ${v.sql}: still unbounded", Regex("(?i)\\bLIMIT\\s+ALL\\b").containsMatchIn(v.sql))
             }
         }
+    }
+
+    /**
+     * The guard detects `LIMIT ALL` by the parsed row count being an [net.sf.jsqlparser.expression.AllValue].
+     * A JSqlParser upgrade that changes that representation must fail here, not silently downgrade the
+     * clause to "no limit present" and leave the statement uncapped.
+     */
+    @Test fun `JSqlParser still parses LIMIT ALL as an AllValue row count`() {
+        val select = net.sf.jsqlparser.parser.CCJSqlParserUtil.parse("SELECT id FROM users LIMIT ALL")
+            as net.sf.jsqlparser.statement.select.PlainSelect
+        val rowCount = select.limit?.rowCount
+        assertTrue(
+            "LIMIT ALL row count is ${rowCount?.javaClass?.name}, expected AllValue",
+            rowCount is net.sf.jsqlparser.expression.AllValue,
+        )
     }
 }

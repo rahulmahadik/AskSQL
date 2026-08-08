@@ -90,7 +90,15 @@ object Grounding {
         return (aliases + ctes).toList()
     }
 
-    private val PROSE_IDENTIFIER_RE = Regex("""`([^`\s]+)`|"([\w.]+)"|\b([a-z][a-z0-9]*(?:_[a-z0-9]+)+)\b""", RegexOption.IGNORE_CASE)
+    // Java's \s is ASCII-only where JavaScript's is not; these are the extras JS matches.
+    // UNICODE_CHARACTER_CLASS would widen \w below and diverge the other way.
+    private val PROSE_IDENTIFIER_RE = Regex(
+        """`([^`\s\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]+)`|"([\w.]+)"|\b([a-z][a-z0-9]*(?:_[a-z0-9]+)+)\b""",
+        RegexOption.IGNORE_CASE,
+    )
+
+    /** An identifier, optionally schema-qualified. Placeholders, literals and operators do not match. */
+    private val IDENTIFIER_SHAPE = Regex("""[a-z_][a-z0-9_$-]*(?:\.[a-z_][a-z0-9_$-]*)*""", RegexOption.IGNORE_CASE)
 
     /**
      * Identifier-shaped names in a prose answer absent from the catalog - the grounding floor for
@@ -141,6 +149,8 @@ object Grounding {
         val scanned = if (documentStyle) answer.replace(Regex("```[\\s\\S]*?```"), " ") else answer
         for (m in PROSE_IDENTIFIER_RE.findAll(scanned)) {
             if (documentStyle && m.groupValues[2].isNotEmpty()) continue // "shipped" is a value
+            // Backticks wrap anything, so a placeholder or a literal can arrive here.
+            if (m.groupValues[1].isNotEmpty() && !IDENTIFIER_SHAPE.matches(m.groupValues[1])) continue
             val raw = (m.groupValues[1].ifEmpty { m.groupValues[2] }.ifEmpty { m.groupValues[3] }).lowercase()
             if (raw.startsWith("$")) continue // $lookup / $group are operators
             // Backticked SQL vocabulary is not a name claim; a call with parentheses is a function.

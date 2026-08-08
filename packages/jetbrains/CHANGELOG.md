@@ -5,6 +5,43 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-08-09
+
+### Fixed
+- A two-line answer is no longer clipped to one, with the note below it painting over the rest. The
+  text pane reported its height measured at its unwrapped width rather than the width it was given.
+- The **Explain** button comes back after a failure. It disabled itself on click and, if the model
+  call failed, stayed disabled for the rest of that turn.
+- A MongoDB turn no longer says "Writing SQL" or "Finding relevant tables" while it builds a pipeline.
+- Content appended to a turn already on screen is scrolled into view, so an approval bar below the
+  fold is reachable. Scrolling only follows when you are already at the bottom, so it will not pull
+  you away from an earlier turn you are reading.
+- A backticked placeholder such as `?`, a date, or `:param` is no longer reported as a name missing
+  from your schema.
+- A proposed write showed three separate lines saying nothing had run. It shows one.
+- The copy control reports failure instead of showing a tick when the clipboard write is refused.
+
+### Added
+- **A copy control on every answer**, not only on result grids: explanations, schema answers, and
+  errors each copy the model's own text rather than the rendered markup.
+- **A query inside a prose answer renders as a real code block** with syntax highlighting and its own
+  Copy, instead of running together with the sentences around it.
+- **The transcript reads as a conversation.** Your question sits on the right in a tinted bubble,
+  AskSQL answers on the left, and a rule separates one turn from the next.
+- Progress is shown for the states that used to sit blank: preparing a turn, answering from the
+  schema, and correcting a query the database rejected.
+- A MongoDB pipeline's collection name is selectable and travels with Copy, as a
+  `db.getCollection(...).aggregate(...)` call that pastes straight into mongosh.
+- Progress is announced to screen readers where the IDE runtime supports it.
+
+### Changed
+- Connections are released when the project's services are disposed rather than through an
+  experimental platform listener, so cleanup also covers disabling or unloading the plugin. The
+  listener also woke both connection registries on every project close, including in projects where
+  AskSQL was never opened.
+- The guard detects `LIMIT ALL` through JSqlParser's supported API. The two methods it used before
+  are deprecated, and the guard failing to compile on a future parser release is not a small problem.
+
 ## [0.4.2] - 2026-08-09
 
 ### Fixed

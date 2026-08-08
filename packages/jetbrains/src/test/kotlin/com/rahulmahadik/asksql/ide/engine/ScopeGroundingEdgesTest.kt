@@ -152,6 +152,33 @@ class ScopeGroundingEdgesTest {
         }
     }
 
+    @Test
+    fun `a backticked placeholder or literal is not a missing name`() {
+        for (answer in listOf("Bind the id as `?` and pass it yourself.", "Use `2024-01-01` as the cutoff.", "Pass `:customer_id`.")) {
+            val found = Grounding.unknownReferencesInProse(answer, catalog)
+            assertTrue("expected nothing flagged in: $answer, got $found", found.isEmpty())
+        }
+    }
+
+    @Test
+    fun `a backticked name that really is missing is still caught`() {
+        assertTrue(Grounding.unknownReferencesInProse("Add a `customer_history` table.", catalog).contains("customer_history"))
+        assertTrue(Grounding.unknownReferencesInProse("Read `shop.orders` for this.", catalog).isEmpty())
+    }
+
+    /** Backticks are how MySQL quotes identifiers, and a hyphen is legal inside them. */
+    @Test
+    fun `a missing hyphenated name is still caught`() {
+        assertTrue(Grounding.unknownReferencesInProse("Check the `order-history` table.", catalog).contains("order-history"))
+    }
+
+    /** Java's \s is ASCII-only, unlike JavaScript's. */
+    @Test
+    fun `a backticked span with a unicode space matches core`() {
+        val found = Grounding.unknownReferencesInProse("see `orders summary_view` for details", catalog)
+        assertTrue("expected summary_view in $found", found.contains("summary_view"))
+    }
+
     /** The other half of the contract: the stoplist must not have swallowed the floor's real job. */
     @Test
     fun `invented names sitting among SQL vocabulary are still caught`() {
