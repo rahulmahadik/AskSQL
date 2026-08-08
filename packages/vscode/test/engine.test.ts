@@ -69,8 +69,13 @@ vi.mock('node:sqlite', () => ({
 const { fakeMongoEngine } = vi.hoisted(() => ({
   fakeMongoEngine: { ask: vi.fn(), execute: vi.fn(), invalidateCatalog: vi.fn() },
 }));
-vi.mock('@asksql/core/mongo', () => ({ createMongoAskSql: vi.fn(() => fakeMongoEngine) }));
+// Only the factory is faked; resolveMongoGuardPolicy stays real.
+vi.mock('@asksql/core/mongo', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@asksql/core/mongo')>()),
+  createMongoAskSql: vi.fn(() => fakeMongoEngine),
+}));
 
+import { createMongoAskSql } from '@asksql/core/mongo';
 import {
   resetVscodeMock,
   setInspect,
@@ -453,6 +458,23 @@ describe('EngineManager mongo engine path', () => {
     const mgr = new EngineManager(secrets as never);
     const lm = { id: 'copilot-1', sendRequest: vi.fn() } as never;
     expect(await mgr.forChatModelMongo(lm, 'mo')).toBe(fakeMongoEngine);
+  });
+
+  // The maxRows setting is a hand-edited number.
+  it.each([
+    { setting: 12.5, expected: 12 },
+    { setting: 200_000, expected: 100_000 },
+  ])('clamps a maxRows of $setting to $expected in the mongo engine policy', async ({ setting, expected }) => {
+    vi.mocked(createMongoAskSql).mockClear();
+    const secrets = createSecretStorage();
+    await storeConnectionString(secrets as never, 'mo', 'mongodb://h/db', 'user');
+    setInspect('connections', { global: [{ id: 'mo', name: 'M', engine: 'mongodb', database: 'shop' }] });
+    setConfig({ provider: 'ollama', model: 'qwen', maxRows: setting });
+    const mgr = new EngineManager(secrets as never);
+    await mgr.forConfiguredModelMongo('mo');
+    expect(vi.mocked(createMongoAskSql)).toHaveBeenCalledWith(
+      expect.objectContaining({ policy: expect.objectContaining({ maxRows: expected }) }),
+    );
   });
 
   it('invalidateCatalogs clears mongo engines too', async () => {

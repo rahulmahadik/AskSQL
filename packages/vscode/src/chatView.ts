@@ -9,6 +9,7 @@ import * as vscode from 'vscode';
 import { randomBytes } from 'node:crypto';
 import {
   AskSqlError,
+  resolveGuardPolicy,
   type AskSqlEngine,
   type GuardVerdict,
   type ResultSet,
@@ -175,21 +176,27 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }
       // The SQL travels WITH the click, so an old turn's button opens that turn's query.
       if (m.type === 'openSql') void vscode.commands.executeCommand('asksql.openSqlInEditor', String(m.sql ?? ''));
+      // The resultId is echoed on the failure, so the banner lands in the right turn.
       if (m.type === 'exportCsv') {
-        const res = this.results.get(String(m.resultId ?? ''));
+        const resultId = String(m.resultId ?? '');
+        const res = this.results.get(resultId);
         if (res) void vscode.commands.executeCommand('asksql.exportCsv', res);
-        else this.post({ type: 'error', message: RESULT_GONE });
+        else this.post({ type: 'error', message: RESULT_GONE, resultId });
       }
       if (m.type === 'copy') {
-        const res = this.results.get(String(m.resultId ?? ''));
-        if (res) void this.copyResult(res, String(m.resultId ?? ''));
-        else this.post({ type: 'error', message: RESULT_GONE });
+        const resultId = String(m.resultId ?? '');
+        const res = this.results.get(resultId);
+        if (res) void this.copyResult(res, resultId);
+        else this.post({ type: 'error', message: RESULT_GONE, resultId });
       }
       if (m.type === 'openResult') {
-        const res = this.results.get(String(m.resultId ?? ''));
+        const resultId = String(m.resultId ?? '');
+        const res = this.results.get(resultId);
         if (res) void this.openResultInEditor(res);
-        else this.post({ type: 'error', message: RESULT_GONE });
+        else this.post({ type: 'error', message: RESULT_GONE, resultId });
       }
+      // A block the panel already rendered (SQL, an explanation).
+      if (m.type === 'copyText' && typeof m.text === 'string') void this.copyText(m.text, String(m.copyId ?? ''));
       if (m.type === 'plan')
         void this.plan(
           String(m.sql ?? ''),
@@ -639,6 +646,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         }
       }
 
+      // Resolving the engine can take a moment, before the first stage arrives.
+      this.post({ type: 'progress', label: 'Getting ready' });
       const engine = await this.engineFor(conn.id);
       let answer;
       try {
@@ -652,6 +661,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             .map((h) => ({ question: h.question, sql: h.sql })),
           signal: ac.signal,
           onEvent: (e) => {
+            // A cancelled turn no longer owns the log.
+            if (ac.signal.aborted) return;
             if (e.type === 'stage') this.post({ type: 'progress', label: STAGE_LABEL[e.stage] ?? e.stage });
             else if (e.type === 'warning') turnWarnings.push(e.message);
           },
@@ -709,6 +720,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         connectionId: conn.id,
         explanation: answer.explanation ?? '',
         autoLimited: answer.guard.autoLimited,
+        // The cap the engine was built with: the core policy floors and caps, so the raw setting can differ.
+        rowLimit: resolveGuardPolicy({ maxRows: cfg.get<number>('maxRows') ?? 100 }).maxRows,
         placement: approval ? 'before' : (cfg.get<string>('sqlDisplay') ?? 'after'),
         needsApproval: approval,
         ...(approvalId ? { approvalId } : {}),
@@ -829,7 +842,19 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       this.post({ type: 'copied', resultId });
     } catch (err) {
       log.error('copy to clipboard failed', err);
-      this.post({ type: 'error', message: 'Could not copy the result to the clipboard.' });
+      this.post({ type: 'error', message: 'Could not copy the result to the clipboard.', resultId });
+    }
+  }
+
+  /** Copy a rendered block of text, acked with the id of the button that asked. */
+  private async copyText(text: string, copyId: string): Promise<void> {
+    try {
+      await vscode.env.clipboard.writeText(text);
+      this.post({ type: 'copied', copyId });
+    } catch (err) {
+      log.error('copy to clipboard failed', err);
+      // Correlated: an uncorrelated error tears down whichever turn is live.
+      this.post({ type: 'error', message: 'Could not copy to the clipboard.', copyId });
     }
   }
 
