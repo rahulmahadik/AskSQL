@@ -5,6 +5,16 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-08-09
+
+### Fixed
+- **Your connections and settings survive closing the IDE.** Every field in the plugin's saved state
+  was declared in a way IntelliJ's serializer silently drops, so connections, provider, model, base
+  URL, row caps, custom instructions and the glossary were all written as empty and came back empty
+  on the next start. Nothing warned; the settings simply reverted every time.
+- **"Require explicit approval before running generated SQL" stays on.** It was part of the same
+  state, so a user who switched it on lost the approval step at the next restart without being told.
+
 ## [0.4.1] - 2026-08-06
 
 ### Fixed

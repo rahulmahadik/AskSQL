@@ -10,8 +10,8 @@ private const val CURRENT_STATE_VERSION = 1
 
 /** Project-scoped connection descriptors only, never a password or API key (see [com.rahulmahadik.asksql.ide.settings.AskSqlSecrets]). */
 data class AskSqlProjectState(
-    @JvmField val stateVersion: Int = CURRENT_STATE_VERSION,
-    @JvmField val connections: List<ConnectionState> = emptyList(),
+    @JvmField var stateVersion: Int = CURRENT_STATE_VERSION,
+    @JvmField var connections: List<ConnectionState> = emptyList(),
 )
 
 @Service(Service.Level.PROJECT)
