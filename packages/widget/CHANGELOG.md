@@ -1,5 +1,13 @@
 # @asksql/widget
 
+## 0.2.6
+
+### Patch Changes
+
+- Updated dependencies [3e7cb1b]
+- Updated dependencies [3e7cb1b]
+  - @asksql/react@0.3.0
+
 ## 0.2.5
 
 ### Patch Changes

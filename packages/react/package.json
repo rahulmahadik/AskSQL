@@ -1,6 +1,6 @@
 {
   "name": "@asksql/react",
-  "version": "0.2.3",
+  "version": "0.3.0",
   "description": "React UI for AskSQL: <AskSqlChat/> full-page chat and <AskSqlBubble/> floating chat-head, plus headless hooks. Light/dark, loading/empty/error states built in.",
   "type": "module",
   "main": "./dist/index.js",
@@ -24,7 +24,7 @@
     "react-dom": ">=18"
   },
   "devDependencies": {
-    "@asksql/core": "workspace:>=0.6.0",
+    "@asksql/core": "workspace:>=0.6.1",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "react": "^19.2.7",

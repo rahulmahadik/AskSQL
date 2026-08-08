@@ -1,6 +1,6 @@
 {
   "name": "@asksql/sqlite",
-  "version": "0.3.2",
+  "version": "0.4.0",
   "description": "SQLite connector for AskSQL. Works with better-sqlite3 or the built-in node:sqlite; full PRAGMA-based introspection.",
   "type": "module",
   "main": "./dist/index.js",
@@ -28,7 +28,7 @@
     }
   },
   "devDependencies": {
-    "@asksql/core": "workspace:>=0.6.0"
+    "@asksql/core": "workspace:>=0.6.1"
   },
   "license": "Apache-2.0",
   "engines": {
