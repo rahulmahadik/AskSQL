@@ -18,13 +18,12 @@
   "scripts": {
     "build": "tsc -b"
   },
-  "dependencies": {
-    "@asksql/core": "workspace:^"
-  },
   "peerDependencies": {
+    "@asksql/core": "workspace:>=0.6.0",
     "mysql2": ">=3.6"
   },
   "devDependencies": {
+    "@asksql/core": "workspace:>=0.6.0",
     "mysql2": "^3.22.6"
   },
   "license": "Apache-2.0",

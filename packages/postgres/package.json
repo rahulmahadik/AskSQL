@@ -18,13 +18,12 @@
   "scripts": {
     "build": "tsc -b"
   },
-  "dependencies": {
-    "@asksql/core": "workspace:^"
-  },
   "peerDependencies": {
+    "@asksql/core": "workspace:>=0.6.0",
     "pg": ">=8.11"
   },
   "devDependencies": {
+    "@asksql/core": "workspace:>=0.6.0",
     "@types/pg": "^8.20.0",
     "pg": "^8.22.0"
   },

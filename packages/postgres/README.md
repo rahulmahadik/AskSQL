@@ -8,6 +8,9 @@ peer dependency, so you install it yourself.
 npm i @asksql/core @asksql/postgres pg
 ```
 
+`@asksql/core` is a peer dependency, and yarn (or npm with `legacy-peer-deps`) will not install it
+for you, so name it explicitly as above.
+
 ```ts
 import { PostgresConnector } from '@asksql/postgres';
 

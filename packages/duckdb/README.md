@@ -1,11 +1,10 @@
 # @asksql/duckdb
 
 The DuckDB connector for [AskSQL](https://github.com/rahulmahadik/AskSQL): local analytics over
-CSV / JSON / NDJSON / Parquet / Excel files or a DuckDB database file, with no backend. Two
-entry points share one implementation:
+CSV / JSON / NDJSON / Parquet / Excel files, a portable `.sql` dump (CREATE TABLE + INSERT), or a
+DuckDB database file, with no backend. Two entry points share one implementation:
 
-- `@asksql/duckdb` (Node), on `@duckdb/node-api`. Also loads a portable `.sql` dump
-  (CREATE TABLE + INSERT).
+- `@asksql/duckdb` (Node), on `@duckdb/node-api`.
 - `@asksql/duckdb/browser`, on `@duckdb/duckdb-wasm`, in a Web Worker with optional
   OPFS persistence. Data never leaves the tab.
 
@@ -15,6 +14,9 @@ Both drivers are optional peer dependencies; install the one you use.
 npm i @asksql/core @asksql/duckdb @duckdb/node-api     # Node
 npm i @asksql/core @asksql/duckdb @duckdb/duckdb-wasm  # browser
 ```
+
+`@asksql/core` is a peer dependency, and yarn (or npm with `legacy-peer-deps`) will not install it
+for you, so name it explicitly as above.
 
 ## Node
 

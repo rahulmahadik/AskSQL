@@ -18,14 +18,13 @@
   "scripts": {
     "build": "tsc -b"
   },
-  "dependencies": {
-    "@asksql/core": "workspace:^"
-  },
   "peerDependencies": {
+    "@asksql/core": "workspace:>=0.6.0",
     "react": ">=18",
     "react-dom": ">=18"
   },
   "devDependencies": {
+    "@asksql/core": "workspace:>=0.6.0",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "react": "^19.2.7",

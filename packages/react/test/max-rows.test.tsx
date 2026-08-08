@@ -52,6 +52,21 @@ describe('the row cap reaches the transport', () => {
     expect(seen[0]!.maxRows).toBe(42);
   });
 
+  it('picks up a raised cap on re-render, without waiting for the transport to change identity', async () => {
+    const { transport, seen } = recordingTransport();
+    const { result, rerender } = renderHook(({ maxRows }) => useAskSql({ transport, connectionId: 'db', maxRows }), {
+      initialProps: { maxRows: 100 },
+    });
+
+    rerender({ maxRows: 5000 });
+    await act(async () => {
+      await result.current.ask('how many orders');
+    });
+
+    await waitFor(() => expect(seen.length).toBeGreaterThan(0));
+    expect(seen[0]!.maxRows).toBe(5000);
+  });
+
   it('sends nothing when none is configured, so the server keeps its own cap', async () => {
     const { transport, seen } = recordingTransport();
     const { result } = renderHook(() => useAskSql({ transport, connectionId: 'db' }));

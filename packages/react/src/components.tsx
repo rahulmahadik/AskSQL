@@ -30,7 +30,19 @@ function inlineMarkdown(line: string): JSX.Element[] {
 }
 
 /** Render explanation markdown: drop a redundant leading "Explanation:", bullets for "- "/"* " lines, ```fenced``` blocks as code. */
-function Markdown({ text, className }: { text: string; className?: string }): JSX.Element {
+/** The sentence the engine appends to a proposed write. */
+const READ_ONLY_LINE_MARKER = 'AskSQL is read-only';
+
+function Markdown({
+  text,
+  className,
+  renderCode,
+}: {
+  text: string;
+  className?: string;
+  /** Renders a fenced block; returning null drops the fence. Defaults to a plain code <pre>. */
+  renderCode?: (code: string) => JSX.Element | null;
+}): JSX.Element {
   const body = text.replace(/^\s*(\*\*|__)?\s*Explanation\s*(\*\*|__)?\s*:\s*/iu, '');
   const lines = body.split('\n');
   const blocks: JSX.Element[] = [];
@@ -43,14 +55,19 @@ function Markdown({ text, className }: { text: string; className?: string }): JS
       i++;
       while (i < lines.length && !/^\s*```/u.test(lines[i]!)) code.push(lines[i++]!);
       i++; // skip the closing fence
-      blocks.push(
-        <pre key={key++} className="asksql-sqlcode">
-          {code.join('\n')}
-        </pre>,
-      );
+      const fence = code.join('\n');
+      const rendered = renderCode ? renderCode(fence) : <pre className="asksql-sqlcode">{fence}</pre>;
+      // Wrapped so the key stays on this block whatever the renderer returns.
+      if (rendered !== null) blocks.push(<div key={key}>{rendered}</div>);
+      key++;
       continue;
     }
     const line = lines[i++]!;
+    // An empty <div> collapses, so a blank line carries its own gap.
+    if (line.trim() === '') {
+      blocks.push(<div key={key++} className="asksql-md-blank" />);
+      continue;
+    }
     const bullet = /^\s*[-*]\s+/u.test(line);
     blocks.push(
       <div key={key++} className={bullet ? 'asksql-md-bullet' : undefined}>
@@ -59,6 +76,40 @@ function Markdown({ text, className }: { text: string; className?: string }): JS
     );
   }
   return <div className={className}>{blocks}</div>;
+}
+
+/** Copies to the clipboard, acking only once the write resolved. A function `text` is built on click. */
+function CopyButton({ text, className }: { text: string | (() => string); className?: string }): JSX.Element {
+  const [state, setState] = useState<'idle' | 'copied' | 'failed'>('idle');
+  const settle = (next: 'copied' | 'failed') => {
+    setState(next);
+    setTimeout(() => setState('idle'), 1200);
+  };
+  return (
+    <button
+      className={className ? `asksql-btn ${className}` : 'asksql-btn'}
+      style={{ padding: '2px 8px', fontSize: 12 }}
+      onClick={() => {
+        // navigator.clipboard is absent in an insecure context, and writeText can reject.
+        let write: Promise<void> | undefined;
+        try {
+          write = navigator.clipboard?.writeText(typeof text === 'function' ? text() : text);
+        } catch {
+          write = undefined;
+        }
+        if (!write) {
+          settle('failed');
+          return;
+        }
+        write.then(
+          () => settle('copied'),
+          () => settle('failed'),
+        );
+      }}
+    >
+      {state === 'copied' ? 'Copied' : state === 'failed' ? 'Copy failed' : 'Copy'}
+    </button>
+  );
 }
 
 export interface AskSqlChatProps {
@@ -128,8 +179,16 @@ export function AskSqlChat(props: AskSqlChatProps): JSX.Element {
   const activeCaps = connections.find((c) => c.id === (activeConn ?? props.connectionId))?.capabilities;
   const canPlan = activeCaps?.supportsExplain ?? true;
 
+  // A turn is patched many times per question; only a new turn always follows.
+  const lastTurnId = useRef<string | undefined>(undefined);
   useEffect(() => {
-    threadRef.current?.scrollTo({ top: threadRef.current.scrollHeight });
+    const el = threadRef.current;
+    if (!el) return;
+    const newest = turns[turns.length - 1]?.id;
+    const isNewTurn = newest !== lastTurnId.current;
+    lastTurnId.current = newest;
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    if (isNewTurn || nearBottom) el.scrollTo({ top: el.scrollHeight });
   }, [turns]);
 
   // A turn's SQL was written for the schema of the connection that produced it, and Run/Explain
@@ -229,7 +288,7 @@ export function AskSqlChat(props: AskSqlChatProps): JSX.Element {
         />
         {busy ? (
           <button className="asksql-btn" onClick={cancel} aria-label="Cancel">
-            Stop
+            Cancel
           </button>
         ) : (
           <button className="asksql-btn asksql-btn-primary" onClick={submit} disabled={!text.trim()} aria-label="Send">
@@ -323,7 +382,12 @@ function TurnView({
       ) : (
         <SqlBlock sql={turn.sql} />
       )}
-      {turn.explanation && !editing && <Markdown className="asksql-explain" text={turn.explanation} />}
+      {turn.explanation && !editing && (
+        <div className="asksql-prose">
+          <Markdown className="asksql-explain" text={turn.explanation} />
+          <CopyButton className="asksql-prose-copy" text={turn.explanation} />
+        </div>
+      )}
       {turn.autoLimited && (
         <div className="asksql-warn">
           A row limit was applied automatically. Raise the row cap in settings if you need more; an export writes the
@@ -359,6 +423,7 @@ function TurnView({
         <div className="asksql-sqlblock">
           <div className="asksql-sqlhead">
             <span>Query plan</span>
+            <CopyButton text={turn.plan} />
           </div>
           <pre className="asksql-sqlcode">{turn.plan}</pre>
         </div>
@@ -386,6 +451,8 @@ function TurnView({
             {stageLabel(turn.stage)}
           </div>
         )}
+        {/* Never Markdown: mid-stream output has unbalanced fences and reasoning blocks. */}
+        {turn.streamText && <pre className="asksql-stream">{turn.streamText}</pre>}
         {placement === 'after' ? (
           <>
             {resultSection}
@@ -399,17 +466,29 @@ function TurnView({
         )}
         {turn.schemaAnswer && (
           <>
-            <Markdown className="asksql-explain" text={turn.schemaAnswer.answer} />
+            <div className="asksql-prose">
+              <Markdown
+                className="asksql-explain"
+                text={turn.schemaAnswer.answer}
+                // The proposal is already rendered above as the turn's SqlBlock.
+                renderCode={(code) =>
+                  code.trim() === turn.schemaAnswer!.proposedSql?.trim() ? null : <SqlBlock sql={code} />
+                }
+              />
+              <CopyButton className="asksql-prose-copy" text={turn.schemaAnswer.answer} />
+            </div>
             {turn.schemaAnswer.unknownReferences.length > 0 && (
               <div className="asksql-warn">
                 {turn.schemaAnswer.isSchemaChange
-                  ? `Proposed names not in your current schema: ${turn.schemaAnswer.unknownReferences.join(', ')}. AskSQL is read-only and ran nothing.`
+                  ? `Proposed names not in your current schema: ${turn.schemaAnswer.unknownReferences.join(', ')}.`
                   : `Heads up: this mentioned names not in your schema (${turn.schemaAnswer.unknownReferences.join(', ')}), so treat those with caution.`}
               </div>
             )}
-            <div className="asksql-note">
-              Generated from your schema by the model - no query was run, so treat it as guidance.
-            </div>
+            {!turn.schemaAnswer.answer.includes(READ_ONLY_LINE_MARKER) && (
+              <div className="asksql-note">
+                Generated from your schema by the model - no query was run, so treat it as guidance.
+              </div>
+            )}
           </>
         )}
         {turn.error && (
@@ -441,7 +520,7 @@ function TurnView({
             )}
           </div>
         )}
-        {turn.phase === 'stopped' && <div className="asksql-note">Stopped.</div>}
+        {turn.phase === 'stopped' && <div className="asksql-note">Cancelled.</div>}
       </div>
     </div>
   );
@@ -453,36 +532,33 @@ function stageLabel(stage?: string): string {
       return 'Reading schema...';
     case 'prune':
       return 'Finding relevant tables...';
+    case 'prompt':
+      return 'Building the prompt...';
     case 'llm':
       return 'Writing SQL...';
+    case 'extract':
+      return 'Reading the reply...';
     case 'repair':
-      return 'Refining SQL...';
+      return 'Correcting the SQL...';
     case 'guard':
       return 'Checking safety...';
+    case 'execute':
+      return 'Running the query...';
+    case 'schema_answer':
+      return 'Answering from your schema...';
     case 'done':
-      return 'Ready';
+      return 'Done';
     default:
       return 'Thinking...';
   }
 }
 
 export function SqlBlock({ sql }: { sql: string }): JSX.Element {
-  const [copied, setCopied] = useState(false);
   return (
     <div className="asksql-sqlblock">
       <div className="asksql-sqlhead">
         <span>SQL</span>
-        <button
-          className="asksql-btn"
-          style={{ padding: '2px 8px', fontSize: 12 }}
-          onClick={() => {
-            void navigator.clipboard?.writeText(sql);
-            setCopied(true);
-            setTimeout(() => setCopied(false), 1200);
-          }}
-        >
-          {copied ? 'Copied' : 'Copy'}
-        </button>
+        <CopyButton text={sql} />
       </div>
       <pre className="asksql-sqlcode">
         <code>{sql}</code>
@@ -494,16 +570,24 @@ export function SqlBlock({ sql }: { sql: string }): JSX.Element {
 export function ResultTable({ result }: { result: ResultSet }): JSX.Element {
   const chartable = useMemo(() => isChartable(result), [result]);
   const [view, setView] = useState<'table' | 'chart'>('table');
+  const [exportState, setExportState] = useState<'idle' | 'done' | 'failed'>('idle');
   const download = () => {
-    // Built on click only: rendering the whole result set to CSV up front charges every
-    // answer for an export most users never ask for.
-    const blob = new Blob([toCsv(result.columns, result.rows)], { type: 'text/csv' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'asksql-results.csv';
-    a.click();
-    URL.revokeObjectURL(url);
+    try {
+      // Built on click only: rendering the whole result set to CSV up front charges every
+      // answer for an export most users never ask for.
+      const blob = new Blob([toCsv(result.columns, result.rows)], { type: 'text/csv' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'asksql-results.csv';
+      a.click();
+      // Revoked on a later tick: the browser has not read the blob yet when the click returns.
+      setTimeout(() => URL.revokeObjectURL(url), 30_000);
+      setExportState('done');
+    } catch {
+      setExportState('failed');
+    }
+    setTimeout(() => setExportState('idle'), 1600);
   };
 
   if (result.rowCount === 0) {
@@ -533,7 +617,8 @@ export function ResultTable({ result }: { result: ResultSet }): JSX.Element {
                   {row.map((cell, ci) => {
                     const d = formatCell(cell, result.columns[ci]);
                     return (
-                      <td key={ci} className={`asksql-cell-${d.kind}`} title={d.title}>
+                      // A cell wider than the column is clipped, so the full value lives in the tooltip.
+                      <td key={ci} className={`asksql-cell-${d.kind}`} title={d.title ?? d.text}>
                         {d.text}
                       </td>
                     );
@@ -559,8 +644,9 @@ export function ResultTable({ result }: { result: ResultSet }): JSX.Element {
             {view === 'table' ? 'Chart' : 'Table'}
           </button>
         )}
+        <CopyButton text={() => toCsv(result.columns, result.rows)} />
         <button className="asksql-btn" style={{ padding: '2px 8px', fontSize: 12 }} onClick={download}>
-          Export CSV
+          {exportState === 'done' ? 'Exported' : exportState === 'failed' ? 'Export failed' : 'Export CSV'}
         </button>
         {result.warnings.map((w, i) => (
           <span key={i} className="asksql-warn">

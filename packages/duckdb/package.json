@@ -22,10 +22,8 @@
   "scripts": {
     "build": "tsc -b"
   },
-  "dependencies": {
-    "@asksql/core": "workspace:^"
-  },
   "peerDependencies": {
+    "@asksql/core": "workspace:>=0.6.0",
     "@duckdb/duckdb-wasm": ">=1.28",
     "@duckdb/node-api": ">=1.4.0-r.1"
   },
@@ -38,6 +36,7 @@
     }
   },
   "devDependencies": {
+    "@asksql/core": "workspace:>=0.6.0",
     "@duckdb/duckdb-wasm": "^1.32.0",
     "@duckdb/node-api": "1.5.4-r.1"
   },

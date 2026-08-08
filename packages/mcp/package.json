@@ -18,10 +18,8 @@
   "scripts": {
     "build": "tsc -b"
   },
-  "dependencies": {
-    "@asksql/core": "workspace:^"
-  },
   "peerDependencies": {
+    "@asksql/core": "workspace:>=0.6.0",
     "@modelcontextprotocol/sdk": ">=1"
   },
   "peerDependenciesMeta": {
@@ -30,6 +28,7 @@
     }
   },
   "devDependencies": {
+    "@asksql/core": "workspace:>=0.6.0",
     "@modelcontextprotocol/sdk": "^1.29.0"
   },
   "license": "Apache-2.0",

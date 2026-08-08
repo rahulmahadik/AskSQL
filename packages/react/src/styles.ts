@@ -35,10 +35,16 @@ export const ASKSQL_CSS = `
 .asksql-turn { display: flex; flex-direction: column; gap: 8px; }
 .asksql-role { align-self: flex-end; font-size: 11px; font-weight: 600; color: var(--aq-muted); }
 .asksql-role-assistant { align-self: flex-start; }
+/* The question is shown verbatim: its own line breaks stay. */
 .asksql-q { align-self: flex-end; background: var(--aq-accent); color: var(--aq-accent-fg);
-  padding: 8px 12px; border-radius: 12px 12px 2px 12px; max-width: 85%; }
+  padding: 8px 12px; border-radius: 12px 12px 2px 12px; max-width: 85%;
+  white-space: pre-wrap; overflow-wrap: anywhere; }
 .asksql-a { align-self: flex-start; max-width: 100%; width: 100%; }
 .asksql-stage { color: var(--aq-muted); font-size: 12px; display: flex; align-items: center; gap: 6px; }
+/* Raw model output while a stage runs, capped so it never pushes the answer off screen. */
+.asksql-stream { margin: 4px 0; color: var(--aq-muted); opacity: .8;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; line-height: 1.4;
+  white-space: pre-wrap; overflow-wrap: anywhere; max-height: 120px; overflow: hidden; }
 .asksql-spinner { width: 12px; height: 12px; border: 2px solid var(--aq-border);
   border-top-color: var(--aq-accent); border-radius: 50%; animation: aq-spin.7s linear infinite; }
 @keyframes aq-spin { to { transform: rotate(360deg); } }
@@ -59,6 +65,10 @@ export const ASKSQL_CSS = `
 .asksql-explain code { font-family: ui-monospace, monospace; font-size: 0.92em; background: var(--aq-code-bg, rgba(127,127,127,0.12)); border-radius: 3px; padding: 0 3px; }
 .asksql-md-bullet { padding-left: 1em; text-indent: -0.75em; }
 .asksql-md-bullet::before { content: "\\2022  "; }
+/* An empty line collapses, so the blank carries the paragraph gap. */
+.asksql-md-blank { height: 0.7em; }
+.asksql-prose { display: flex; flex-direction: column; }
+.asksql-prose-copy { align-self: flex-end; margin-top: 4px; }
 .asksql-warn { color: var(--aq-warn); font-size: 12px; }
 .asksql-note { color: var(--aq-muted); font-size: 12px; margin-top: 4px; opacity: 0.85; }
 .asksql-error { color: var(--aq-danger); font-size: 13px; padding: 8px 12px;

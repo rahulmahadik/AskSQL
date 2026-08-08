@@ -10,6 +10,9 @@ install it yourself.
 npm i @asksql/core @asksql/mongodb mongodb
 ```
 
+`@asksql/core` is a peer dependency, and yarn (or npm with `legacy-peer-deps`) will not install it
+for you, so name it explicitly as above.
+
 Requires Node 20+ and mongodb 6.0 or newer.
 
 ```ts
