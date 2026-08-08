@@ -139,6 +139,32 @@ describe('the grounding floor is not disarmed by the English word "with"', () =>
   });
 });
 
+describe('backticks wrap more than identifiers', () => {
+  it('does not report a bound-parameter placeholder as a missing name', () => {
+    const answer = 'Bind the id as `?` and pass it yourself.';
+    expect(unknownReferencesInProse(answer, CATALOG)).toEqual([]);
+  });
+
+  it('does not report a backticked literal or operator as a missing name', () => {
+    for (const answer of ['Use `2024-01-01` as the cutoff.', 'Compare with `>=` on the date.', 'Pass `:customer_id`.']) {
+      expect(unknownReferencesInProse(answer, CATALOG)).toEqual([]);
+    }
+  });
+
+  it('still reports a backticked name that really is missing', () => {
+    expect(unknownReferencesInProse('Add a `customer_history` table.', CATALOG)).toContain('customer_history');
+  });
+
+  it('still accepts a backticked qualified name that exists', () => {
+    expect(unknownReferencesInProse('Read `shop.orders` for this.', CATALOG)).toEqual([]);
+  });
+
+  // Backticks are how MySQL quotes identifiers, and a hyphen is legal inside them.
+  it('still reports a missing hyphenated name', () => {
+    expect(unknownReferencesInProse('Check the `order-history` table.', CATALOG)).toContain('order-history');
+  });
+});
+
 describe('SQL vocabulary in an answer is not an invented name', () => {
   // An answer that sets keywords in backticks - the normal way to write one - reported them as
   // invented names, costing a repair round-trip and marking it ungrounded.

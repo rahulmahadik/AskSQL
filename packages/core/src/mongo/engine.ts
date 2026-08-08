@@ -37,9 +37,9 @@ import type {
   SchemaCatalog,
 } from '../types.js';
 import {
-  DEFAULT_MONGO_GUARD_POLICY,
   guardPipeline,
   parsePipeline,
+  resolveMongoGuardPolicy,
   type MongoGuardPolicy,
   type MongoGuardVerdict,
 } from './guard.js';
@@ -204,7 +204,8 @@ function isNoOpPipeline(pipelineJson: string): boolean {
 }
 
 export function createMongoAskSql(config: MongoAskConfig): MongoAskEngine {
-  const policy: MongoGuardPolicy = { ...DEFAULT_MONGO_GUARD_POLICY, ...config.policy };
+  // The prompt, the guard and the warning text all name one row cap.
+  const policy: MongoGuardPolicy = resolveMongoGuardPolicy(config.policy);
 
   let cached: { catalog: SchemaCatalog; at: number; ttl: number } | null = null;
   let inflight: Promise<SchemaCatalog> | null = null;

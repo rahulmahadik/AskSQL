@@ -231,6 +231,9 @@ export interface GroundingOptions {
   readonly documentStyle?: boolean;
 }
 
+/** An identifier, optionally schema-qualified. Placeholders, literals and operators do not match. */
+const IDENTIFIER_SHAPE = /^[a-z_][a-z0-9_$-]*(?:\.[a-z_][a-z0-9_$-]*)*$/i;
+
 export function unknownReferencesInProse(
   answer: string,
   catalog: SchemaCatalog,
@@ -254,6 +257,8 @@ export function unknownReferencesInProse(
   let m: RegExpExecArray | null;
   while ((m = re.exec(scanned)) !== null) {
     if (opts.documentStyle && m[2]) continue; // "shipped" is a value, not an identifier
+    // Backticks wrap anything, so a placeholder or a literal can arrive here.
+    if (m[1] !== undefined && !IDENTIFIER_SHAPE.test(m[1])) continue;
     const raw = (m[1] ?? m[2] ?? m[3] ?? '').toLowerCase();
     if (raw.startsWith('$')) continue; // $lookup / $group are operators
     // Backticked SQL vocabulary is not a name claim; a call with parentheses is a function.

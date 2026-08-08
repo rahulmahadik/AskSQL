@@ -28,7 +28,8 @@ const BUDGETS: Record<string, number> = {
   // identifier quoting, 63->65 routing words disambiguated from identifiers ("the archive table",
   // "the best selling products", "the prompts table").
   core: 65,
-  react: 20,
+  // 20 -> 23: copy controls, streamed-token progress, cell tooltips, export feedback, result-grid copy.
+  react: 23,
   // 12 -> 13: the CSRF/Host gate every adapter inherits, client-path confinement for
   // file engines, and the link-local check covering hex, octal and IPv4-mapped forms.
   server: 13,
