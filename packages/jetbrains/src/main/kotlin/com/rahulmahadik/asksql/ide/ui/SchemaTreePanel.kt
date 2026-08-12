@@ -52,7 +52,7 @@ class SchemaTreePanel(private val project: Project) : Disposable {
     }
 
     /** Carries the table so the row can act on it; the label is what the tree renders. */
-    private class TableNode(val table: TableInfo, private val label: String) {
+    private class TableNode(val table: TableInfo, val connectionId: String, private val label: String) {
         override fun toString() = label
     }
 
@@ -74,35 +74,48 @@ class SchemaTreePanel(private val project: Project) : Disposable {
                 tree.selectionPath = path
                 when (val info = node.userObject) {
                     is ConnectionNode -> showConnectionMenu(info.descriptor, e)
-                    is TableNode -> showTableMenu(info.table, e)
+                    is TableNode -> showTableMenu(info.table, info.connectionId, e)
                     else -> return
                 }
             }
         })
     }
 
-    private fun showTableMenu(table: TableInfo, e: java.awt.event.MouseEvent) {
+    private fun showTableMenu(table: TableInfo, connectionId: String, e: java.awt.event.MouseEvent) {
         val menu = javax.swing.JPopupMenu()
-        menu.add(javax.swing.JMenuItem("Ask About This Table").apply { addActionListener { askAbout(table) } })
+        menu.add(javax.swing.JMenuItem("Ask About This Table").apply { addActionListener { askAbout(table, connectionId) } })
         menu.show(tree, e.x, e.y)
     }
 
     /** Seeds the chat with a question about this table, the same handoff Ask About Selection uses. */
-    private fun askAbout(table: TableInfo) {
+    private fun askAbout(table: TableInfo, connectionId: String) {
         val name = table.schema?.let { "$it.${table.name}" } ?: table.name
-        PendingQuestion.set(project, "Show me 10 rows from $name")
+        seedQuestion("Show me 10 rows from $name", connectionId)
+    }
+
+    /** The chat answers against its own selection, so the tree points it at the node clicked. */
+    private fun seedQuestion(question: String, connectionId: String) {
+        PendingQuestion.set(project, question)
         val toolWindow = com.intellij.openapi.wm.ToolWindowManager.getInstance(project).getToolWindow("AskSQL") ?: return
         val chatContent = toolWindow.contentManager.contents
             .firstOrNull { it.getUserData(AskSqlToolWindowFactory.CHAT_PANEL_KEY) != null }
         toolWindow.show()
         chatContent?.let { content ->
             toolWindow.contentManager.setSelectedContent(content)
-            content.getUserData(AskSqlToolWindowFactory.CHAT_PANEL_KEY)?.consumePendingQuestion()
+            val chat = content.getUserData(AskSqlToolWindowFactory.CHAT_PANEL_KEY)
+            chat?.selectConnection(connectionId)
+            chat?.consumePendingQuestion()
         }
     }
 
     private fun showConnectionMenu(descriptor: ConnectionDescriptor, e: java.awt.event.MouseEvent) {
         val menu = javax.swing.JPopupMenu()
+        menu.add(
+            javax.swing.JMenuItem("Describe This Database").apply {
+                addActionListener { describeDatabase(descriptor) }
+            },
+        )
+        menu.addSeparator()
         menu.add(
             javax.swing.JMenuItem("Refresh Schema").apply {
                 addActionListener { reload(forceRefresh = true, onlyConnectionId = descriptor.id) }
@@ -112,6 +125,14 @@ class SchemaTreePanel(private val project: Project) : Disposable {
         menu.addSeparator()
         menu.add(javax.swing.JMenuItem("Delete Connection…").apply { addActionListener { deleteConnection(descriptor) } })
         menu.show(tree, e.x, e.y)
+    }
+
+    /**
+     * Seeds the overview question, which the engine answers from the WHOLE catalog rather than a
+     * term-pruned handful of tables. Discoverability only: nobody guesses to type this.
+     */
+    private fun describeDatabase(descriptor: ConnectionDescriptor) {
+        seedQuestion("What is this database about, how are the tables related, and how many tables are there?", descriptor.id)
     }
 
     private fun editConnection(descriptor: ConnectionDescriptor) {
@@ -250,8 +271,8 @@ class SchemaTreePanel(private val project: Project) : Disposable {
             if (tables.isEmpty() && views.isEmpty()) {
                 connectionNode.add(DefaultMutableTreeNode("No tables found"))
             }
-            if (tables.isNotEmpty()) connectionNode.add(kindGroupNode("Tables", tables))
-            if (views.isNotEmpty()) connectionNode.add(kindGroupNode("Views", views))
+            if (tables.isNotEmpty()) connectionNode.add(kindGroupNode("Tables", tables, descriptor.id))
+            if (views.isNotEmpty()) connectionNode.add(kindGroupNode("Views", views, descriptor.id))
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e // the tool window is closing/disposing; must propagate, not render a tree node for it
         } catch (e: Exception) {
@@ -270,13 +291,13 @@ class SchemaTreePanel(private val project: Project) : Disposable {
         connectionNode.breadthFirstEnumeration().asSequence().any { (it as? DefaultMutableTreeNode)?.userObject == "No tables found" }
 
     /** Group label carries the count ("Tables (12)"), and each table its column count. */
-    private fun kindGroupNode(label: String, tables: List<TableInfo>): DefaultMutableTreeNode {
+    private fun kindGroupNode(label: String, tables: List<TableInfo>, connectionId: String): DefaultMutableTreeNode {
         val group = DefaultMutableTreeNode("$label (${tables.size})")
         for (table in tables) {
             val schemaPrefix = table.schema?.let { "$it · " } ?: ""
             val colCount = table.columns.size
             val tableNode = DefaultMutableTreeNode(
-                TableNode(table, "${table.name} - $schemaPrefix$colCount col${if (colCount == 1) "" else "s"}"),
+                TableNode(table, connectionId, "${table.name} - $schemaPrefix$colCount col${if (colCount == 1) "" else "s"}"),
             )
             for (column in table.columns) {
                 val marker = when {

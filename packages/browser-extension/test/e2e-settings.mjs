@@ -36,7 +36,14 @@ const section = async (name, fn) => {
 const browser = await puppeteer.launch({
   executablePath: CHROME,
   headless: true,
-  args: [`--disable-extensions-except=${dist}`, `--load-extension=${dist}`, '--no-sandbox'],
+  dumpio: !!process.env.CI,
+  args: [
+    `--disable-extensions-except=${dist}`,
+    `--load-extension=${dist}`,
+    '--no-sandbox',
+    '--disable-dev-shm-usage',
+    '--disable-gpu',
+  ],
   defaultViewport: { width: 480, height: 800 },
 });
 

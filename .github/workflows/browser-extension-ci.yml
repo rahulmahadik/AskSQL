@@ -62,7 +62,7 @@ jobs:
       # Chrome for Testing: branded Chrome dropped --load-extension in 137.
       - name: Install Chrome for Testing
         run: |
-          line="$(pnpm dlx @puppeteer/browsers@3.0.6 install chrome@stable --path "$RUNNER_TEMP/chrome" | tail -n 1)"
+          line="$(pnpm dlx @puppeteer/browsers@3.0.6 install chrome@151.0.7922.76 --path "$RUNNER_TEMP/chrome" | tail -n 1)"
           echo "$line"
           echo "CHROME_FOR_TESTING=${line##* }" >> "$GITHUB_ENV"
       - name: Real-browser smoke suite

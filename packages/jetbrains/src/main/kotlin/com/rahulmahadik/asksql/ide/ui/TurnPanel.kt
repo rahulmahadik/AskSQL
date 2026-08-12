@@ -112,6 +112,17 @@ internal fun selectableText(text: String): JTextField =
     }
 
 private const val EXPLAIN_BUSY_TEXT = "Describing…"
+private const val EXPLAIN_DONE_TOOLTIP = "Already described below"
+
+/** IDLE offers a description, BUSY is one in flight, DONE means the turn already has one. */
+internal enum class ExplainState { IDLE, BUSY, DONE }
+
+/** Describing again returns the same text, so only a failure leaves the button offered. */
+internal fun explainStateAfter(stillInFlight: Int, succeeded: Boolean): ExplainState = when {
+    stillInFlight > 0 -> ExplainState.BUSY
+    succeeded -> ExplainState.DONE
+    else -> ExplainState.IDLE
+}
 
 /** The sentence the engine appends to a proposed write. */
 internal const val READ_ONLY_LINE_MARKER = "AskSQL is read-only"
@@ -347,19 +358,19 @@ class TurnPanel(private val project: Project, question: String) {
 
     private var explanationShown = false
     /** Toggles the Explain button between idle and in-flight; null until [showResult] builds one. */
-    private var setExplainBusy: ((Boolean) -> Unit)? = null
+    private var applyExplainState: ((ExplainState) -> Unit)? = null
     /** The button is shared by the click path and the automatic one, so it only idles when both are done. */
     private var explainsInFlight = 0
 
     /** Called by every explain request for this turn, automatic or clicked. */
     fun explainStarted() {
         explainsInFlight++
-        setExplainBusy?.invoke(true)
+        applyExplainState?.invoke(ExplainState.BUSY)
     }
 
-    private fun explainSettled() {
+    private fun explainSettled(succeeded: Boolean) {
         if (explainsInFlight > 0) explainsInFlight--
-        if (explainsInFlight == 0) setExplainBusy?.invoke(false)
+        applyExplainState?.invoke(explainStateAfter(explainsInFlight, succeeded))
     }
     /** The failure currently shown for this turn: its label and copy row. */
     private var failureLabel: JEditorPane? = null
@@ -406,13 +417,14 @@ class TurnPanel(private val project: Project, question: String) {
                 explainButton.getFontMetrics(explainButton.font).stringWidth(EXPLAIN_BUSY_TEXT) + JBUI.scale(28),
                 explainButton.preferredSize.height,
             )
-            // Restored on both outcomes: a failed explain must not remove the feature for this turn.
-            setExplainBusy = { busy ->
-                explainButton.isEnabled = !busy
-                explainButton.text = if (busy) EXPLAIN_BUSY_TEXT else "Explain"
+            applyExplainState = { state ->
+                explainButton.isEnabled = state == ExplainState.IDLE
+                explainButton.text = if (state == ExplainState.BUSY) EXPLAIN_BUSY_TEXT else "Explain"
+                explainButton.toolTipText = if (state == ExplainState.DONE) EXPLAIN_DONE_TOOLTIP else null
             }
-            // An automatic explain may already be running by the time this button exists.
-            if (explainsInFlight > 0) setExplainBusy?.invoke(true)
+            // The automatic explain may have started, or finished, before this button existed.
+            if (explainsInFlight > 0) applyExplainState?.invoke(ExplainState.BUSY)
+            else if (explanationShown) applyExplainState?.invoke(ExplainState.DONE)
             explainButton.addActionListener { onExplain() }
             toolbar.add(explainButton)
         }
@@ -469,12 +481,13 @@ class TurnPanel(private val project: Project, question: String) {
         explanationShown = true
         addProseWithCodeBlocks(text, defaultIsJson = false)
         bodyPanel.add(copyRow { text })
-        explainSettled()
+        explainSettled(succeeded = true)
         refresh()
     }
 
     fun showExplanationError(userMessage: String) {
         appendExplanation("Couldn't explain this query: $userMessage")
+        explainSettled(succeeded = false)
     }
 
     /** Renders a grounded plain-language schema answer (the answerSchemaQuestions fallback); no SQL, no results. */

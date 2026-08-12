@@ -176,6 +176,13 @@ function exportClassifierVectors() {
     'which collections will grow fastest',
     'should I embed order items or reference them',
     'what would you change about how returns are modelled',
+    // Reported: the typo defeated the "best practices" phrase, so this ran a catalog listing.
+    'to apply all best pracitices to our schema what are changes needed?',
+    'what optimisations should we apply',
+    'what changes should we make',
+    // "changes" is an ordinary data word; these must still reach the data.
+    'what changes did the user make to their profile',
+    'show me all changes in the orders table',
     'why is this query slow',
     // Overview, and the shapes that only look like it.
     'give me an overview of this database',

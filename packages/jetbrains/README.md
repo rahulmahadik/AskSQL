@@ -46,6 +46,8 @@ plain language, review the generated SQL, approve it, and get results.
 
 The schema tree above the chat browses every configured connection's tables/columns
 without needing to ask a question first; drag the divider to resize either panel.
+Right-click a connection for **Describe This Database** (what it is for, how the tables
+relate, how many there are), or a table for **Ask About This Table**.
 
 ## Querying CSV, Excel and Parquet files (no database needed)
 

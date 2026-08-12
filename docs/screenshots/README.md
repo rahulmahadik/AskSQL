@@ -45,7 +45,7 @@ Upload a CSV, ask a question - DuckDB-WASM parses and queries it in a Web Worker
 engine + guard run client-side, and **nothing leaves the tab**. The result
 (`NA = 2480.25`, computed in-browser) proves the whole loop with no server.
 
-![Browser DuckDB-WASM](web-01-query-and-table.png)
+![Browser DuckDB-WASM](web-04-sql-and-result.png)
 
 The same result as a chart. A label column and a numeric column is a bar chart; the toggle only
 appears when the shape suits one.
@@ -57,6 +57,8 @@ nothing executed.
 
 ![Schema question answered in prose](web-03-prose-answer.png)
 
-Before any file is loaded.
+Before any file is loaded, and once one is chosen.
 
 ![Starting state](web-00-start.png)
+
+![A file loaded, ready for a question](web-06-file-loaded.png)
