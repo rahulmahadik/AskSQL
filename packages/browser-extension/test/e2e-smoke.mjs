@@ -226,11 +226,13 @@ async function runOriginStripSection() {
   const browser = await puppeteer.launch({
     executablePath: CHROME,
     headless: true,
+    dumpio: !!process.env.CI,
     args: [
       `--disable-extensions-except=${stagedDist}`,
       `--load-extension=${stagedDist}`,
       '--no-sandbox',
       '--disable-dev-shm-usage',
+      '--disable-gpu',
     ],
   });
 
@@ -308,11 +310,13 @@ async function main() {
   const browser = await puppeteer.launch({
     executablePath: CHROME,
     headless: true,
+    dumpio: !!process.env.CI,
     args: [
       `--disable-extensions-except=${dist}`,
       `--load-extension=${dist}`,
       '--no-sandbox',
       '--disable-dev-shm-usage',
+      '--disable-gpu',
     ],
   });
 
