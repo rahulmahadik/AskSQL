@@ -36,7 +36,7 @@ const section = async (name, fn) => {
 const browser = await puppeteer.launch({
   executablePath: CHROME,
   headless: true,
-  args: [`--disable-extensions-except=${dist}`, `--load-extension=${dist}`, '--no-sandbox'],
+  args: [`--disable-extensions-except=${dist}`, `--load-extension=${dist}`, '--no-sandbox', '--disable-dev-shm-usage'],
   defaultViewport: { width: 480, height: 800 },
 });
 
