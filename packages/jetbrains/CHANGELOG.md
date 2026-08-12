@@ -5,6 +5,24 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-08-09
+
+### Fixed
+- A question asking what to change or improve is answered in prose again. The classifier matched
+  "best practices" but not a misspelling of it, and not "what changes are needed", so a question
+  phrased either way fell through to SQL generation and ran a table listing instead.
+- Deleting a connection ends its conversation. The transcript was only discarded when moving between
+  two connections, so removing one and adding another brought the old chat and its follow-up context
+  onto a different database.
+- **Explain** retires once the answer is on screen. It stayed clickable, and each further click paid
+  for the same description again. A failed attempt still leaves it available to retry.
+- A question from the schema tree runs against the connection you right-clicked, rather than whichever
+  one the chat had selected.
+
+### Added
+- **Describe This Database** on a connection's right-click menu: what the database is for, how the
+  tables relate, and how many there are, answered from the whole schema.
+
 ## [0.5.0] - 2026-08-09
 
 ### Fixed

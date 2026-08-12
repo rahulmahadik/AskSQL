@@ -357,6 +357,24 @@ describe('AskSqlChat', () => {
     expect(attempt).toBe(2);
   });
 
+  // Reported on the JetBrains plugin and present here too: the reset required both the old and the
+  // new connection to be defined, so removing one and adding another kept the old transcript.
+  it('discards the transcript when the connection is removed and another takes its place', async () => {
+    const user = userEvent.setup();
+    const transport = makeTransport({ chat: chatOf({ type: 'sql', sql: 'SELECT 1' }, { type: 'done' }) });
+    // The picker is off, so props.connectionId is what the chat is bound to.
+    const { rerender } = render(<AskSqlChat transport={transport} connectionId="a" showConnectionPicker={false} />);
+    await user.type(screen.getByRole('textbox', { name: /Ask a question/i }), 'q');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText('SELECT 1');
+
+    // The connection goes away, then a different one arrives.
+    rerender(<AskSqlChat transport={transport} connectionId={undefined} showConnectionPicker={false} />);
+    rerender(<AskSqlChat transport={transport} connectionId="b" showConnectionPicker={false} />);
+
+    expect(screen.queryByText('SELECT 1')).toBeNull();
+  });
+
   it('hides the Plan button when the connection cannot EXPLAIN', async () => {
     const user = userEvent.setup();
     const caps = {

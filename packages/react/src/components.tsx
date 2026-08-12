@@ -29,10 +29,10 @@ function inlineMarkdown(line: string): JSX.Element[] {
   return out;
 }
 
-/** Render explanation markdown: drop a redundant leading "Explanation:", bullets for "- "/"* " lines, ```fenced``` blocks as code. */
 /** The sentence the engine appends to a proposed write. */
 const READ_ONLY_LINE_MARKER = 'AskSQL is read-only';
 
+/** Render explanation markdown: drop a redundant leading "Explanation:", bullets for "- "/"* " lines, ```fenced``` blocks as code. */
 function Markdown({
   text,
   className,
@@ -147,6 +147,11 @@ export function AskSqlChat(props: AskSqlChatProps): JSX.Element {
   const [connections, setConnections] = useState<ConnectionSummary[]>([]);
   const [activeConn, setActiveConn] = useState<string | undefined>(props.connectionId);
 
+  // useState seeds activeConn once, so a changed prop would otherwise never take effect.
+  useEffect(() => {
+    if (props.connectionId !== undefined) setActiveConn(props.connectionId);
+  }, [props.connectionId]);
+
   useEffect(() => {
     if (props.showConnectionPicker === false) return;
     let alive = true;
@@ -198,8 +203,8 @@ export function AskSqlChat(props: AskSqlChatProps): JSX.Element {
     const current = activeConn ?? props.connectionId;
     const previous = boundConn.current;
     boundConn.current = current;
-    // Undefined until the picker resolves; only a switch between two real connections resets.
-    if (previous !== undefined && current !== undefined && previous !== current) reset();
+    // Any change resets, including to and from undefined; the first resolve has nothing to discard.
+    if (previous !== current) reset();
   }, [activeConn, props.connectionId, reset]);
 
   const lastAskedInitial = useRef<string | undefined>(undefined);

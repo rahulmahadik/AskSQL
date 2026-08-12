@@ -122,7 +122,7 @@ class EnginePipeline(
 
         /** Advice whose intent already names its object, so the non-overlapping rule cannot apply. */
         private val SELF_CONTAINED_ADVICE_RE = Regex(
-            """\b(?:unused|redundant|unnecessary)\s+(?:index(?:es)?|indices|constraints?|keys?|relationships?|columns?|tables?|fields?)\b|\b(?:missing|duplicate)\s+(?:index(?:es)?|indices|constraints?|foreign keys?|primary keys?|relationships?)\b|\bbest\s+(?:practices?|approach|design|strategy)\b|\bbest\s+way\s+to\s+(?:store|model|structure|organi[sz]e|handle|represent|index|partition|split|name|design|track)\b""",
+            """\b(?:unused|redundant|unnecessary)\s+(?:index(?:es)?|indices|constraints?|keys?|relationships?|columns?|tables?|fields?)\b|\b(?:missing|duplicate)\s+(?:index(?:es)?|indices|constraints?|foreign keys?|primary keys?|relationships?)\b|\bbest\s+(?:practices?|approach|design|strategy)\b|\bbest\s+way\s+to\s+(?:store|model|structure|organi[sz]e|handle|represent|index|partition|split|name|design|track)\b|\b(?:what|which)\b[^.?!]{0,30}\b(?:changes?|improvements?|optimi[sz]ations?)\b[^.?!]{0,25}\b(?:needed|required|necessary|recommend\w*|suggest\w*|apply)\b|\b(?:what|which)\s+(?:changes?|improvements?|optimi[sz]ations?)\b[^.?!]{0,20}\bshould\b""",
             RegexOption.IGNORE_CASE,
         )
 

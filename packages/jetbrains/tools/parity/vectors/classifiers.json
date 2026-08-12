@@ -182,6 +182,51 @@
       "capability": false,
       "injection": false
     },
+    "to apply all best pracitices to our schema what are changes needed?": {
+      "metadata": false,
+      "advice": true,
+      "overview": false,
+      "proposal": true,
+      "write": false,
+      "capability": false,
+      "injection": false
+    },
+    "what optimisations should we apply": {
+      "metadata": false,
+      "advice": true,
+      "overview": false,
+      "proposal": true,
+      "write": false,
+      "capability": false,
+      "injection": false
+    },
+    "what changes should we make": {
+      "metadata": false,
+      "advice": true,
+      "overview": false,
+      "proposal": false,
+      "write": false,
+      "capability": false,
+      "injection": false
+    },
+    "what changes did the user make to their profile": {
+      "metadata": false,
+      "advice": false,
+      "overview": false,
+      "proposal": false,
+      "write": false,
+      "capability": false,
+      "injection": false
+    },
+    "show me all changes in the orders table": {
+      "metadata": true,
+      "advice": false,
+      "overview": false,
+      "proposal": false,
+      "write": false,
+      "capability": false,
+      "injection": false
+    },
     "why is this query slow": {
       "metadata": false,
       "advice": true,

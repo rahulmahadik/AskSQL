@@ -45,6 +45,13 @@ internal fun formatModelLabel(provider: com.rahulmahadik.asksql.ide.llm.Provider
  * still exists. Falling back to the first entry would silently re-target the next question at a
  * different database. Pure (no Swing/Project access) so [ChatPanelSelectionTest] can cover it.
  */
+/**
+ * True when the conversation belongs to a connection that is no longer selected. Any change counts,
+ * including to and from null: deleting the last connection and adding one back otherwise carried the
+ * old transcript, and its context turns, onto a different database.
+ */
+internal fun shouldClearConversation(previousId: String?, currentId: String?): Boolean = previousId != currentId
+
 internal fun selectionAfterRefresh(
     descriptors: List<ConnectionDescriptor>,
     previouslySelectedId: String?,
@@ -207,7 +214,7 @@ class ChatPanel(private val project: Project) : Disposable {
         val selected = connectionCombo.selectedItem as? ConnectionDescriptor
         connectionDetailLabel.text = selected?.let { "${it.engine.wireName} · ${it.target()}" } ?: ""
         val selectedId = selected?.id
-        if (selectedId != null && lastSelectedConnectionId != null && selectedId != lastSelectedConnectionId) {
+        if (shouldClearConversation(lastSelectedConnectionId, selectedId)) {
             transcript.clear()
             contextTurns.clear()
             mongoContextTurns.clear()
@@ -216,6 +223,14 @@ class ChatPanel(private val project: Project) : Disposable {
     }
 
     /** Picks up a question stashed by [com.rahulmahadik.asksql.ide.actions.AskAboutSelectionAction], which also calls this directly. */
+    /** Targets a connection picked outside the chat, such as from the schema tree. */
+    fun selectConnection(connectionId: String) {
+        val match = (0 until connectionCombo.itemCount)
+            .mapNotNull { connectionCombo.getItemAt(it) }
+            .firstOrNull { it.id == connectionId } ?: return
+        if (connectionCombo.selectedItem != match) connectionCombo.selectedItem = match
+    }
+
     fun consumePendingQuestion() {
         PendingQuestion.consume(project)?.let { pending ->
             inputArea.text = pending
