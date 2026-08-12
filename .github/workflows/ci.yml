@@ -60,6 +60,6 @@ jobs:
       - run: pnpm --filter asksql-browser-extension run build
       - name: Browser extension smoke test
         run: |
-          chrome_path="$(npx --yes @puppeteer/browsers@latest install chrome@stable | awk '{ $1=""; sub(/^ /,""); print }')"
+          chrome_path="$(npx --yes @puppeteer/browsers@latest install chrome@151.0.7922.76 | awk '{ $1=""; sub(/^ /,""); print }')"
           node test/e2e-smoke.mjs "$chrome_path"
         working-directory: packages/browser-extension
