@@ -213,3 +213,50 @@ export function fanOutAggregate(sql: string, grammar: string, catalog: FanOutCat
   }
   return null;
 }
+
+/**
+ * An aggregate nested inside another aggregate, like AVG(x + SUM(y)). Every engine rejects it, so
+ * catching it before execution turns a database error into a repair. Returns the outer function name.
+ */
+export function nestedAggregate(sql: string, grammar: string): string | null {
+  let ast: unknown;
+  try {
+    ast = parser.parse(sql, { database: grammar }).ast;
+  } catch {
+    return null; // the guard already parsed it; never double-block here
+  }
+
+  let outer: string | null = null;
+  const walk = (node: unknown, insideAggregate: string | null): void => {
+    if (outer) return;
+    if (Array.isArray(node)) {
+      for (const item of node) walk(item, insideAggregate);
+      return;
+    }
+    if (!isNode(node)) return;
+    const isAgg = isBareAggregate(node);
+    if (isAgg && insideAggregate) {
+      outer = insideAggregate;
+      return;
+    }
+    const within = isAgg ? aggregateName(node) : insideAggregate;
+    for (const key of Object.keys(node)) {
+      // A subquery has its own scope, so an aggregate inside one is not nested in the outer call.
+      if (key === 'ast' || key === 'from') continue;
+      walk(node[key], within);
+    }
+  };
+  walk(ast, null);
+  return outer;
+}
+
+function aggregateName(node: Node): string {
+  const name = node['name'];
+  const text =
+    typeof name === 'string'
+      ? name
+      : isNode(name) && Array.isArray(name['name'])
+        ? String((name['name'][0] as Node)?.['value'] ?? '')
+        : '';
+  return text.toUpperCase();
+}

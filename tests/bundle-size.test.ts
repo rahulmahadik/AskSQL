@@ -26,8 +26,12 @@ const BUDGETS: Record<string, number> = {
   // stops measuring. History: 45->51 scope guard + Mongo, 51->54 grounding vocabularies,
   // 54->60 question routing + the ungrouped-aggregate lint, 60->63 routing precision +
   // identifier quoting, 63->65 routing words disambiguated from identifiers ("the archive table",
-  // "the best selling products", "the prompts table").
-  core: 65,
+  // "the best selling products", "the prompts table"), 65->66 identifier normalisation plus the
+  // connection identity and catalog hint that keep system-catalog queries from being guessed,
+  // 67->69 each engine's own reserved words read from its catalog (MySQL reserves 262, the shared
+  // guess had ~100), stored as one word list plus a bit per engine, 69->70 dollar-quoted literals,
+  // qualifier handling and the per-dialect backslash rule.
+  core: 70,
   // 20 -> 23: copy controls, streamed-token progress, cell tooltips, export feedback, result-grid copy.
   react: 23,
   // 12 -> 13: the CSRF/Host gate every adapter inherits, client-path confinement for
@@ -64,7 +68,9 @@ describe('bundle-size budgets (gzipped, own code)', () => {
     const core = gzippedKb('core');
     const react = gzippedKb('react');
     if (core === null || react === null) return;
-    // Own code only (React is a peer): must stay well under the 85 KB budget.
-    expect(core + react).toBeLessThan(85);
+    // Own code only (React is a peer). 85 -> 91: identifier normalisation, which is what stops a
+    // mixed-case Postgres schema from failing every query, the prompt's connection identity, and the
+    // per-engine reserved-word lists, and the literal rules each dialect actually follows.
+    expect(core + react).toBeLessThan(92);
   });
 });
