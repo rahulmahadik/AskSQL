@@ -4,6 +4,18 @@ All notable changes to the browser extension are documented here. Versions match
 `manifest.json`. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] - 2026-08-14
+
+### Fixed
+- Questions about structure no longer invent a database name. Without being told which database it
+  is connected to, the model wrote `table_schema = 'your_database_name'` and returned nothing, which
+  reads as an empty database rather than an error.
+- `AVG(SUM(x))` is repaired instead of run. Nested aggregates are invalid in every engine.
+- An apostrophe inside a value, as in `'O'Brien'`, produced only "could not parse", so the model
+  returned the same statement until it ran out of attempts. It is now told to double the quote.
+- Per-table row counts work again. A `UNION ALL` across tables was blocked as a hallucinated column,
+  because each branch's columns were judged against every branch's tables.
+
 ## [0.3.0] - 2026-08-09
 
 ### Fixed
