@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "AskSQL",
   "short_name": "AskSQL",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Ask your database questions in plain language. Read-only by design, zero telemetry. Query files in-browser or your AskSQL server.",
   "minimum_chrome_version": "116",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAk17oLrOl3oNPAgteUmUQDhUJJo+lxrQDt7baBBxmyQ3w3nE1g7IOZVGtq6q+gItzvs8aJAe+dHKanZynRWJfeK8zqCiBNDzyMqnRpAMOOtvKlJJOTqe9N9Lj/RJgxRgfylPnYJoPNXMAPd2y4ceeJX6yj0GpTPiS9AIfTO6p6WXB9YGWl5gdwjhGuYEAB+S7vD+M8yaCCn8C1b2+ne0yboTf/3nUyh6XysrAPafNCMlUbU1qBjAQGNJgXdsbRtWfaIbKorKhN4tWgsc3SsXZBdIxXsz/oL3EMzspjWjTEIrf/n5p1q3kNJ+SQ40SunWXdjDY4q/LnPnGmQFCUona7wIDAQAB",
