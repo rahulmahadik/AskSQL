@@ -68,24 +68,14 @@ object CatalogPruner {
      */
     private fun quoteCharFor(engine: EngineKind): Char = if (engine == EngineKind.MYSQL) '`' else '"'
 
-    /** Words an engine will not accept as a bare identifier; the ones that turn up as real column names, not every dialect. */
-    private val RESERVED_WORDS = (
-        "select from where group by order having limit offset union all distinct join inner outer left " +
-            "right full cross natural on using as into insert update delete set values create drop alter " +
-            "table column view index key primary foreign unique constraint references default check null " +
-            "not and or in is like between case when then else end exists any some cast collate with " +
-            "recursive returning window over partition range rows current session system user grant revoke " +
-            "to begin commit rollback transaction lock database schema trigger procedure function " +
-            "desc asc date time timestamp interval level size type comment position language"
-        ).split(" ").toSet()
-
+    
     /**
      * True when the engine would not read the bare name back as itself: an unquoted identifier
      * folds case - PostgreSQL to lower, Oracle to upper.
      */
-    private fun needsQuoting(name: String, engine: EngineKind): Boolean {
+    internal fun needsQuoting(name: String, engine: EngineKind): Boolean {
         if (!PLAIN_IDENTIFIER_RE.matches(name)) return true
-        if (name.lowercase() in RESERVED_WORDS) return true
+        if (name.lowercase() in SqlKeywords.reservedWordsFor(engine.name)) return true
         return when (engine) {
             EngineKind.ORACLE -> name != name.uppercase()
             // MySQL, SQLite and DuckDB match identifiers case-insensitively.

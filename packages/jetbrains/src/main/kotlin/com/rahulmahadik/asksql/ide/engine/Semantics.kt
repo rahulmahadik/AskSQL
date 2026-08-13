@@ -120,4 +120,43 @@ object Semantics {
         }
         return null
     }
+
+    /**
+     * An aggregate nested inside another aggregate, like AVG(x + SUM(y)). Every engine rejects it, so
+     * catching it before execution turns a database error into a repair. Returns the outer function name.
+     */
+    fun nestedAggregate(sql: String): String? {
+        val statement = try {
+            CCJSqlParserUtil.parse(sql)
+        } catch (e: Exception) {
+            return null // the guard already fails closed on unparsable SQL
+        }
+        val select = statement as? Select ?: return null
+        for (body in plainSelects(select)) {
+            // Every clause an aggregate can appear in, matching the TypeScript walk over the statement.
+            val clauses = (body.selectItems ?: emptyList()).map { it.expression } +
+                listOfNotNull(body.having, body.where) +
+                (body.orderByElements ?: emptyList()).map { it.expression } +
+                (body.groupBy?.groupByExpressionList?.toList() ?: emptyList<Expression>())
+            for (clause in clauses) {
+                val outer = findNested(clause, null)
+                if (outer != null) return outer
+            }
+        }
+        return null
+    }
+
+    private fun findNested(node: Expression?, insideAggregate: String?): String? {
+        if (node == null) return null
+        // A subquery has its own scope, so an aggregate inside one is not nested in the outer call.
+        if (node is Select || node is ParenthesedSelect) return null
+        val isAgg = node is Function && isBareAggregate(node)
+        if (isAgg && insideAggregate != null) return insideAggregate
+        val within = if (isAgg) (node as Function).name?.uppercase() else insideAggregate
+        for (child in childrenOf(node)) {
+            val found = findNested(child, within)
+            if (found != null) return found
+        }
+        return null
+    }
 }

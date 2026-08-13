@@ -46,8 +46,29 @@ object Prompts {
         fewShots: List<FewShot> = emptyList(),
         context: List<ContextTurn> = emptyList(),
         rerunPrevious: Boolean = false,
+        /** Named so a question about system catalogs does not invent a placeholder database name. */
+        database: String? = null,
+        schemas: List<String> = emptyList(),
+        /** A correct catalog query for this engine, offered when the question is about structure. */
+        catalogHint: String? = null,
     ): String {
         val parts = mutableListOf("<schema>", schemaText, "</schema>")
+
+        // Without these, a question about information_schema gets a guessed name like 'your_database_name'.
+        val where = mutableListOf<String>()
+        if (!database.isNullOrBlank()) where += "database/catalog is \"$database\""
+        if (schemas.isNotEmpty()) where += "schema is \"${schemas.first()}\""
+        if (where.isNotEmpty()) {
+            parts += ""
+            parts += "You are connected to: the ${where.joinToString(", the ")}. Use these exact names when a " +
+                "query filters on system catalogs such as information_schema; never write a placeholder."
+        }
+
+        // System-catalog column names are not in the schema block, so a structure question otherwise guesses them.
+        if (!catalogHint.isNullOrBlank()) {
+            parts += ""
+            parts += "This question is about the database's structure. Build on this correct query for this engine: $catalogHint"
+        }
 
         if (glossary.isNotEmpty()) {
             parts += ""
