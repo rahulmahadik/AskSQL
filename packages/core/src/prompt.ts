@@ -19,6 +19,11 @@ export interface SqlPromptInput {
   readonly glossary?: readonly { term: string; definition: string }[];
   /** The question asks to re-run the previous query rather than for a new one. */
   readonly rerunPrevious?: boolean;
+  /** Named so a question about system catalogs does not invent a placeholder database name. */
+  readonly database?: string;
+  readonly schemas?: readonly string[];
+  /** A correct catalog query for this engine, offered when the question is about structure. */
+  readonly catalogHint?: string;
 }
 
 export function buildSqlSystem(dialect: DialectInfo, maxRows: number, prompts?: PromptSettings): string {
@@ -52,6 +57,25 @@ export function buildSqlSystem(dialect: DialectInfo, maxRows: number, prompts?: 
 export function buildSqlUser(input: SqlPromptInput): string {
   const parts: string[] = [];
   parts.push('<schema>', input.schemaText, '</schema>');
+
+  // Without these, a question about information_schema gets a guessed name like 'your_database_name'.
+  const where: string[] = [];
+  if (input.database) where.push(`database/catalog is "${input.database}"`);
+  if (input.schemas && input.schemas.length > 0) where.push(`schema is "${input.schemas[0]}"`);
+  if (where.length > 0) {
+    parts.push(
+      '',
+      `You are connected to: the ${where.join(', the ')}. Use these exact names when a query filters on system catalogs such as information_schema; never write a placeholder.`,
+    );
+  }
+
+  // System-catalog column names are not in the schema block, so a structure question otherwise guesses them.
+  if (input.catalogHint) {
+    parts.push(
+      '',
+      `This question is about the database's structure. Build on this correct query for this engine: ${input.catalogHint}`,
+    );
+  }
 
   if (input.glossary && input.glossary.length > 0) {
     parts.push('', 'Business glossary (use these definitions when the question uses these terms):');

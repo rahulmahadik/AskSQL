@@ -335,6 +335,16 @@ class EnginePipeline(
 
         onEvent?.onEvent(EngineEvent.StageEvent(Stage.CATALOG))
         val fullCatalog = catalog(descriptor, password)
+        // Names the engine would not read back as themselves: folded case, reserved words, symbols.
+        // A name spelled two ways across the catalog is skipped: rewriting "status" to "Status" would
+        // ask one table for another table's column.
+        val allNames = fullCatalog.tables.flatMap { t -> listOf(t.name) + t.columns.map { it.name } }
+        val spellings = allNames.groupBy { it.lowercase() }
+        val quotableNames = allNames.filter {
+            CatalogPruner.needsQuoting(it, descriptor.engine) && spellings[it.lowercase()]?.distinct()?.size == 1
+        }
+        // Only a table may be quoted before a dot; a schema qualifier that matched a column name broke it.
+        val quotableTables = fullCatalog.tables.map { it.name }.filter { it in quotableNames }
 
         onEvent?.onEvent(EngineEvent.StageEvent(Stage.PRUNE))
         val initialPrunerSettings = CatalogPruner.PrunerSettings(maxSchemaTokens = maxSchemaTokens)
@@ -351,6 +361,9 @@ class EnginePipeline(
             glossary = glossary,
             context = context,
             rerunPrevious = isRerunPreviousRequest(q),
+            database = descriptor.database,
+            schemas = fullCatalog.schemas,
+            catalogHint = if (isMetadataQuestion(q)) catalogQueryHint(descriptor.engine) else null,
         )
 
         var lastSql = ""
@@ -382,7 +395,10 @@ class EnginePipeline(
                     )
                     pruned = tighter
                     schemaText = tighter.schemaText
-                    userPrompt = Prompts.buildSqlUser(question = q, schemaText = schemaText, context = context)
+                    userPrompt = Prompts.buildSqlUser(
+                        question = q, schemaText = schemaText, context = context,
+                        database = descriptor.database, schemas = fullCatalog.schemas,
+                    )
                     continue
                 }
                 throw e
@@ -449,7 +465,13 @@ class EnginePipeline(
             lastSql = extraction.sql
 
             onEvent?.onEvent(EngineEvent.StageEvent(Stage.GUARD))
-            val verdict = SqlGuard.guard(extraction.sql, dialect, policy)
+            // Quote first: a folding engine resolves a bare name elsewhere, and the parser cannot read a
+            // bare table named like a keyword. Falls back untouched if quoting makes it unparseable.
+            val normalised =
+                IdentifierCase.quoteCatalogIdentifiers(extraction.sql, quotableNames, dialect.quoteChar, quotableTables)
+            val normalisedVerdict = normalised?.let { SqlGuard.guard(it, dialect, policy) }
+            val verdict = if (normalisedVerdict?.allowed == true) normalisedVerdict
+            else SqlGuard.guard(extraction.sql, dialect, policy)
             if (!verdict.allowed) {
                 if (attempt >= MAX_REPAIRS) {
                     history.add(auditEntry(descriptor.id, q, extraction.sql, HistoryStatus.BLOCKED, verdict.ruleId))
@@ -459,9 +481,13 @@ class EnginePipeline(
                         detail = "ruleId=${verdict.ruleId} after ${attempt + 1} attempts",
                     )
                 }
+                // "could not parse" alone leaves the model repeating the same statement; name the real cause.
+                val quoteHint = if (IdentifierCase.hasUnterminatedLiteral(extraction.sql, dialect.quoteChar == '`')) {
+                    " A text value contains an apostrophe that is not escaped: write it doubled, as 'O''Brien'."
+                } else ""
                 userPrompt = Prompts.buildRepairUser(
                     question = q, failedSql = extraction.sql,
-                    failure = "The SQL validator rejected it: ${verdict.reason ?: verdict.ruleId ?: "not allowed"}. Produce a single read-only SELECT.",
+                    failure = "The SQL validator rejected it: ${verdict.reason ?: verdict.ruleId ?: "not allowed"}.$quoteHint Produce a single read-only SELECT.",
                     schemaText = schemaText, dialect = dialect,
                 )
                 attempt++
@@ -492,9 +518,12 @@ class EnginePipeline(
                         retryable = false,
                     )
                 }
+                // The column repair already names the real columns; give the table repair the same head start.
+                val nearest = SchemaFuzzyMatch.closestTableName(unknownTable, fullCatalog)
+                val didYouMean = if (nearest != null) " Did you mean \"$nearest\"?" else ""
                 userPrompt = Prompts.buildRepairUser(
                     question = q, failedSql = verdict.sql,
-                    failure = "Table \"$unknownTable\" does not exist in the schema. Use only tables from the <schema> block.",
+                    failure = "Table \"$unknownTable\" does not exist in the schema.$didYouMean Use only tables from the <schema> block.",
                     schemaText = schemaText, dialect = dialect,
                 )
                 attempt++
@@ -511,6 +540,19 @@ class EnginePipeline(
                         "Either group by \"$needsGrouping\", or drop it and aggregate over the whole table - whichever the question asks for.",
                     schemaText = schemaText,
                     dialect = dialect,
+                )
+                attempt++
+                continue
+            }
+
+            // Semantic floor: AVG(SUM(x)) and friends. Every engine rejects it, so repair before executing.
+            val nested = Semantics.nestedAggregate(verdict.sql)
+            if (nested != null && attempt < MAX_REPAIRS) {
+                userPrompt = Prompts.buildRepairUser(
+                    question = q, failedSql = verdict.sql,
+                    failure = "$nested() contains another aggregate, which no SQL engine allows. Aggregate once " +
+                        "over the rows, or aggregate the inner result in a subquery or CTE and then aggregate that.",
+                    schemaText = schemaText, dialect = dialect,
                 )
                 attempt++
                 continue
@@ -613,6 +655,17 @@ class EnginePipeline(
         return try {
             val dialect = Dialects.of(descriptor.engine)
             val catalog = catalog(descriptor, password)
+            // A wrong-cased table is repairable from the catalog alone, so try that before the model.
+            if (errorDetail != null && IdentifierCase.looksLikeUnknownTable(errorDetail)) {
+                val cased = IdentifierCase.correctTableCase(
+                    bad, catalog.tables.map { it.name }, dialect.quoteChar,
+                    IdentifierCase.foldingFor(descriptor.engine.name),
+                )
+                if (cased != null) {
+                    val casedVerdict = SqlGuard.guard(cased, dialect, policy)
+                    if (casedVerdict.allowed) return casedVerdict.sql
+                }
+            }
             val schemaText = CatalogPruner.pruneCatalog(catalog, q).schemaText
             val repairPrompt = Prompts.buildRepairUser(
                 question = q, failedSql = bad,

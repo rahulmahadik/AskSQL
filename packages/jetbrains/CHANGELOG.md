@@ -3,7 +3,27 @@
 All notable changes to the AskSQL JetBrains plugin are documented here.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [0.5.2] - 2026-08-14
+
+### Fixed
+- A mixed-case Postgres schema failed every query. An unquoted name folds to lower case and resolves
+  to nothing; Oracle folds the other way, and MySQL on Linux compares table names case-sensitively.
+  Table and column names are now quoted from the catalog before the query is validated, and correct
+  names are left untouched.
+- Reserved words now come from each database itself rather than one shared list that applied MySQL's
+  rules to Postgres and missed most of MySQL's own.
+- Quoting knows where a word is syntax rather than a name, so `CAST(x AS DATE)` and
+  `EXTRACT(MONTH FROM d)` are left alone.
+- A table named like a parser keyword, such as `order` or `Nulls`, could not be parsed in its bare
+  form, so the question failed after three attempts.
+- An apostrophe inside a value, as in `'O'Brien'`, produced only "could not parse", so the model
+  returned the same statement until it ran out of attempts. It is now told to double the quote.
+- Questions about structure no longer invent a database name. Without being told which database it
+  is connected to, the model wrote `table_schema = 'your_database_name'` and returned nothing, which
+  reads as an empty database rather than an error.
+- `AVG(SUM(x))` is repaired instead of run. Nested aggregates are invalid in every engine.
+- Per-table row counts work again. A `UNION ALL` across tables was blocked as a hallucinated column,
+  because each branch's columns were judged against every branch's tables.
 
 ## [0.5.1] - 2026-08-12
 

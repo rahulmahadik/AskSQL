@@ -97,6 +97,15 @@ Beyond ask -> approve -> run, all optional:
   column (a common small-model slip), it is handed the real column list and re-asked, so the
   fix happens before the database ever sees the query. The schema is also auto-shrunk and
   retried once on context overflow.
+- **Identifier quoting** - names a database would not read back as themselves are quoted from the
+  catalog before the query is validated, following each engine's own rule: Postgres folds unquoted
+  names down, Oracle folds them up, MySQL on Linux compares table names case-sensitively, and every
+  engine has reserved words. A mixed-case schema therefore works without the model having to
+  remember quotes, and names that are already correct are left alone. If a database still rejects a
+  name, the corrected query comes from the catalog rather than a second model call.
+- **Semantic floors** - a query that would be rejected or would answer the wrong question is
+  repaired before it runs: an aggregate beside a bare column with no `GROUP BY`, an aggregate nested
+  inside another (`AVG(SUM(x))`), and a one-to-many join that inflates a `SUM`.
 - **Follow-up context** - prior turns are threaded into the prompt so "now break that down by
   month" works.
 - **Query history** - `config.history` records every attempt (status, duration), backed by an

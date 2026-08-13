@@ -5,6 +5,7 @@
  */
 
 import type { PrunerSettings, SchemaCatalog, TableInfo } from './types.js';
+import { reservedWordsFor } from './sql-keywords.js';
 import { VALUE_SAMPLE_MAX_DISTINCT } from './types.js';
 import { dialectFor } from './dialects.js';
 
@@ -35,33 +36,22 @@ function sanitizeComment(comment: string | null | undefined): string | null {
 /** A name that can be written without quotes; anything else is rendered quoted. */
 const PLAIN_IDENTIFIER_RE = /^[A-Za-z_][A-Za-z0-9_]*$/u;
 
-/** Words an engine will not accept as a bare identifier; not exhaustive across every dialect. */
-const RESERVED_WORDS: ReadonlySet<string> = new Set(
-  (
-    'select from where group by order having limit offset union all distinct join inner outer left ' +
-    'right full cross natural on using as into insert update delete set values create drop alter ' +
-    'table column view index key primary foreign unique constraint references default check null ' +
-    'not and or in is like between case when then else end exists any some cast collate with ' +
-    'recursive returning window over partition range rows current session system user grant revoke ' +
-    'to begin commit rollback transaction lock database schema trigger procedure function ' +
-    'desc asc date time timestamp interval level size type comment position language'
-  ).split(' '),
-);
-
 /**
  * True when the engine would not read the bare name back as itself; an unquoted identifier folds
  * case - PostgreSQL to lower, Oracle to upper.
  */
-function needsQuoting(name: string, engine: string): boolean {
+export function needsQuoting(name: string, engine: string): boolean {
   if (!PLAIN_IDENTIFIER_RE.test(name)) return true;
-  if (RESERVED_WORDS.has(name.toLowerCase())) return true;
+  if (reservedWordsFor(engine).has(name.toLowerCase())) return true;
   if (engine === 'oracle') return name !== name.toUpperCase();
   // MySQL, SQLite and DuckDB match identifiers case-insensitively, so folding cannot lose a name.
   if (engine === 'mysql' || engine === 'sqlite' || engine === 'duckdb') return false;
   return name !== name.toLowerCase();
 }
 
-function promptIdentifier(name: string, quote: string, engine: string): string {
+function promptIdentifier(raw: string, quote: string, engine: string): string {
+  // Index columns arrive already quoted from introspection; quoting twice escapes the quotes into the name.
+  const name = raw.length > 1 && raw.startsWith(quote) && raw.endsWith(quote) ? raw.slice(1, -1) : raw;
   if (!needsQuoting(name, engine)) return name;
   // Doubling is how every supported engine escapes its own quote character inside an identifier.
   return `${quote}${name.split(quote).join(quote + quote)}${quote}`;

@@ -19,9 +19,15 @@ object HallucinationChecks {
     data class UnknownColumn(val table: String, val column: String, val available: List<String>)
 
     private val SYSTEM_SCHEMAS = setOf("information_schema", "pg_catalog", "mysql", "performance_schema", "sys")
-    private val CTE_NAME = Regex("""([A-Za-z_][A-Za-z0-9_]*)\s+as\s*\(""", RegexOption.IGNORE_CASE)
+    /**
+     * The quote characters matter: normalisation may have quoted a CTE named like a catalog column,
+     * and a model can quote one itself. An unrecognised CTE reads as a hallucinated table.
+     */
+    private val CTE_NAME =
+        Regex("""["`\[]?([A-Za-z_][A-Za-z0-9_]*)["`\]]?\s+as\s*\(""", RegexOption.IGNORE_CASE)
     private val HAS_WITH = Regex("""\bwith\b""", RegexOption.IGNORE_CASE)
     private val SELECT_ALIAS_RE = Regex("""\bas\s+["'`]?([A-Za-z_][A-Za-z0-9_]*)["'`]?""", RegexOption.IGNORE_CASE)
+    private val SET_OPERATION_RE = Regex("""\b(union|intersect|except)\b""", RegexOption.IGNORE_CASE)
     private val SUBQUERY_OPEN_RE = Regex("""\(\s*select\b""", RegexOption.IGNORE_CASE)
 
     /** Scans the whole statement; over-collecting CTE names only makes the floor more lenient. */
@@ -85,8 +91,14 @@ object HallucinationChecks {
         val aliases = SELECT_ALIAS_RE.findAll(sql).map { it.groupValues[1].lowercase() }.toSet()
         val tableAliases = collectTableAliases(statement)
 
-        val hasSubquery = SUBQUERY_OPEN_RE.containsMatchIn(sql)
-        var attributable = !hasSubquery
+        // Both probes read blanked text: a literal or comment must not disable the floor.
+        val code = withoutLiterals(sql)
+        val hasSubquery = SUBQUERY_OPEN_RE.containsMatchIn(code)
+        // A set operation has one column list per branch, and the parser reports them merged, so a column
+        // from one branch would be judged against another branch's tables. Not attributable, like a subquery.
+        // Blank literals first: a value like 'except this' would otherwise disable the floor entirely.
+        val hasSetOperation = SET_OPERATION_RE.containsMatchIn(code)
+        var attributable = !hasSubquery && !hasSetOperation
 
         val queryTables = mutableListOf<String>()
         val tableNames = try {
@@ -197,5 +209,38 @@ object HallucinationChecks {
             is ParenthesedSelect -> visitSelect(select.select, visitor)
             else -> Unit
         }
+    }
+
+    /** The statement with string literals and line comments blanked out; offsets are preserved. */
+    private fun withoutLiterals(sql: String): String {
+        val out = StringBuilder(sql)
+        var i = 0
+        while (i < sql.length) {
+            when {
+                sql[i] == '\'' -> {
+                    var j = i + 1
+                    while (j < sql.length) {
+                        if (sql[j] == '\'' && j + 1 < sql.length && sql[j + 1] == '\'') j += 2
+                        else if (sql[j] == '\'') break
+                        else j++
+                    }
+                    for (k in i..minOf(j, sql.length - 1)) out[k] = ' '
+                    i = j + 1
+                }
+                sql[i] == '-' && i + 1 < sql.length && sql[i + 1] == '-' -> {
+                    var j = i
+                    while (j < sql.length && sql[j] != '\n') { out[j] = ' '; j++ }
+                    i = j
+                }
+                sql[i] == '/' && i + 1 < sql.length && sql[i + 1] == '*' -> {
+                    val close = sql.indexOf("*/", i + 2)
+                    val end = if (close == -1) sql.length else close + 2
+                    for (k in i until end) out[k] = ' '
+                    i = end
+                }
+                else -> i++
+            }
+        }
+        return out.toString()
     }
 }
