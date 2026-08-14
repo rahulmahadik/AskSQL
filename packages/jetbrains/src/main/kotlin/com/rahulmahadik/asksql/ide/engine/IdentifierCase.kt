@@ -24,10 +24,10 @@ object IdentifierCase {
         return "$quoteChar$name$close"
     }
 
-    /** Where a literal or comment ends, or -1 when the position starts neither. */
     /** A dollar-quoted body is a literal in Postgres and DuckDB, and may contain anything. */
     private val DOLLAR_OPEN = Regex("""\$[A-Za-z_]\w*\$|\$\$""")
 
+    /** Where a literal or comment ends, or -1 when the position starts neither. */
     private fun skipTo(sql: String, i: Int, doubleQuoteIsLiteral: Boolean, backslashEscapes: Boolean = false): Int {
         val ch = sql[i]
         val next = if (i + 1 < sql.length) sql[i + 1] else ' '
