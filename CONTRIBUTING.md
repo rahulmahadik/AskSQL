@@ -22,6 +22,7 @@ pnpm test          # the full suite (see gating below)
 pnpm format:check  # prettier, as CI runs it
 pnpm coverage      # what CI runs instead of `test`; the coverage floor applies only with --coverage
 pnpm test:packaged # installs the packed tarballs outside the workspace and exercises every export
+pnpm test:schemas  # identifier handling against real engines and hostile schemas; needs Postgres and MySQL
 pnpm verify        # all of the above in the order CI runs them; use this before pushing
 ```
 
@@ -70,6 +71,25 @@ To exercise them, provide:
 - **A model** - `GROQ_API_KEY` for the cloud matrix, or `OLLAMA_URL` for a local
   model. Per-provider model overrides use `ASKSQL_<PROVIDER>_MODEL`.
 - **Browser E2E** - a Chrome install; the tests drive it via `puppeteer-core`.
+
+### Schema regression
+
+`pnpm test:schemas` runs the engine's identifier handling against real databases using schemas
+built to break the rules: mixed case, reserved words, spaces, unicode, names the SQL parser treats
+as keywords. It needs no model, because this class of defect does not need one to surface and a
+model would only make the result non-deterministic.
+
+It exists because a mixed-case Postgres schema once failed **every** query and shipped that way for
+weeks. Every database test we owned used tables we had written ourselves, so they shared our blind
+spots by construction.
+
+Two rules keep it honest, and both matter more than the pass count:
+
+- On an engine that folds unquoted names, each fixture first asserts the **bare form genuinely
+  fails**. A fixture that passes before the fix is testing nothing.
+- An unreachable engine is reported as **skipped, never as a pass**. CI passes
+  `--require=postgres,mysql,sqlite` so the job cannot go green on the embedded engine alone when the
+  service containers fail to start.
 
 The security boundary is developed **test-first**: add or extend a case in the
 `guard-security` / `guard-fuzz` suites before changing the guard.

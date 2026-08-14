@@ -17,6 +17,7 @@
     "test:watch": "vitest",
     "coverage": "vitest run --coverage",
     "test:packaged": "node tools/packaged-consumer-test.mjs",
+    "test:schemas": "node tools/schema-regression.mjs",
     "test:real-db:load": "node tools/real-db-load.mjs",
     "test:real-db": "node tools/real-db-e2e.mjs",
     "test:schema-sweep": "node tools/schema-sweep.mjs",
