@@ -63,3 +63,44 @@ jobs:
           chrome_path="$(npx --yes @puppeteer/browsers@latest install chrome@151.0.7922.76 | awk '{ $1=""; sub(/^ /,""); print }')"
           node test/e2e-smoke.mjs "$chrome_path"
         working-directory: packages/browser-extension
+
+  # Real engines, hostile schemas, no model. A mixed-case Postgres schema once failed every query
+  # and shipped that way, because every database test used tables we had written ourselves.
+  schema-regression:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: pg
+          POSTGRES_DB: schema_regression
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 12
+      mysql:
+        image: mysql:8
+        env:
+          MYSQL_ALLOW_EMPTY_PASSWORD: 'yes'
+          MYSQL_DATABASE: schema_regression
+        ports:
+          - 3307:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h127.0.0.1" --health-interval 5s --health-timeout 5s --health-retries 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      # The harness exits non-zero if an engine is unreachable, so a silent skip cannot pass here.
+      - run: pnpm test:schemas -- --require=postgres,mysql,sqlite
+        env:
+          ASKSQL_PG_URL: postgres://postgres:pg@127.0.0.1:5433/schema_regression
+          ASKSQL_MYSQL_HOST: 127.0.0.1
+          ASKSQL_MYSQL_PORT: '3307'
+          ASKSQL_MYSQL_USER: root
+          ASKSQL_MYSQL_PASSWORD: ''
