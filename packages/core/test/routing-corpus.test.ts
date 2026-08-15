@@ -9,6 +9,7 @@ import { describe, expect, it } from 'vitest';
 import {
   isDatabaseOverviewQuestion,
   isMetadataQuestion,
+  isRelationshipQuestion,
   isSchemaAdviceQuestion,
   isWriteRequest,
 } from '../src/schema-match.js';
@@ -31,7 +32,9 @@ function loadCorpus(): readonly (readonly [string, string])[] {
 function routeOf(question: string): string {
   if (isCapabilityQuestion(question)) return 'capability';
   if (isWriteRequest(question)) return 'write';
-  if (isSchemaAdviceQuestion(question) || isDatabaseOverviewQuestion(question)) return 'advice';
+  if (isSchemaAdviceQuestion(question) || isDatabaseOverviewQuestion(question) || isRelationshipQuestion(question)) {
+    return 'advice';
+  }
   return isMetadataQuestion(question) ? 'listing' : 'data';
 }
 

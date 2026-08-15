@@ -19,6 +19,9 @@ function scan(sql: string, engine: string | undefined, preserveLength: boolean):
   const hashIsComment = engine === undefined || engine === 'mysql';
   // MySQL honours \' inside a plain literal; PostgreSQL with standard_conforming_strings does not.
   const backslashEscapes = engine === 'mysql';
+  // Only Postgres and DuckDB have E'...'. Elsewhere `E` is an identifier or alias and the quote that
+  // follows opens an ordinary literal, so reading the pair as one span hides the wrong text.
+  const hasEStrings = engine === undefined || engine === 'postgres' || engine === 'duckdb';
   const out: string[] = [];
   const n = sql.length;
   let i = 0;
@@ -76,7 +79,7 @@ function scan(sql: string, engine: string | undefined, preserveLength: boolean):
       }
     }
     // E'...' backslash-escape string (PostgreSQL); the `E` must start a token, or `LIKE'x'` is misread.
-    if ((c === 'e' || c === 'E') && next === "'" && !/[A-Za-z0-9_$]/.test(sql[i - 1] ?? '')) {
+    if (hasEStrings && (c === 'e' || c === 'E') && next === "'" && !/[A-Za-z0-9_$]/.test(sql[i - 1] ?? '')) {
       i += 2;
       while (i < n) {
         if (sql[i] === '\\') i += 2;
@@ -258,4 +261,16 @@ export function trimTrailingNoise(sql: string, engine?: string): string {
     i++;
   }
   return sql.slice(0, lastReal);
+}
+
+/**
+ * Oracle's row-limit tail, which the engine appends to every capped query. The lightweight parser
+ * the catalog and semantic checks use cannot read it, and each of those checks fails open, so
+ * leaving it in place silently disables all of them on Oracle.
+ */
+const FETCH_TAIL_RE = /\s+(?:offset\s+\d+\s+rows?\s*)?fetch\s+(?:first|next)\b[\s\S]*$/iu;
+
+/** The statement without a trailing FETCH FIRST/NEXT clause. Other dialects are unaffected. */
+export function withoutFetchTail(sql: string): string {
+  return sql.replace(FETCH_TAIL_RE, '');
 }

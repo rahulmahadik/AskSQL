@@ -143,6 +143,30 @@ describe('createRequestListener', () => {
     expect(big.destroyed).toBe(true);
   });
 
+  it('honours the configured maxBodyBytes, not a hardcoded ceiling', async () => {
+    // The CLI adapter is the transport the browser extension uses, and it ignored the setting the
+    // Express adapter honoured, so a tightened cap did nothing here.
+    const handle = vi.fn(async () => ({ status: 200, body: {} }));
+    const res = fakeRes();
+    const req = {
+      method: 'POST',
+      url: '/execute',
+      headers: { 'content-type': 'application/json' },
+      destroyed: false,
+      destroy() {
+        this.destroyed = true;
+      },
+      async *[Symbol.asyncIterator]() {
+        yield Buffer.alloc(2048);
+      },
+    };
+    createRequestListener({ handle, maxBodyBytes: 1024 } as unknown as AskSqlServer)(req as never, res as never);
+    await settled();
+
+    expect(res.status).toBe(413);
+    expect(handle).not.toHaveBeenCalled();
+  });
+
   it('stops pulling the stream once the client disconnects mid-SSE', async () => {
     const res = fakeRes();
     let pulled = 0;

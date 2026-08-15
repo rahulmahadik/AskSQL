@@ -18,15 +18,11 @@ describe('correctTableCase', () => {
 
   it('corrects an upper-cased table name after JOIN', () => {
     const sql = 'SELECT * FROM Customers c JOIN ORDERITEMS o ON c.id = o.id';
-    expect(correctTableCase(sql, TABLES, '`')).toBe(
-      'SELECT * FROM Customers c JOIN `OrderItems` o ON c.id = o.id',
-    );
+    expect(correctTableCase(sql, TABLES, '`')).toBe('SELECT * FROM Customers c JOIN `OrderItems` o ON c.id = o.id');
   });
 
   it('leaves an alias after the table alone', () => {
-    expect(correctTableCase('SELECT * FROM orderitems oi', TABLES, '`')).toBe(
-      'SELECT * FROM `OrderItems` oi',
-    );
+    expect(correctTableCase('SELECT * FROM orderitems oi', TABLES, '`')).toBe('SELECT * FROM `OrderItems` oi');
   });
 
   it('returns null when every name already matches', () => {
@@ -42,9 +38,7 @@ describe('correctTableCase', () => {
   });
 
   it('keeps a schema prefix and corrects only the table', () => {
-    expect(correctTableCase('SELECT * FROM shop.orderitems', TABLES, '`')).toBe(
-      'SELECT * FROM shop.`OrderItems`',
-    );
+    expect(correctTableCase('SELECT * FROM shop.orderitems', TABLES, '`')).toBe('SELECT * FROM shop.`OrderItems`');
   });
 
   /** A column sharing a table's name must not be rewritten: it is not in table position. */
@@ -152,9 +146,9 @@ describe('quoteCatalogIdentifiers', () => {
   /** A reserved word is quoted too, not only a folded name. */
   /** A table called "order" once turned ORDER BY into "order" BY, which the guard then rejected. */
   it('does not rewrite a keyword that is not naming the table', () => {
-    expect(
-      quoteCatalogIdentifiers('SELECT x FROM Customers ORDER BY x DESC', ['Customers', 'order'], '"'),
-    ).toBe('SELECT x FROM "Customers" ORDER BY x DESC');
+    expect(quoteCatalogIdentifiers('SELECT x FROM Customers ORDER BY x DESC', ['Customers', 'order'], '"')).toBe(
+      'SELECT x FROM "Customers" ORDER BY x DESC',
+    );
   });
 
   it('still quotes GROUP BY and other keyword-adjacent columns', () => {
@@ -165,9 +159,7 @@ describe('quoteCatalogIdentifiers', () => {
 
   /** A table called Nulls broke the parser: NULLS is a keyword, so the bare name would not parse. */
   it('quotes a table named like a parser keyword', () => {
-    expect(quoteCatalogIdentifiers('SELECT Val FROM Nulls', ['Nulls', 'Val'], '"')).toBe(
-      'SELECT "Val" FROM "Nulls"',
-    );
+    expect(quoteCatalogIdentifiers('SELECT Val FROM Nulls', ['Nulls', 'Val'], '"')).toBe('SELECT "Val" FROM "Nulls"');
   });
 
   it('quotes a table whose name is a reserved word', () => {
@@ -267,17 +259,13 @@ describe('escaped quotes inside literals', () => {
 
   it('keeps scanning as code after the literal really ends', () => {
     const sql = "SELECT Body FROM Notes WHERE Author = 'o''brien'";
-    expect(quoteCatalogIdentifiers(sql, NAMES, '"')).toBe(
-      'SELECT "Body" FROM "Notes" WHERE "Author" = \'o\'\'brien\'',
-    );
+    expect(quoteCatalogIdentifiers(sql, NAMES, '"')).toBe('SELECT "Body" FROM "Notes" WHERE "Author" = \'o\'\'brien\'');
   });
 
   /** correctTableCase shares the scanner, so it has the same hazard. */
   it('leaves a table name inside an escaped literal alone when repairing case', () => {
     const sql = "SELECT * FROM notes WHERE Body = 'it''s notes'";
-    expect(correctTableCase(sql, ['Notes'], '"', 'lower')).toBe(
-      'SELECT * FROM "Notes" WHERE Body = \'it\'\'s notes\'',
-    );
+    expect(correctTableCase(sql, ['Notes'], '"', 'lower')).toBe("SELECT * FROM \"Notes\" WHERE Body = 'it''s notes'");
   });
 });
 
@@ -355,6 +343,20 @@ describe('literals and qualifiers the rewriter must not touch', () => {
   /** Quoting a schema qualifier turns a working query into "schema does not exist". */
   it('does not quote a qualifier that is not a table', () => {
     expect(quoteCatalogIdentifiers('SELECT * FROM sales.orders', ['Sales'], '"', [])).toBeNull();
+  });
+
+  /**
+   * After FROM the qualifier is a SCHEMA, so a table of the same name must not lend it its casing.
+   * Verified against Postgres: a schema `sales` beside a table `Sales` turned a working query into
+   * `relation "Sales.orders" does not exist`.
+   */
+  it('does not quote a FROM qualifier even when a table shares the name', () => {
+    expect(quoteCatalogIdentifiers('SELECT SUM(amount) FROM sales.orders', ['Sales'], '"', ['Sales'])).toBeNull();
+    expect(quoteCatalogIdentifiers('SELECT * FROM a JOIN sales.orders ON 1=1', ['Sales'], '"', ['Sales'])).toBeNull();
+    // The table after the dot is still corrected; only the schema is left alone.
+    expect(quoteCatalogIdentifiers('SELECT * FROM sales.orders', ['Sales', 'Orders'], '"', ['Sales', 'Orders'])).toBe(
+      'SELECT * FROM sales."Orders"',
+    );
   });
 
   it('still quotes a qualifier that is a real table', () => {

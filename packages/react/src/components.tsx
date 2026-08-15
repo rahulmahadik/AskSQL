@@ -12,6 +12,12 @@ import { useAskSql, type Turn } from './useAskSql.js';
 import { ResultChart, isChartable } from './ResultChart.js';
 import type { ConnectionSummary, Transport } from './client.js';
 
+/**
+ * Rows painted at once. The engine caps a result at its own maxRows, but that is configurable, and a
+ * raised cap rendered every row into the DOM at once - one large result froze the tab.
+ */
+const MAX_RENDERED_ROWS = 1000;
+
 /** Split one line into **bold** / `code` / plain runs. Text-only, no dangerouslySetInnerHTML. */
 function inlineMarkdown(line: string): JSX.Element[] {
   const re = /\*\*(.+?)\*\*|(?<!\w)__(.+?)__(?!\w)|`([^`]+)`/gsu;
@@ -315,7 +321,7 @@ function EmptyState({
   return (
     <div className="asksql-empty">
       <h3>Ask your database anything</h3>
-      <p>Type a question in plain language. You'll see the SQL before it runs.</p>
+      <p>Type a question in plain language. You&rsquo;ll see the SQL for every answer.</p>
       {suggestions && suggestions.length > 0 && (
         <div className="asksql-actions" style={{ justifyContent: 'center', marginTop: 12 }}>
           {suggestions.map((s) => (
@@ -617,7 +623,7 @@ export function ResultTable({ result }: { result: ResultSet }): JSX.Element {
               </tr>
             </thead>
             <tbody>
-              {result.rows.map((row, ri) => (
+              {result.rows.slice(0, MAX_RENDERED_ROWS).map((row, ri) => (
                 <tr key={ri}>
                   {row.map((cell, ci) => {
                     const d = formatCell(cell, result.columns[ci]);
@@ -632,6 +638,12 @@ export function ResultTable({ result }: { result: ResultSet }): JSX.Element {
               ))}
             </tbody>
           </table>
+          {result.rows.length > MAX_RENDERED_ROWS && (
+            <p className="asksql-note">
+              Showing the first {MAX_RENDERED_ROWS.toLocaleString()} of {result.rows.length.toLocaleString()} rows.
+              Export to get them all.
+            </p>
+          )}
         </div>
       )}
       <div className="asksql-meta">

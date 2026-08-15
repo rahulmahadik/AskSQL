@@ -64,6 +64,52 @@ describe('connect error mapping', () => {
   });
 });
 
+describe('the configured schema', () => {
+  /** Records every statement a connection runs, so the session setup is visible. */
+  function recordingPool(seen: string[]): unknown {
+    const conn = {
+      callTimeout: 0,
+      async execute(sql: string) {
+        seen.push(sql);
+        return { rows: [], metaData: [] };
+      },
+      async commit() {},
+      async rollback() {},
+      async close() {},
+    };
+    return { getConnection: async () => conn, close: async () => {} };
+  }
+
+  it('puts the session in that schema, so an unqualified name resolves where the catalog says', async () => {
+    const seen: string[] = [];
+    driver.createPool = async () => recordingPool(seen);
+    const c = new OracleConnector({ id: 'o', name: 'o', host: 'db.example', database: 'XEPDB1', schema: 'sales' });
+    await c.execute('SELECT 1 FROM DUAL');
+    expect(seen[0]).toBe('ALTER SESSION SET CURRENT_SCHEMA = SALES');
+  });
+
+  it('refuses a schema that is not an Oracle identifier, since the name cannot be bound', async () => {
+    const seen: string[] = [];
+    driver.createPool = async () => recordingPool(seen);
+    const c = new OracleConnector({
+      id: 'o',
+      name: 'o',
+      host: 'db.example',
+      database: 'XEPDB1',
+      schema: 'x; DROP TABLE t--',
+    });
+    await expect(c.execute('SELECT 1 FROM DUAL')).rejects.toMatchObject({ code: 'CONFIG_ERROR' });
+    expect(seen.some((s) => s.includes('DROP'))).toBe(false);
+  });
+
+  it('leaves the session alone when no schema is configured', async () => {
+    const seen: string[] = [];
+    driver.createPool = async () => recordingPool(seen);
+    await connector().execute('SELECT 1 FROM DUAL');
+    expect(seen.some((s) => s.startsWith('ALTER SESSION'))).toBe(false);
+  });
+});
+
 describe('query error mapping', () => {
   it('maps ORA-01013 (call timeout) to DB_TIMEOUT', async () => {
     driver.createPool = async () => poolFailingQueryWith(oraError('ORA-01013: user requested cancel', 1013));

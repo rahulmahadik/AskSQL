@@ -57,6 +57,9 @@ inline view, which would break duplicate output column names.
 - NUMBER and CLOB are fetched as strings, BLOB as a Buffer. The fetch coercion is
   scoped per call, so the process-global oracledb defaults are left alone.
 - Introspection is bounded too: `introspectTimeoutMs`, default 60s.
+- Introspection reads the session's `CURRENT_SCHEMA`. An account that only holds grants on
+  another owner's tables sees nothing there, so set `schema` to that owner; the session is
+  put in it, and unqualified names then resolve where the catalog says they are.
 - `sampleColumnValues` is accepted for config parity but not implemented for Oracle.
 
 Full documentation: [https://github.com/rahulmahadik/AskSQL](https://github.com/rahulmahadik/AskSQL)

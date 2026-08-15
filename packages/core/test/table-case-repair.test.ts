@@ -3,7 +3,7 @@
  * corrected query, and must not spend a model round trip getting there.
  */
 import { describe, expect, it, vi } from 'vitest';
-import { createAskSql, firstUnknownColumn, firstUnknownTable } from '../src/engine.js';
+import { ambiguousColumn, createAskSql, firstUnknownColumn, firstUnknownTable } from '../src/engine.js';
 import { AskSqlError } from '../src/errors.js';
 import { MYSQL_DIALECT, POSTGRES_DIALECT } from '../src/dialects.js';
 import type { Connector, CustomModel, ResultSet, SchemaCatalog } from '../src/types.js';
@@ -150,10 +150,35 @@ describe('unknown-column floor on set operations', () => {
     engine: 'sqlite',
     schemas: [],
     tables: [
-      { name: 'Album', kind: 'table', columns: [{ name: 'AlbumId', dbType: 'int', nullable: false }], primaryKey: [], foreignKeys: [], uniques: [], checks: [], indexes: [], source: 'db' },
-      { name: 'Artist', kind: 'table', columns: [{ name: 'ArtistId', dbType: 'int', nullable: false }], primaryKey: [], foreignKeys: [], uniques: [], checks: [], indexes: [], source: 'db' },
+      {
+        name: 'Album',
+        kind: 'table',
+        columns: [{ name: 'AlbumId', dbType: 'int', nullable: false }],
+        primaryKey: [],
+        foreignKeys: [],
+        uniques: [],
+        checks: [],
+        indexes: [],
+        source: 'db',
+      },
+      {
+        name: 'Artist',
+        kind: 'table',
+        columns: [{ name: 'ArtistId', dbType: 'int', nullable: false }],
+        primaryKey: [],
+        foreignKeys: [],
+        uniques: [],
+        checks: [],
+        indexes: [],
+        source: 'db',
+      },
     ],
-    enums: [], sequences: [], triggers: [], routines: [], warnings: [], fetchedAt: 'now',
+    enums: [],
+    sequences: [],
+    triggers: [],
+    routines: [],
+    warnings: [],
+    fetchedAt: 'now',
   } as unknown as SchemaCatalog;
 
   /** Per-table row counts are a normal DBA question, and this blocked them outright. */
@@ -175,9 +200,24 @@ describe('set-operation detection ignores literals', () => {
     engine: 'postgres',
     schemas: [],
     tables: [
-      { name: 'notes', kind: 'table', columns: [{ name: 'body', dbType: 'text', nullable: false }], primaryKey: [], foreignKeys: [], uniques: [], checks: [], indexes: [], source: 'db' },
+      {
+        name: 'notes',
+        kind: 'table',
+        columns: [{ name: 'body', dbType: 'text', nullable: false }],
+        primaryKey: [],
+        foreignKeys: [],
+        uniques: [],
+        checks: [],
+        indexes: [],
+        source: 'db',
+      },
     ],
-    enums: [], sequences: [], triggers: [], routines: [], warnings: [], fetchedAt: 'now',
+    enums: [],
+    sequences: [],
+    triggers: [],
+    routines: [],
+    warnings: [],
+    fetchedAt: 'now',
   } as unknown as SchemaCatalog;
 
   /** A value containing "except" once disabled the column floor for an ordinary query. */
@@ -187,7 +227,7 @@ describe('set-operation detection ignores literals', () => {
   });
 
   it('still skips attribution for a real set operation', () => {
-    const sql = "SELECT nope FROM notes UNION ALL SELECT body FROM notes";
+    const sql = 'SELECT nope FROM notes UNION ALL SELECT body FROM notes';
     expect(firstUnknownColumn(sql, catalog, 'Postgresql')).toBeNull();
   });
 });
@@ -196,12 +236,23 @@ describe('catalog-driven guards', () => {
   const base = {
     engine: 'postgres',
     schemas: [],
-    enums: [], sequences: [], triggers: [], routines: [], warnings: [], fetchedAt: 'now',
+    enums: [],
+    sequences: [],
+    triggers: [],
+    routines: [],
+    warnings: [],
+    fetchedAt: 'now',
   };
   const table = (name: string, cols: string[]) => ({
-    name, kind: 'table',
+    name,
+    kind: 'table',
     columns: cols.map((c) => ({ name: c, dbType: 'text', nullable: true })),
-    primaryKey: [], foreignKeys: [], uniques: [], checks: [], indexes: [], source: 'db',
+    primaryKey: [],
+    foreignKeys: [],
+    uniques: [],
+    checks: [],
+    indexes: [],
+    source: 'db',
   });
 
   /** A quoted CTE was read as a hallucinated table, rejecting a valid query. */
@@ -215,5 +266,52 @@ describe('catalog-driven guards', () => {
   it('still reports a genuinely unknown table', () => {
     const catalog = { ...base, tables: [table('Orders', ['Amount'])] } as unknown as SchemaCatalog;
     expect(firstUnknownTable('SELECT * FROM nosuchtable', catalog, 'Postgresql')).toBe('nosuchtable');
+  });
+});
+
+describe('ambiguous column floor', () => {
+  const t = (name: string, cols: string[]) => ({
+    name,
+    kind: 'table',
+    columns: cols.map((c) => ({ name: c, dbType: 'int', nullable: true })),
+    primaryKey: [],
+    foreignKeys: [],
+    uniques: [],
+    checks: [],
+    indexes: [],
+    source: 'db',
+  });
+  const catalog = {
+    engine: 'postgres',
+    schemas: [],
+    tables: [t('a', ['id', 'v']), t('b', ['id', 'w']), t('c', ['cid', 'z'])],
+    enums: [],
+    sequences: [],
+    triggers: [],
+    routines: [],
+    warnings: [],
+    fetchedAt: 'now',
+  } as unknown as SchemaCatalog;
+
+  /** Two joined tables both own it, so the database rejects the bare name. */
+  it('names the column both tables own', () => {
+    expect(ambiguousColumn('SELECT id, v, w FROM a JOIN b ON a.id = b.id', catalog, 'Postgresql')).toBe('id');
+  });
+
+  /** A USING or NATURAL join makes the shared column legal unqualified. */
+  it.each([
+    'SELECT a.id, v, w FROM a JOIN b ON a.id = b.id',
+    'SELECT id, v, w FROM a JOIN b USING (id)',
+    'SELECT id FROM a NATURAL JOIN b',
+    'SELECT id, v FROM a',
+    'SELECT v, z FROM a JOIN c ON a.id = c.cid',
+    "SELECT v FROM a JOIN c ON a.id = c.cid WHERE v = 'id'",
+  ])('leaves %s alone', (sql) => {
+    expect(ambiguousColumn(sql, catalog, 'Postgresql')).toBeNull();
+  });
+
+  /** A scope this cannot model is left to the database rather than guessed at. */
+  it('says nothing about a subquery', () => {
+    expect(ambiguousColumn('SELECT id FROM a WHERE id IN (SELECT id FROM b)', catalog, 'Postgresql')).toBeNull();
   });
 });

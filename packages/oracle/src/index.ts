@@ -32,6 +32,11 @@ export interface OracleConnectorConfig {
   readonly password?: string;
   /** Service name, used as the connect-string service when host is given. */
   readonly database?: string;
+  /**
+   * Schema to introspect. Defaults to the session's CURRENT_SCHEMA, which is empty for an account
+   * that only holds grants on another owner's tables.
+   */
+  readonly schema?: string;
   /** Placeholder for parity with the other connectors; Oracle value sampling is not implemented, so this has no effect. */
   readonly sampleColumnValues?: boolean;
   /** Per-call timeout (ms) for the schema read. Defaults to 60s. */
@@ -169,6 +174,34 @@ export class OracleConnector implements Connector {
     }
   }
 
+  /**
+   * A connection with the configured schema in effect: Oracle resolves unqualified names against
+   * CURRENT_SCHEMA, so without this every query misses the tables the catalog just listed. The name
+   * cannot be bound, so it is used only if it matches Oracle's identifier rules.
+   */
+  private async acquire(pool: OraclePool): Promise<OracleConnection> {
+    let conn: OracleConnection;
+    try {
+      conn = await pool.getConnection();
+    } catch (err) {
+      throw mapConnectError(err);
+    }
+    const schema = (this.config.schema ?? '').trim();
+    if (schema) {
+      if (!/^[A-Za-z][A-Za-z0-9_$#]*$/.test(schema)) {
+        await conn.close().catch(() => {});
+        throw new AskSqlError('CONFIG_ERROR', { detail: `schema is not a valid Oracle identifier: ${schema}` });
+      }
+      try {
+        await conn.execute(`ALTER SESSION SET CURRENT_SCHEMA = ${schema.toUpperCase()}`, {}, {});
+      } catch (err) {
+        await conn.close().catch(() => {});
+        throw AskSqlError.from(err, 'DB_QUERY_ERROR');
+      }
+    }
+    return conn;
+  }
+
   private async ensure(): Promise<OraclePool> {
     if (!this.pool) await this.connect();
     if (!this.pool) throw new AskSqlError('DB_UNREACHABLE', { detail: 'pool not initialized' });
@@ -178,17 +211,13 @@ export class OracleConnector implements Connector {
   async introspect(): Promise<SchemaCatalog> {
     const pool = await this.ensure();
     const oracledb = await this.oracle();
-    let conn: OracleConnection;
-    try {
-      conn = await pool.getConnection();
-    } catch (err) {
-      throw mapConnectError(err);
-    }
+    const conn = await this.acquire(pool);
     // Bound the catalog read like execute() bounds a query, so a stalled instance times out instead of hanging.
     conn.callTimeout = this.config.introspectTimeoutMs ?? 60_000;
     try {
       return await introspectOracle(conn, oracledb.OUT_FORMAT_OBJECT, {
         sampleColumnValues: this.config.sampleColumnValues ?? false,
+        ...(this.config.schema ? { schema: this.config.schema } : {}),
       });
     } catch (err) {
       throw AskSqlError.from(err, 'DB_QUERY_ERROR');
@@ -206,12 +235,7 @@ export class OracleConnector implements Connector {
 
     if (opts?.signal?.aborted) throw new AskSqlError('CANCELLED');
 
-    let conn: OracleConnection;
-    try {
-      conn = await pool.getConnection();
-    } catch (err) {
-      throw mapConnectError(err);
-    }
+    const conn = await this.acquire(pool);
     conn.callTimeout = Math.max(1, Math.floor(timeoutMs));
 
     let onAbort: (() => void) | null = null;

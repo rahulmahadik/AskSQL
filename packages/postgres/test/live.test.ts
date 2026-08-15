@@ -178,9 +178,7 @@ describe('FID - numeric extremes survive the wire', () => {
   });
 
   maybe('bigint beyond 2^53 and long NUMERIC round-trip digit for digit', async () => {
-    const rs = await conn.execute(
-      'SELECT 9223372036854775807::bigint AS big, 0.30000000000000000000001::numeric AS n',
-    );
+    const rs = await conn.execute('SELECT 9223372036854775807::bigint AS big, 0.30000000000000000000001::numeric AS n');
     expect(rs.rows[0]![0]).toBe('9223372036854775807');
     expect(rs.rows[0]![1]).toBe('0.30000000000000000000001');
   });

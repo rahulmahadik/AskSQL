@@ -75,6 +75,15 @@ describe('a pipeline that selects nothing is not an answer', () => {
     });
   }
 
+  it('rejects the same dodge written as shell JSON, which is what a small model emits', async () => {
+    // Unquoted keys parse only after the guard relaxes them. Reading this check with plain
+    // JSON.parse left it silently off for every shell-form pipeline.
+    const engine = createMongoAskSql({ connector: new FakeMongo(), model: model(dodge('[{$limit: 1000}]')) });
+    await expect(engine.ask('what is the weather in Paris tomorrow')).rejects.toMatchObject({
+      code: 'LLM_BAD_OUTPUT',
+    });
+  });
+
   it('accepts a pipeline that groups', async () => {
     const engine = createMongoAskSql({
       connector: new FakeMongo(),

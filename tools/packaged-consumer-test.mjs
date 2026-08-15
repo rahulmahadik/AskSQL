@@ -190,10 +190,14 @@ check('guard refuses stacked statements', () => {
   assert(!r.allowed, 'expected refusal');
   return r.reason;
 });
-check('guard refuses LIMIT on Oracle', () => {
-  const r = guardSql({ sql: 'SELECT id FROM t LIMIT 10', dialect: ORACLE_DIALECT, policy });
-  assert(!r.allowed, 'expected refusal');
-  return r.reason;
+check('guard translates a plain LIMIT on Oracle and refuses the rest', () => {
+  const plain = guardSql({ sql: 'SELECT id FROM t LIMIT 10', dialect: ORACLE_DIALECT, policy });
+  assert(plain.allowed, 'expected the plain form to be translated');
+  assert(plain.sql.includes('FETCH FIRST 10 ROWS ONLY'), 'expected FETCH FIRST');
+  assert(!/\blimit\b/i.test(plain.sql), 'LIMIT survived the translation');
+  const offset = guardSql({ sql: 'SELECT id FROM t LIMIT 10 OFFSET 5', dialect: ORACLE_DIALECT, policy });
+  assert(!offset.allowed, 'expected refusal for an offset form');
+  return plain.sql.replace(/\s+/g, ' ');
 });
 check('routing predicates', () => {
   assert(isWriteRequest('delete all cancelled orders'), 'write not detected');

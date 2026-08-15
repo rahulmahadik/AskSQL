@@ -312,7 +312,11 @@ function walkPipeline(
       return {
         violation: {
           ruleId: 'unbounded_accumulator',
-          reason: 'A $push/$addToSet collects an unbounded array; add a $limit before the $group.',
+          reason:
+            'A $push/$addToSet collects an unbounded array, and one document cannot exceed 16MB. ' +
+            'To count distinct values of a field, write exactly ' +
+            '[{"$group": {"_id": "$field"}}, {"$count": "n"}] instead of $addToSet with $size. ' +
+            'If the array is genuinely needed, put a $limit before the $group.',
         },
         collections,
       };
@@ -400,7 +404,14 @@ export function guardPipeline(
   policy: MongoGuardPolicy = DEFAULT_MONGO_GUARD_POLICY,
 ): MongoGuardVerdict {
   const strict = toStrictPipelineJson(pipelineJson);
-  if (!strict) return blocked('parse_failed', 'The pipeline is not valid JSON.');
+  if (!strict) {
+    return blocked(
+      'parse_failed',
+      'The pipeline is not valid JSON. Shell constructors are the usual cause: write ' +
+        '{"$date": "2024-01-01T00:00:00Z"} rather than new Date(...) or ISODate(...), ' +
+        '{"$oid": "..."} rather than ObjectId(...), and {"$regex": "^P"} rather than a /^P/ literal.',
+    );
+  }
   const pipeline = strict.pipeline;
   // Scan the strict-JSON form: hasUnsafeIntegerLiteral only understands double-quoted strings.
   if (hasUnsafeIntegerLiteral(strict.json)) {
