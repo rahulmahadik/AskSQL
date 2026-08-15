@@ -41,13 +41,6 @@ export interface SidecarConnection {
   readonly database?: string;
 }
 
-export interface AskSqlSettings {
-  readonly provider: ProviderSettings;
-  readonly engine: EngineSettings;
-  readonly connections: readonly SidecarConnection[];
-  readonly warningAcknowledged: boolean;
-}
-
 export const DEFAULT_ENGINE_SETTINGS: EngineSettings = {
   maxRows: 200,
   requireApproval: false,
