@@ -252,6 +252,31 @@ class IdentifierCaseTest {
         assertNull(IdentifierCase.quoteCatalogIdentifiers("SELECT * FROM sales.orders", listOf("Sales"), '"', emptyList()))
     }
 
+    /**
+     * After FROM the qualifier is a SCHEMA, so a table of the same name must not lend it its casing.
+     * Verified against Postgres: a schema `sales` beside a table `Sales` turned a working query into
+     * `relation "Sales.orders" does not exist`.
+     */
+    @Test fun `does not quote a FROM qualifier even when a table shares the name`() {
+        assertNull(
+            IdentifierCase.quoteCatalogIdentifiers(
+                "SELECT SUM(amount) FROM sales.orders", listOf("Sales"), '"', listOf("Sales"),
+            ),
+        )
+        assertNull(
+            IdentifierCase.quoteCatalogIdentifiers(
+                "SELECT * FROM a JOIN sales.orders ON 1=1", listOf("Sales"), '"', listOf("Sales"),
+            ),
+        )
+        // The table after the dot is still corrected; only the schema is left alone.
+        assertEquals(
+            """SELECT * FROM sales."Orders"""",
+            IdentifierCase.quoteCatalogIdentifiers(
+                "SELECT * FROM sales.orders", listOf("Sales", "Orders"), '"', listOf("Sales", "Orders"),
+            ),
+        )
+    }
+
     @Test fun `still quotes a qualifier that is a real table`() {
         assertEquals(
             """SELECT "Customers"."FirstName" FROM "Customers"""",
@@ -321,5 +346,34 @@ class IdentifierCaseTest {
                 "SELECT FirstName FROM Customers WHERE created > TIMESTAMP '2024-01-01'", boundaryNames, '"',
             ),
         )
+    }
+
+    /** Mirrors packages/core/test/identifier-case.test.ts: this had no Kotlin counterpart at all. */
+    @Test fun `quotes a reserved word used as an alias`() {
+        assertEquals(
+            "SELECT total AS `order` FROM t",
+            IdentifierCase.quoteReservedAliases("SELECT total AS order FROM t", '`', "mysql"),
+        )
+        // A cast's type is not an alias, single- or multi-word.
+        assertNull(IdentifierCase.quoteReservedAliases("SELECT CAST(x AS UNSIGNED) AS n FROM t", '`', "mysql"))
+        assertNull(IdentifierCase.quoteReservedAliases("SELECT CAST(x AS UNSIGNED INTEGER) AS n FROM t", '`', "mysql"))
+        assertNull(IdentifierCase.quoteReservedAliases("SELECT x AS total FROM t", '`', "mysql"))
+    }
+
+    /**
+     * E'a\'b' is one literal on Postgres: reading it as two handed the middle to the rewriter as
+     * code, which quoted an identifier INSIDE the string value and silently changed the filter.
+     */
+    @Test fun `does not rewrite inside an E-string`() {
+        val q = '\''
+        val sql = "SELECT count(*) FROM Orders WHERE notes = E${q}O\\${q}Brien status pending${q}"
+        val out = IdentifierCase.quoteCatalogIdentifiers(sql, listOf("Orders", "Notes", "Status"), '"', listOf("Orders"))
+        assertTrue("rewrote inside the literal: $out", out == null || !out.contains("\"Status\""))
+    }
+
+    /** The three-part guard reads a chunk-relative offset, so a literal earlier in the statement broke it. */
+    @Test fun `does not recase a three-part name after a literal`() {
+        val q = '\''
+        assertNull(IdentifierCase.correctTableCase("SELECT ${q}paid${q} FROM prod.sales.orders", listOf("Sales"), '"', IdentifierCase.Folding.LOWER))
     }
 }

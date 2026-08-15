@@ -35,7 +35,7 @@ function strOrNull(v: unknown): string | null {
 export async function introspectOracle(
   db: OracleQueryable,
   outFormatObject: number,
-  _opts?: { sampleColumnValues?: boolean },
+  _opts?: { sampleColumnValues?: boolean; schema?: string },
 ): Promise<SchemaCatalog> {
   const warnings: string[] = [];
 
@@ -51,8 +51,10 @@ export async function introspectOracle(
   };
 
   // ---- current schema (introspection scope) ----
-  let owner = '';
-  {
+  // A configured schema wins: tables reached through a grant live under their owner, not the
+  // session's, and unquoted Oracle names are stored upper case.
+  let owner = (_opts?.schema ?? '').trim().toUpperCase();
+  if (!owner) {
     const rows = await q('current schema', `SELECT SYS_CONTEXT('USERENV','CURRENT_SCHEMA') AS SCHEMA FROM DUAL`, {});
     owner = str(rows[0]?.['SCHEMA']);
   }
@@ -72,6 +74,24 @@ export async function introspectOracle(
      SELECT view_name AS name, 'VIEW' AS kind FROM all_views WHERE owner = :owner`,
     binds,
   );
+
+  // An empty scope is usually a grants-only account, whose tables sit under another owner. Naming
+  // the readable schemas turns a silently empty catalog into something the user can act on.
+  if (tableRows.length === 0) {
+    const others = await q(
+      'readable schemas',
+      `SELECT owner, COUNT(*) AS n FROM all_tables
+       WHERE owner <> :owner AND owner NOT IN ('SYS','SYSTEM','XDB','MDSYS','CTXSYS','OUTLN','DBSNMP','APPQOSSYS','AUDSYS','GSMADMIN_INTERNAL','OJVMSYS','ORDSYS','ORDDATA','OLAPSYS','LBACSYS','WMSYS','DVSYS','RDSADMIN')
+       GROUP BY owner ORDER BY COUNT(*) DESC FETCH FIRST 5 ROWS ONLY`,
+      binds,
+    );
+    if (others.length > 0) {
+      const names = others.map((r) => `${str(r['OWNER'])} (${str(r['N'])} tables)`).join(', ');
+      warnings.push(
+        `No tables are visible in ${owner}. Readable schemas: ${names}. Set the connection's schema option to read one of those.`,
+      );
+    }
+  }
 
   // ---- columns ----
   const colRows = await q(

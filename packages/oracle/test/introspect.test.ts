@@ -216,6 +216,29 @@ describe('introspectOracle', () => {
     expect(catalog.schemas).toEqual(['APP']);
   });
 
+  it('introspects the configured schema instead of the session default', async () => {
+    const db = fakeDb({
+      SYS_CONTEXT: [{ SCHEMA: 'ZZGRANTEE' }],
+      all_tables: [{ NAME: 'T', KIND: 'TABLE' }],
+    });
+    const catalog = await introspectOracle(db, 4002, { schema: 'sales' });
+    // Unquoted Oracle names are stored upper case, so the configured value is folded to match.
+    expect(catalog.schemas).toEqual(['SALES']);
+    expect(db.binds.every((b) => (b as Record<string, unknown>)['owner'] === undefined || (b as Record<string, unknown>)['owner'] === 'SALES')).toBe(true);
+  });
+
+  it('names the readable schemas when the scope holds nothing, rather than reporting an empty database', async () => {
+    // The fake matches on the first fragment that appears, so the narrower query is registered first.
+    const db = fakeDb({
+      SYS_CONTEXT: [{ SCHEMA: 'ZZGRANTEE' }],
+      'GROUP BY owner': [{ OWNER: 'ASKSQL', N: 4 }],
+      all_tables: [],
+    });
+    const catalog = await introspectOracle(db, 4002);
+    expect(catalog.tables).toHaveLength(0);
+    expect(catalog.warnings.some((w) => w.includes('ASKSQL (4 tables)') && w.includes('schema option'))).toBe(true);
+  });
+
   it('turns an unreadable dictionary view into a warning, not a failure', async () => {
     const db = fakeDb({
       SYS_CONTEXT: [{ SCHEMA: 'HR' }],

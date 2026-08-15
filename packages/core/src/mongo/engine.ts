@@ -10,6 +10,7 @@ import { pruneCatalog } from '../catalog.js';
 import {
   closestTableName,
   isDatabaseOverviewQuestion,
+  isRelationshipQuestion,
   isSchemaAdviceQuestion,
   isSchemaProposalQuestion,
   isWriteRequest,
@@ -40,10 +41,13 @@ import {
   guardPipeline,
   parsePipeline,
   resolveMongoGuardPolicy,
+  toStrictPipelineJson,
   type MongoGuardPolicy,
   type MongoGuardVerdict,
 } from './guard.js';
 import { extractImpossible, extractPipeline } from './extract.js';
+import { rewriteDistinctCount } from './normalise.js';
+import { firstMisquotedField, firstUnknownStageField } from './stage-fields.js';
 import {
   buildMongoExplainSystem,
   buildMongoExplainUser,
@@ -130,6 +134,9 @@ const looksLikeRefusal = (text: string): boolean =>
 
 /** Resolve a collection name case-insensitively to its real casing (Mongo names are case-sensitive). */
 function resolveCollection(name: string, catalog: SchemaCatalog): string | null {
+  // MongoDB names ARE case-sensitive, so an exact match wins: with both `Orders` and `orders` in the
+  // database, a case-insensitive scan could redirect a correct name to its sibling.
+  if (catalog.tables.some((t) => t.name === name)) return name;
   const lower = name.toLowerCase();
   for (const t of catalog.tables) if (t.name.toLowerCase() === lower) return t.name;
   return null;
@@ -187,12 +194,11 @@ const CANNOT_ANSWER_RE =
 
 /** True when a pipeline selects, groups and computes nothing - it just hands back arbitrary documents. */
 function isNoOpPipeline(pipelineJson: string): boolean {
-  let stages: unknown;
-  try {
-    stages = JSON.parse(pipelineJson);
-  } catch {
-    return false; // unparsable is the guard's problem, not this check's
-  }
+  // Read it the way the guard does. A small model writes shell JSON, which plain JSON.parse rejects,
+  // and reading it that way left this check silently off for exactly those pipelines.
+  const strict = toStrictPipelineJson(pipelineJson);
+  if (!strict) return false; // unparsable is the guard's problem, not this check's
+  const stages: unknown = strict.pipeline;
   if (!Array.isArray(stages)) return false;
   // `[]` selects nothing; the guard auto-limits it into 1000 arbitrary documents.
   if (stages.length === 0) return true;
@@ -292,7 +298,9 @@ export function createMongoAskSql(config: MongoAskConfig): MongoAskEngine {
         retryable: false,
       });
     }
-    if (isSchemaAdviceQuestion(q) || isDatabaseOverviewQuestion(q)) {
+    // A relationship question asks about the link itself, which the schema already states; a
+    // pipeline would return documents instead of describing it. Same routing as the SQL engine.
+    if (isSchemaAdviceQuestion(q) || isDatabaseOverviewQuestion(q) || isRelationshipQuestion(q)) {
       throw new AskSqlError('LLM_BAD_OUTPUT', {
         userMessage: 'That asks about the schema itself rather than the data in it, so there is no query to run.',
         detail: 'schema-advice question routed to the prose path',
@@ -315,6 +323,7 @@ export function createMongoAskSql(config: MongoAskConfig): MongoAskEngine {
       context: opts.context,
     });
     let lastPipeline = '';
+    let lastCollection = '';
     // Same as the SQL engine: a model that says nothing on every attempt is unreachable.
     let everyReplyEmpty = true;
     let contextShrunk = false;
@@ -366,6 +375,7 @@ export function createMongoAskSql(config: MongoAskConfig): MongoAskEngine {
             userPrompt = buildMongoRepairUser({
               question: q,
               failedPipeline: lastPipeline,
+              collection: lastCollection,
               failure: `No collection matches the question exactly, but a "${near}" collection exists. If the question meant that collection, answer using it.`,
               schemaText: pruned.schemaText,
             });
@@ -395,12 +405,14 @@ export function createMongoAskSql(config: MongoAskConfig): MongoAskEngine {
         userPrompt = buildMongoRepairUser({
           question: q,
           failedPipeline: lastPipeline,
+          collection: lastCollection,
           failure: 'The response contained no db.<collection>.aggregate([...]) call. Reply with one in a ```js fence.',
           schemaText: pruned.schemaText,
         });
         continue;
       }
       lastPipeline = extraction.pipelineJson;
+      lastCollection = extraction.collection;
 
       // The document counterpart of the SQL path's literal-answer check.
       if (isNoOpPipeline(extraction.pipelineJson) && CANNOT_ANSWER_RE.test(text)) {
@@ -414,6 +426,7 @@ export function createMongoAskSql(config: MongoAskConfig): MongoAskEngine {
         userPrompt = buildMongoRepairUser({
           question: q,
           failedPipeline: extraction.pipelineJson,
+          collection: extraction.collection,
           failure:
             'That pipeline has no stage that answers the question. Use $match/$group/$project, or reply with IMPOSSIBLE and one sentence saying why.',
           schemaText: pruned.schemaText,
@@ -422,7 +435,11 @@ export function createMongoAskSql(config: MongoAskConfig): MongoAskEngine {
       }
 
       emit({ type: 'stage', stage: 'guard' });
-      const verdict = guard(extraction.pipelineJson);
+      // Judged by the guard: a refused rewrite falls back to the model's own pipeline.
+      const parsed = parsePipeline(extraction.pipelineJson);
+      const rewritten = parsed ? rewriteDistinctCount(parsed) : null;
+      const rewrittenVerdict = rewritten ? guard(JSON.stringify(rewritten)) : null;
+      const verdict = rewrittenVerdict?.allowed ? rewrittenVerdict : guard(extraction.pipelineJson);
       if (!verdict.allowed) {
         if (attempt >= MAX_REPAIRS) {
           throw new AskSqlError('GUARD_BLOCKED', {
@@ -433,6 +450,7 @@ export function createMongoAskSql(config: MongoAskConfig): MongoAskEngine {
         userPrompt = buildMongoRepairUser({
           question: q,
           failedPipeline: extraction.pipelineJson,
+          collection: extraction.collection,
           failure: `The pipeline validator rejected it: ${verdict.reason ?? verdict.ruleId ?? 'not allowed'}. Produce a single read-only pipeline.`,
           schemaText: pruned.schemaText,
         });
@@ -452,6 +470,7 @@ export function createMongoAskSql(config: MongoAskConfig): MongoAskEngine {
         userPrompt = buildMongoRepairUser({
           question: q,
           failedPipeline: extraction.pipelineJson,
+          collection: extraction.collection,
           failure: `Collection "${extraction.collection}" does not exist in the schema. Use only collections from the <schema> block.`,
           schemaText: pruned.schemaText,
         });
@@ -471,7 +490,58 @@ export function createMongoAskSql(config: MongoAskConfig): MongoAskEngine {
         userPrompt = buildMongoRepairUser({
           question: q,
           failedPipeline: extraction.pipelineJson,
+          collection: extraction.collection,
           failure: `A join references collection(s) not in the schema: ${joins.unresolved.join(', ')}. Use only collections from the <schema> block.`,
+          schemaText: pruned.schemaText,
+        });
+        continue;
+      }
+
+      // Quoting floor: a SQL-quoted path names a field MongoDB does not hold, so an aggregate over
+      // it returns 0 instead of failing, and nothing downstream can notice.
+      const collectionFields = new Set(
+        (fullCatalog.tables.find((t) => t.name === resolved)?.columns ?? []).map((c) => c.name),
+      );
+      const misquoted = firstMisquotedField(parsePipeline(joins.pipelineJson) ?? [], collectionFields);
+      if (misquoted) {
+        if (attempt >= MAX_REPAIRS) {
+          throw new AskSqlError('LLM_BAD_OUTPUT', {
+            userMessage: `The pipeline quotes a field name as \`${misquoted.raw}\`, which MongoDB reads as a different field.`,
+            detail: `misquoted field after repairs: ${misquoted.raw}`,
+            retryable: false,
+          });
+        }
+        userPrompt = buildMongoRepairUser({
+          question: q,
+          failedPipeline: extraction.pipelineJson,
+          collection: extraction.collection,
+          failure:
+            `"$${misquoted.raw}" is not a field. MongoDB has no quoting for field paths, so the quote characters ` +
+            `become part of the name and the field reads as missing. Write "$${misquoted.suggestion}" instead.`,
+          schemaText: pruned.schemaText,
+        });
+        continue;
+      }
+
+      // Field floor: MongoDB reports these from inside the plan executor, naming the operator
+      // rather than the field, so repair it here.
+      const stageField = firstUnknownStageField(parsePipeline(joins.pipelineJson) ?? []);
+      if (stageField) {
+        if (attempt >= MAX_REPAIRS) {
+          throw new AskSqlError('LLM_BAD_OUTPUT', {
+            userMessage: `The pipeline reads a field called "${stageField.field}" that no earlier stage produces.`,
+            detail: `unknown field after repairs: ${stageField.field} at stage ${stageField.stage}`,
+            retryable: false,
+          });
+        }
+        userPrompt = buildMongoRepairUser({
+          question: q,
+          failedPipeline: extraction.pipelineJson,
+          collection: extraction.collection,
+          failure:
+            `Stage ${stageField.stage + 1} reads "$${stageField.field}", which no earlier stage produces. ` +
+            `At that point the document holds only: ${stageField.available.join(', ')}. ` +
+            'Remember that $group replaces the document with its _id and its accumulator outputs.',
           schemaText: pruned.schemaText,
         });
         continue;

@@ -462,6 +462,10 @@
       $empty.classList.remove('hidden');
       turn = null;
       planTurns.clear();
+      // Clear ends the live turn, so the button must not stay on Cancel: it would point at nothing
+      // and block the next question, since Ask is refused while busy.
+      pendingSql = null;
+      setBusy(false);
       return;
     }
 

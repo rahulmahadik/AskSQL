@@ -1,5 +1,15 @@
 # @asksql/duckdb
 
+## 0.3.1
+
+### Patch Changes
+
+- Values from the node driver were serialized as their storage rather than their value, so a date
+  arrived as `{"days":19787}` and a blob as an object of bytes. The two drivers hand back two shapes,
+  and Arrow's own `toJSON` is now used where it exists, with the node driver's wrappers unwrapped by
+  type. Both are handled at any depth, so a date inside a list and a blob inside a struct are shaped
+  the same as one at the top level.
+
 ## 0.3.0
 
 ### Minor Changes

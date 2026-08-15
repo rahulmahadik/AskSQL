@@ -328,7 +328,15 @@ export class LocalTransport implements Transport {
         notify?.();
       })
       .catch((err: unknown) => {
-        const e = err as { code?: string; userMessage?: string; retryable?: boolean };
+        const e = err as { code?: string; userMessage?: string; retryable?: boolean; name?: string };
+        // A cancel is not a failure. HttpTransport ends the stream quietly; this one raised a red
+        // error alert for the user's own Stop click.
+        if (params.signal?.aborted || e.name === 'AbortError') {
+          push({ type: 'done' });
+          done = true;
+          notify?.();
+          return;
+        }
         push({
           type: 'error',
           code: e.code ?? 'LLM_UNAVAILABLE',

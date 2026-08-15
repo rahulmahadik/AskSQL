@@ -6,14 +6,17 @@
  */
 
 import { joinGraph, needsQuoting, pruneCatalog } from './catalog.js';
+import { catalogQueryFor } from './catalog-answers.js';
 import {
   correctTableCase,
   foldingFor,
   looksLikeUnknownTable,
   hasUnterminatedLiteral,
   quoteCatalogIdentifiers,
+  quoteReservedAliases,
   withoutLiteralsAndComments,
 } from './identifier-case.js';
+import { withoutFetchTail } from './strip.js';
 import { AskSqlError } from './errors.js';
 import { extractImpossible, extractSql } from './extract.js';
 import { guardSql, resolveGuardPolicy } from './guard.js';
@@ -37,15 +40,18 @@ import {
   closestTableName,
   isDatabaseOverviewQuestion,
   isMetadataQuestion,
+  isRelationshipQuestion,
   isSchemaAdviceQuestion,
   isRerunPreviousRequest,
   isSchemaProposalQuestion,
   isWriteRequest,
+  namesSomethingInCatalog,
 } from './schema-match.js';
 import { mentionsCatalogName, SCHEMA_CHANGE_RE, unknownReferencesInProse } from './grounding.js';
 export { unknownReferencesInProse } from './grounding.js';
 import {
   capabilityAnswer,
+  danglingReference,
   isCapabilityQuestion,
   isDegenerateAnswer,
   isPromptInjection,
@@ -104,6 +110,16 @@ export function redactValuesInError(detail: string): string {
       .replace(/(out of range for type \w+:\s*)"[^"]*"/gi, '$1"..."')
       .replace(/(invalid value\s*(?:for \w+)?:\s*)"[^"]*"/gi, '$1"..."')
       .replace(/(unable to parse|could not convert|conversion failed for)([^"]{0,40})"[^"]*"/gi, '$1$2"..."')
+      .replace(/(date\/time field value out of range:\s*)"[^"]*"/gi, '$1"..."')
+      .replace(/(value out of range[^:"]{0,20}:\s*)"[^"]*"/gi, '$1"..."')
+      .replace(/(invalid input value for enum \w+:\s*)"[^"]*"/gi, '$1"..."')
+      // Postgres appends the WHOLE offending row as a DETAIL on a constraint violation.
+      .replace(/(failing row contains\s*)\([^)]*\)/gi, '$1(...)')
+      // Oracle carries the value after the message rather than in quotes.
+      .replace(
+        /((?:ORA-\d+:\s*)?(?:invalid number|character to number conversion error)[^\n]{0,3}:\s*)[^\n]+/gi,
+        '$1...',
+      )
       .replace(/"[^"]{60,}"/g, '"..."')
   ); // nothing names an identifier this long
 }
@@ -111,6 +127,9 @@ export function redactValuesInError(detail: string): string {
 const MAX_REPAIRS = 2;
 /** "SELECT 'canned reply' AS x" with no FROM: a model faking conversation as data. */
 const LITERAL_STRING_ANSWER_RE = /^select\s+'(?:[^']|'')*'\s*(?:as\s+\w+)?\s*(?:limit\s+\d+)?\s*;?\s*$/i;
+/** At most one staleness-driven re-read per connection in this window. */
+const STALE_REFRESH_COOLDOWN_MS = 30_000;
+
 const CATALOG_TTL_MS = 300_000;
 // A partially-failed introspection (warnings present) is cached only briefly.
 const WARNED_CATALOG_TTL_MS = 30_000;
@@ -169,7 +188,7 @@ export function firstUnknownTable(
     list = precomputed;
   } else {
     try {
-      list = tableParser.tableList(sql, { database: grammar });
+      list = tableParser.tableList(withoutFetchTail(sql), { database: grammar });
     } catch {
       return null; // the guard already parsed it; never double-block here
     }
@@ -374,6 +393,19 @@ export function createAskSql(config: AskSqlConfig): AskSqlEngine {
 
   const catalogGeneration = new Map<string, number>();
 
+  /**
+   * A forced re-read skips the TTL and the inflight dedup, and most business questions name nothing
+   * in the catalog, so doing it per question meant a full introspection on nearly every ask. One per
+   * cooldown still notices a table added mid-session, which is the point of the re-read.
+   */
+  const staleRefreshAt = new Map<string, number>();
+  const mayRefreshForStaleness = (connectionId: string): boolean => {
+    const last = staleRefreshAt.get(connectionId) ?? 0;
+    if (Date.now() - last < STALE_REFRESH_COOLDOWN_MS) return false;
+    staleRefreshAt.set(connectionId, Date.now());
+    return true;
+  };
+
   const getCatalog = async (conn: Connector, refresh = false): Promise<SchemaCatalog> => {
     await ensureConnected(conn);
     const cached = catalogCache.get(conn.id);
@@ -412,7 +444,18 @@ export function createAskSql(config: AskSqlConfig): AskSqlEngine {
     return p;
   };
 
-  const executeGuarded = async (sql: string, conn: Connector, opts: ExecuteEngineOptions): Promise<ResultSet> => {
+  const executeGuarded = async (
+    sql: string,
+    conn: Connector,
+    opts: ExecuteEngineOptions & {
+      /**
+       * The ask-time verdict. Re-guarding SQL that already carries the injected LIMIT reports
+       * autoLimited=false, so a result filled to the cap came back truncated=false with no warning -
+       * the reader saw the first 50 of 16,000 rows and nothing said so.
+       */
+      priorVerdict?: { autoLimited: boolean; loweredLimit: boolean };
+    },
+  ): Promise<ResultSet> => {
     await ensureConnected(conn);
     const verdict = guardSql({ sql, dialect: conn.dialect, policy });
     if (!verdict.allowed) {
@@ -452,14 +495,16 @@ export function createAskSql(config: AskSqlConfig): AskSqlEngine {
         rowCount: result.rowCount,
       });
       const warnings = [...result.warnings];
-      if (verdict.autoLimited) {
+      const autoLimited = verdict.autoLimited || opts.priorVerdict?.autoLimited === true;
+      const loweredLimit = verdict.loweredLimit || opts.priorVerdict?.loweredLimit === true;
+      if (autoLimited) {
         warnings.push(`A row limit of ${policy.maxRows} was added automatically - these are the first rows only.`);
       }
-      if (verdict.loweredLimit) {
+      if (loweredLimit) {
         warnings.push(`The row limit was lowered to ${policy.maxRows}.`);
       }
       // An auto-limited result that filled the cap counts as truncated: the injected LIMIT hides the overflow row.
-      const truncated = result.truncated || (verdict.autoLimited && result.rowCount >= cappedMax);
+      const truncated = result.truncated || (autoLimited && result.rowCount >= cappedMax);
       return { ...result, warnings, truncated };
     } catch (err) {
       // A driver may reject a cancelled query with its own AbortError rather than
@@ -514,7 +559,7 @@ export function createAskSql(config: AskSqlConfig): AskSqlEngine {
         retryable: false,
       });
     }
-    if (isSchemaAdviceQuestion(q) || isDatabaseOverviewQuestion(q)) {
+    if (isSchemaAdviceQuestion(q) || isDatabaseOverviewQuestion(q) || isRelationshipQuestion(q)) {
       throw new AskSqlError('LLM_BAD_OUTPUT', {
         userMessage: 'That asks about the schema itself rather than the data in it, so there is no query to run.',
         detail: 'schema-advice question routed to the prose path',
@@ -524,7 +569,13 @@ export function createAskSql(config: AskSqlConfig): AskSqlEngine {
     const conn = connectorById(opts.connectionId);
 
     emit({ type: 'stage', stage: 'catalog' }, opts);
-    const fullCatalog = await getCatalog(conn);
+    let fullCatalog = await getCatalog(conn);
+    // A question naming nothing we hold usually means the catalog is stale, not that the question is
+    // wrong. Gated on age because a refresh skips both the TTL and the inflight dedup, and most
+    // business questions name nothing in the catalog either.
+    if (!namesSomethingInCatalog(q, fullCatalog) && mayRefreshForStaleness(conn.id)) {
+      fullCatalog = await getCatalog(conn, true).catch(() => fullCatalog);
+    }
     // Names the engine would not read back as themselves: folded case, reserved words, symbols.
     // A name spelled two ways across the catalog is skipped: rewriting "status" to "Status" would
     // ask one table for another table's column.
@@ -541,6 +592,26 @@ export function createAskSql(config: AskSqlConfig): AskSqlEngine {
     );
     // Only a table may be quoted before a dot; a schema qualifier that matched a column name broke it.
     const quotableTables = fullCatalog.tables.map((t) => t.name).filter((n) => quotableNames.includes(n));
+
+    // A handful of structure questions have an exact answer, and a model reliably guesses the
+    // system-catalog columns wrong. Writing those here skips the model rather than repairing it.
+    const written = catalogQueryFor(q, fullCatalog, conn.dialect);
+    if (written) {
+      const verdict = guardSql({ sql: written.sql, dialect: conn.dialect, policy });
+      if (verdict.allowed) {
+        emit({ type: 'stage', stage: 'done' }, opts);
+        return {
+          sql: verdict.sql,
+          explanation: written.explanation,
+          guard: verdict,
+          connectionId: conn.id,
+          usage: { inputTokens: 0, outputTokens: 0 },
+          repairs: 0,
+          run: (execOpts?: ExecuteOptions) =>
+            executeGuarded(verdict.sql, conn, { ...execOpts, question: q, userId: opts.userId }),
+        };
+      }
+    }
 
     emit({ type: 'stage', stage: 'prune' }, opts);
     let pruned = pruneCatalog(fullCatalog, q, config.pruner);
@@ -571,6 +642,7 @@ export function createAskSql(config: AskSqlConfig): AskSqlEngine {
     let lastSql = '';
     // A model that says nothing on EVERY attempt is unreachable; one quiet repair round is not.
     let everyReplyEmpty = true;
+    const semanticNotes: string[] = [];
     let contextShrunk = false;
     let triedMetadataRepair = false;
     let triedFuzzyRepair = false;
@@ -686,11 +758,27 @@ export function createAskSql(config: AskSqlConfig): AskSqlEngine {
       emit({ type: 'stage', stage: 'guard' }, opts);
       // Quote first: a folding engine resolves a bare name elsewhere, and the parser cannot read a
       // bare table named like a keyword. Falls back untouched if quoting makes it unparseable.
-      const normalised = quoteCatalogIdentifiers(extraction.sql, quotableNames, conn.dialect.quoteChar, quotableTables);
+      const quotedNames = quoteCatalogIdentifiers(
+        extraction.sql,
+        quotableNames,
+        conn.dialect.quoteChar,
+        quotableTables,
+      );
+      // A reserved word used as an alias only needs quoting: MySQL rejects `... AS rank` outright.
+      const withAliases = quoteReservedAliases(quotedNames ?? extraction.sql, conn.dialect.quoteChar, conn.engine);
+      const normalised = withAliases ?? quotedNames;
       const normalisedVerdict = normalised ? guardSql({ sql: normalised, dialect: conn.dialect, policy }) : null;
+      // Falling straight back to the model's SQL would drop the identifier quoting too, and on a
+      // folding engine that quoting is what makes a mixed-case name resolve at all.
+      const namesOnlyVerdict =
+        !normalisedVerdict?.allowed && quotedNames && quotedNames !== normalised
+          ? guardSql({ sql: quotedNames, dialect: conn.dialect, policy })
+          : null;
       const verdict = normalisedVerdict?.allowed
         ? normalisedVerdict
-        : guardSql({ sql: extraction.sql, dialect: conn.dialect, policy });
+        : namesOnlyVerdict?.allowed
+          ? namesOnlyVerdict
+          : guardSql({ sql: extraction.sql, dialect: conn.dialect, policy });
       if (!verdict.allowed) {
         if (attempt >= MAX_REPAIRS) {
           await recordHistory({
@@ -708,6 +796,12 @@ export function createAskSql(config: AskSqlConfig): AskSqlEngine {
             detail: `ruleId=${verdict.ruleId ?? 'unknown'} after ${attempt + 1} attempts`,
           });
         }
+        // The validator's parser does not accept WITHIN GROUP on every dialect, so a statement using
+        // it is rejected even though the database would run it. Say so, rather than let the model
+        // send the same thing back until the attempts run out.
+        const orderedSetHint = /\bwithin\s+group\b/i.test(withoutLiteralsAndComments(extraction.sql))
+          ? ' The safety validator cannot read WITHIN GROUP here. Answer without it: return the rows themselves rather than concatenating them into one value.'
+          : '';
         // "could not parse" alone leaves the model repeating the same statement; name the real cause.
         const quoteHint = hasUnterminatedLiteral(extraction.sql, conn.dialect.quoteChar === '`')
           ? " A text value contains an apostrophe that is not escaped: write it doubled, as 'O''Brien'."
@@ -715,7 +809,7 @@ export function createAskSql(config: AskSqlConfig): AskSqlEngine {
         userPrompt = buildRepairUser({
           question: q,
           failedSql: extraction.sql,
-          failure: `The SQL validator rejected it: ${verdict.reason ?? verdict.ruleId ?? 'not allowed'}.${quoteHint} Produce a single read-only SELECT.`,
+          failure: `The SQL validator rejected it: ${verdict.reason ?? verdict.ruleId ?? 'not allowed'}.${quoteHint}${orderedSetHint} Produce a single read-only SELECT.`,
           schemaText,
           dialect: conn.dialect,
         });
@@ -754,10 +848,26 @@ export function createAskSql(config: AskSqlConfig): AskSqlEngine {
         const nearest = closestTableName(unknownTable, fullCatalog);
         userPrompt = buildRepairUser({
           question: q,
+          allowImpossible: true,
           failedSql: verdict.sql,
           failure:
             `Table "${unknownTable}" does not exist in the schema.${nearest ? ` Did you mean "${nearest}"?` : ''} ` +
             'Use only tables from the <schema> block.',
+          schemaText,
+          dialect: conn.dialect,
+        });
+        continue;
+      }
+
+      // Semantic floor: a column two joined tables both own. Every engine rejects it unqualified.
+      const ambiguous = ambiguousColumn(verdict.sql, fullCatalog, conn.dialect.grammar);
+      if (ambiguous && attempt < MAX_REPAIRS) {
+        userPrompt = buildRepairUser({
+          question: q,
+          failedSql: verdict.sql,
+          failure:
+            `"${ambiguous}" exists on more than one of the joined tables, so on its own it is ambiguous. ` +
+            'Qualify it with the table or alias it belongs to.',
           schemaText,
           dialect: conn.dialect,
         });
@@ -796,6 +906,13 @@ export function createAskSql(config: AskSqlConfig): AskSqlEngine {
 
       // Semantic floor: a one-to-many join multiplies the rows a SUM sees, so the total is inflated.
       const fanOut = fanOutAggregate(verdict.sql, conn.dialect.grammar, fullCatalog);
+      // Out of repair attempts, the floor still speaks: the inflated total is reported, not hidden.
+      if (fanOut && attempt >= MAX_REPAIRS) {
+        semanticNotes.push(
+          `This sums "${fanOut.parent}.${fanOut.column}" across a join to "${fanOut.child}", which has many rows per ` +
+            `"${fanOut.parent}" row, so the total is counted more than once and is too high.`,
+        );
+      }
       if (fanOut && attempt < MAX_REPAIRS) {
         userPrompt = buildRepairUser({
           question: q,
@@ -826,15 +943,57 @@ export function createAskSql(config: AskSqlConfig): AskSqlEngine {
             retryable: false,
           });
         }
+        // Naming the table that DOES have the column, and the join that reaches it, is what lets a
+        // small model add the missing join rather than rename the alias and fail the same way again.
+        // A common column name sits on many tables, so only the ones reachable by a declared join
+        // are named: listing the rest is noise that buries the answer.
+        // One reachable table and one join, in the catalog's own spelling. Measured on a 7B model:
+        // naming several owners and several edges recovers nothing, this recovers every time.
+        const lowerTable = unknownColumn.table.toLowerCase();
+        const lowerColumn = unknownColumn.column.toLowerCase();
+        const owners = fullCatalog.tables
+          .filter(
+            (t) => t.name.toLowerCase() !== lowerTable && t.columns.some((c) => c.name.toLowerCase() === lowerColumn),
+          )
+          .map((t) => t.name);
+        const graph = joinGraph(fullCatalog);
+        const edgesFor = (owner: string): string[] =>
+          graph.filter((e) => {
+            const line = e.toLowerCase();
+            return line.includes(`${lowerTable}.`) && line.includes(`${owner.toLowerCase()}.`);
+          });
+        const reachable = owners.find((o) => edgesFor(o).length > 0);
+        const whereItLives = reachable
+          ? ` ${unknownColumn.column} is a column of ${reachable}. Reach it with: ${edgesFor(reachable)[0]}.`
+          : owners.length
+            ? ` ${unknownColumn.column} is a column of ${owners[0]}.`
+            : '';
         userPrompt = buildRepairUser({
           question: q,
           failedSql: verdict.sql,
-          failure: `Column "${unknownColumn.column}" does not exist on table "${unknownColumn.table}". Its real columns are: ${unknownColumn.available.join(', ')}. Use only columns shown in the <schema> block.`,
+          allowImpossible: true,
+          failure:
+            `Column "${unknownColumn.column}" does not exist on table "${unknownColumn.table}". ` +
+            `Its real columns are: ${unknownColumn.available.join(', ')}.${whereItLives} ` +
+            'Use only columns shown in the <schema> block.',
           schemaText,
           dialect: conn.dialect,
         });
         continue;
       }
+
+      // Non-blocking: the query still runs. A pronoun with no antecedent means the model chose a
+      // subject on its own, which is worth saying rather than refusing over.
+      const dangling = danglingReference(q, hasUsableContext(opts.context));
+      const notes = [...semanticNotes];
+      const danglingNotes = dangling
+        ? [
+            `"${dangling}" does not refer to anything earlier in this conversation, so the query below ` +
+              'picked a subject on its own. Name who you mean and ask again if that is wrong.',
+          ]
+        : [];
+      notes.push(...danglingNotes);
+      for (const note of notes) emit({ type: 'warning', message: note }, opts);
 
       emit({ type: 'stage', stage: 'done' }, opts);
       const folding = foldingFor(conn.engine);
@@ -846,14 +1005,19 @@ export function createAskSql(config: AskSqlConfig): AskSqlEngine {
       return {
         sql: finalSql,
         explanation,
-        guard: verdict,
+        guard: notes.length > 0 ? { ...verdict, warnings: [...verdict.warnings, ...notes] } : verdict,
         connectionId: conn.id,
         usage,
         repairs,
         run: async (execOpts?: ExecuteOptions): Promise<ResultSet> => {
           emit({ type: 'stage', stage: 'execute' }, opts);
           try {
-            return await executeGuarded(finalSql, conn, { ...execOpts, question: q, userId: opts.userId });
+            return await executeGuarded(finalSql, conn, {
+              ...execOpts,
+              question: q,
+              userId: opts.userId,
+              priorVerdict: { autoLimited: verdict.autoLimited, loweredLimit: verdict.loweredLimit },
+            });
           } catch (err) {
             // on a runtime DB error, attach a corrected query for re-approval rather than running it.
             // Never after a cancel: a repair would fire a fresh provider request the user just declined to wait for.
@@ -969,6 +1133,9 @@ export function createAskSql(config: AskSqlConfig): AskSqlEngine {
       }
       // Advice and change requests propose new names; an overview only claims existing structure.
       const isSchemaChange = SCHEMA_CHANGE_RE.test(q) || isSchemaProposalQuestion(q);
+      // A write request is a proposal too, and AskSQL has promised to write the statement out. The
+      // model is neither offered the refusal nor left unable to state the statement.
+      const proposesWrite = isWriteRequest(q);
       // A whole-schema question gets a compact list of ALL tables plus the full join graph, not term pruning.
       const isBroad = BROAD_SCHEMA_RE.test(q);
       let schemaText: string;
@@ -996,7 +1163,7 @@ export function createAskSql(config: AskSqlConfig): AskSqlEngine {
         contextTables = pruned.catalog.tables;
       }
       const tables = contextTables.map((t) => (t.schema ? `${t.schema}.${t.name}` : t.name));
-      const system = buildSchemaAnswerSystem(conn.dialect, isSchemaChange);
+      const system = buildSchemaAnswerSystem(conn.dialect, isSchemaChange || proposesWrite, !proposesWrite);
       let answer = (
         await callModel({
           model: config.model,
@@ -1008,7 +1175,11 @@ export function createAskSql(config: AskSqlConfig): AskSqlEngine {
       ).text.trim();
       // A real table, view or column name, or a follow-up carrying prior turns, counts as a database question.
       const questionIsAboutThisDatabase =
-        looksDatabaseRelated(q) || isSchemaChange || mentionsCatalogName(q, catalog) || hasUsableContext(opts.context);
+        looksDatabaseRelated(q) ||
+        isSchemaChange ||
+        proposesWrite ||
+        mentionsCatalogName(q, catalog) ||
+        hasUsableContext(opts.context);
       if (isOffTopic(answer) || (isDegenerateAnswer(answer) && !PROPOSED_WRITE_RE.test(answer))) {
         // Challenge the refusal once when the question is plainly about data; accept it otherwise.
         if (!questionIsAboutThisDatabase) return offTopicAnswer(conn.dialect.promptLabel);
@@ -1016,7 +1187,7 @@ export function createAskSql(config: AskSqlConfig): AskSqlEngine {
           await callModel({
             model: config.model,
             // No sentinel in this system prompt: the question is already known to be about data.
-            system: buildSchemaAnswerSystem(conn.dialect, isSchemaChange, false),
+            system: buildSchemaAnswerSystem(conn.dialect, isSchemaChange || proposesWrite, false),
             prompt: buildSchemaAnswerScopeRepairUser(q, schemaText, conn.dialect.promptLabel, relationships),
             signal: opts.signal,
             settings: config.llm,
@@ -1050,7 +1221,7 @@ export function createAskSql(config: AskSqlConfig): AskSqlEngine {
           await callModel({
             model: config.model,
             // No sentinel: this pass fixes names, and the raw sentinel must not become the final answer.
-            system: buildSchemaAnswerSystem(conn.dialect, isSchemaChange, false),
+            system: buildSchemaAnswerSystem(conn.dialect, isSchemaChange || proposesWrite, false),
             prompt: buildSchemaAnswerRepairUser(q, schemaText, unknownReferences, relationships),
             signal: opts.signal,
             settings: config.llm,
@@ -1159,6 +1330,7 @@ const tableParser = new Parser();
 // Unknown-column detection (hallucination floor, column level).
 
 export interface UnknownColumn {
+  /** The table as the catalog spells it, so a message about it matches the query and the schema. */
   readonly table: string;
   readonly column: string;
   readonly available: readonly string[];
@@ -1187,20 +1359,77 @@ function collectSelectAliases(sql: string): ReadonlySet<string> {
 }
 
 /**
- * Returns the first column reference whose (alias-resolved) base table exists in the catalog but
+ * Returns the first column reference whose base table exists in the catalog but
  * does not have that column - the column-level hallucination floor. Fails open (returns null) on
  * unqualified columns, wildcards, CTE or derived-table aliases, and any parse failure.
  */
+/**
+ * An unqualified column more than one table in the FROM list owns. Every engine rejects it, so
+ * catching it here saves a database round trip. USING and NATURAL joins make it legal, and are
+ * left alone.
+ */
+export function ambiguousColumn(sql: string, catalog: SchemaCatalog, grammar: string): string | null {
+  const code = withoutLiteralsAndComments(sql);
+  if (/\b(using|natural)\b/iu.test(code)) return null;
+  // The same attributability limits as the unknown-column floor: one scope only.
+  if (/\(\s*select\b/iu.test(code) || /\b(union|intersect|except)\b/iu.test(code)) return null;
+
+  let refs: readonly string[];
+  let names: readonly string[];
+  try {
+    refs = tableParser.columnList(withoutFetchTail(sql), { database: grammar });
+    names = tableParser.tableList(withoutFetchTail(sql), { database: grammar });
+  } catch {
+    return null; // the guard already parsed it; never double-block here
+  }
+
+  const byTable = new Map<string, Set<string>>();
+  for (const t of catalog.tables) {
+    const key = t.name.toLowerCase();
+    const set = byTable.get(key) ?? new Set<string>();
+    for (const c of t.columns) set.add(c.name.toLowerCase());
+    byTable.set(key, set);
+  }
+
+  const cteNames = collectCteNames(sql);
+  const queryTables: string[] = [];
+  for (const entry of names) {
+    let name = (entry.split('::')[2] ?? '').toLowerCase();
+    if (!name || name === 'null') continue;
+    if (name.includes('.')) name = name.slice(name.lastIndexOf('.') + 1);
+    if (cteNames.has(name) || SYSTEM_SCHEMAS.has(name)) return null; // scope we cannot model
+    if (!byTable.has(name)) return null; // an unknown table may own the column
+    queryTables.push(name);
+  }
+  if (queryTables.length < 2) return null;
+
+  const aliases = collectSelectAliases(sql);
+  for (const ref of refs) {
+    const parts = ref.split('::');
+    const table = (parts[1] ?? '').toLowerCase();
+    const column = (parts[2] ?? '').toLowerCase();
+    if (!column || column === '(.*)') continue;
+    if (table && table !== 'null') continue; // already qualified
+    if (aliases.has(column)) continue;
+    const owners = queryTables.filter((t) => byTable.get(t)!.has(column));
+    if (owners.length > 1) return column;
+  }
+  return null;
+}
+
 export function firstUnknownColumn(sql: string, catalog: SchemaCatalog, grammar: string): UnknownColumn | null {
   let refs: readonly string[];
   try {
-    refs = tableParser.columnList(sql, { database: grammar });
+    refs = tableParser.columnList(withoutFetchTail(sql), { database: grammar });
   } catch {
     return null; // the guard already parsed it; never double-block here
   }
 
   // table name (lowercased) -> its columns; same-named tables across schemas union their columns.
   const byTable = new Map<string, Set<string>>();
+  // The same keys mapped to the spelling the catalog uses, for messages that match the query.
+  const realName = new Map<string, string>();
+  const realColumns = new Map<string, string[]>();
   for (const t of catalog.tables) {
     const key = t.name.toLowerCase();
     let set = byTable.get(key);
@@ -1209,6 +1438,8 @@ export function firstUnknownColumn(sql: string, catalog: SchemaCatalog, grammar:
       byTable.set(key, set);
     }
     for (const c of t.columns) set.add(c.name.toLowerCase());
+    realName.set(key, t.name);
+    realColumns.set(key, [...(realColumns.get(key) ?? []), ...t.columns.map((c) => c.name)]);
   }
 
   const cteNames = collectCteNames(sql);
@@ -1221,7 +1452,7 @@ export function firstUnknownColumn(sql: string, catalog: SchemaCatalog, grammar:
   const code = withoutLiteralsAndComments(sql);
   let attributable = !/\(\s*select\b/iu.test(code) && !/\b(union|intersect|except)\b/iu.test(code);
   try {
-    for (const t of tableParser.tableList(sql, { database: grammar })) {
+    for (const t of tableParser.tableList(withoutFetchTail(sql), { database: grammar })) {
       let name = (t.split('::')[2] ?? '').toLowerCase();
       if (!name || name === 'null') continue;
       if (name.includes('.')) name = name.slice(name.lastIndexOf('.') + 1);
@@ -1244,11 +1475,13 @@ export function firstUnknownColumn(sql: string, catalog: SchemaCatalog, grammar:
       if (!attributable || aliases.has(column) || queryTables.length === 0) continue;
       if (queryTables.some((t) => byTable.get(t)!.has(column))) continue;
       const available = new Set<string>();
-      for (const t of queryTables) for (const c of byTable.get(t)!) available.add(c);
-      return { table: queryTables[0]!, column, available: [...available].sort() };
+      for (const t of queryTables) for (const c of realColumns.get(t) ?? []) available.add(c);
+      const owner = queryTables[0]!;
+      return { table: realName.get(owner) ?? owner, column, available: [...available].sort() };
     }
 
-    // Qualified: check the bare table name.
+    // Qualified: check the bare table name. The parser resolves a table alias to its base table,
+    // so `a.name` arrives here as `album::name` and needs no alias handling of our own.
     if (table.includes('.')) table = table.slice(table.lastIndexOf('.') + 1);
     if (cteNames.has(table)) continue; // CTE relation - columns are the CTE's own
     if (SYSTEM_SCHEMAS.has(table)) continue;

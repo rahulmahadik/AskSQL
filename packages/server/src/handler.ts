@@ -243,15 +243,16 @@ export class AskSqlServer {
   }
 
   private assertAccess(connectionId: string, auth: AuthContext): void {
+    // Access first: checking existence first answered 400 for an id that does not exist and 403 for
+    // one that does, so a scoped caller could enumerate other tenants' ids by the status code.
+    if (!canAccess(auth, connectionId)) {
+      throw new AskSqlError('SERVER_AUTHZ', { detail: `user ${auth.userId} denied ${connectionId}` });
+    }
     if (!this.byId.has(connectionId) && !this.mongoById.has(connectionId)) {
       throw new AskSqlError('INVALID_INPUT', {
         userMessage: 'Unknown database connection.',
         detail: `no such connection ${connectionId}`,
       });
-    }
-    if (!canAccess(auth, connectionId)) {
-      // Same message whether it exists or not - don't leak existence.
-      throw new AskSqlError('SERVER_AUTHZ', { detail: `user ${auth.userId} denied ${connectionId}` });
     }
   }
 
@@ -342,6 +343,9 @@ export class AskSqlServer {
         const mongo = await createMongoConnector(spec, id);
         await mongo.connect();
         this.mongoById.set(id, mongo);
+        // Without this the delete endpoint reads it as operator-configured and refuses, leaving a
+        // credentialed live connection that nothing can remove.
+        this.dynamicIds.add(id);
         return json(201, { connection: { id, name: mongo.name, engine: mongo.engine, database: mongo.database } });
       }
       const connector = await createConnector(spec, id);
@@ -702,12 +706,17 @@ export class AskSqlServer {
   private async feedback(req: ServerRequest, auth: AuthContext): Promise<JsonResponse> {
     const body = (await this.readBody(req)) as { question?: string; sql?: string; connectionId?: string };
     const connectionId = this.resolveConnectionId(req, auth, body.connectionId);
+    // The Mongo engine keeps no few-shot store, and routing a Mongo id into the SQL engine answered
+    // 500 "No databases are connected yet" on a Mongo-only server.
+    if (this.isMongo(connectionId)) {
+      return json(200, { ok: true, stored: false });
+    }
     // Pass the authenticated userId: the few-shot store is per-user, so examples never cross tenants.
     await this.requireEngine().recordFeedback(String(body.question ?? ''), String(body.sql ?? ''), {
       connectionId,
       userId: auth.userId,
     });
-    return json(200, { ok: true });
+    return json(200, { ok: true, stored: true });
   }
 
   private health(auth: AuthContext): JsonResponse {

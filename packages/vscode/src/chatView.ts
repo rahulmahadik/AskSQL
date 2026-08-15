@@ -34,16 +34,47 @@ const MAX_RESULT_BYTES = 24 * 1024 * 1024;
 const MAX_HISTORY = 20;
 const CONTEXT_TURNS = 6;
 
+/** Stop measuring a single value here: past this it is "large", and the exact figure changes nothing. */
+const VALUE_BYTES_CAP = 64 * 1024;
+
+/**
+ * One value's approximate footprint. A BLOB or JSON column is unbounded, so it is measured rather than
+ * assumed - but the walk stops at the cap, which costs less than sizing a megabyte cell exactly.
+ */
+export function valueBytes(v: unknown, budget = VALUE_BYTES_CAP): number {
+  if (v == null) return 4;
+  if (typeof v === 'string') return v.length * 2 + 2;
+  if (typeof v !== 'object') return 8;
+  const bytes = (v as { byteLength?: unknown }).byteLength;
+  if (typeof bytes === 'number') return bytes;
+  let total = 16;
+  if (Array.isArray(v)) {
+    for (const item of v) {
+      if (total >= budget) return budget;
+      total += valueBytes(item, budget - total);
+    }
+    return total;
+  }
+  for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
+    if (total >= budget) return budget;
+    total += k.length * 2 + valueBytes(val, budget - total);
+  }
+  return total;
+}
+
 /** Cheap byte estimate for a result (samples a few rows) - a wide 100k-row result must not pin memory. */
-function estimateResultBytes(res: ResultSet): number {
+export function estimateResultBytes(res: ResultSet): number {
   const rows = res.rows;
   if (rows.length === 0) return 256;
-  const sample = Math.min(rows.length, 5);
+  // Strided, not the first N: a result whose large values sit past the head was priced as if small.
+  const sample = Math.min(rows.length, 8);
+  const stride = Math.max(1, Math.floor(rows.length / sample));
   let per = 0;
-  for (let i = 0; i < sample; i++) {
-    for (const v of rows[i]!) per += v == null ? 4 : typeof v === 'object' ? 32 : String(v).length + 2;
+  let taken = 0;
+  for (let i = 0; taken < sample && i < rows.length; i += stride, taken++) {
+    for (const v of rows[i]!) per += valueBytes(v);
   }
-  return Math.ceil((per / sample) * rows.length) + 256;
+  return Math.ceil((per / taken) * rows.length) + 256;
 }
 
 /** Which model answers. Chosen in our picker, not VS Code's. */
@@ -888,7 +919,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   <main id="log" role="log" aria-live="polite"></main>
   <div id="empty" class="empty">
     <p class="empty-title">Ask your database in plain English.</p>
-    <p class="empty-sub">The SQL is always shown before anything runs, and only read-only queries are allowed.</p>
+    <p class="empty-sub">You see the SQL for every answer, and only read-only queries are allowed.</p>
     <ul class="samples">
       <li><button class="sample" type="button">What tables are in this database?</button></li>
       <li><button class="sample" type="button">Show me 10 rows from one of the tables</button></li>

@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { JSDOM } from 'jsdom';
 import { AskSqlError } from '@asksql/core';
 import { resetVscodeMock, setInspect, setConfig, commands, window, workspace, env, lm, Uri } from './vscode-mock.js';
-import { ChatViewProvider } from '../src/chatView.js';
+import { ChatViewProvider, estimateResultBytes, valueBytes } from '../src/chatView.js';
 import { UserFacingError } from '../src/errors.js';
 
 const tick = () => new Promise((r) => setTimeout(r, 0));
@@ -567,7 +567,6 @@ describe('ask - model path', () => {
     expect(mongo.execute).toHaveBeenCalled();
   });
 
-
   it('surfaces a recorded build failure instead of a generic error', async () => {
     const engines = fakeEngines({
       forConfiguredModel: vi.fn(async () => {
@@ -893,7 +892,46 @@ function panel() {
   return { doc, sent, post, button, logText: () => doc.getElementById('log')?.textContent ?? '' };
 }
 
+describe('result byte estimate', () => {
+  const res = (rows: unknown[][]) => ({ columns: ['a'], rows, rowCount: rows.length }) as never;
+
+  it('prices a BLOB or JSON cell by its real size, not a flat guess', () => {
+    expect(valueBytes(new Uint8Array(5000))).toBe(5000);
+    expect(valueBytes({ a: 1, b: 'hi' })).toBeLessThan(100);
+    expect(valueBytes(null)).toBe(4);
+  });
+
+  it('stops measuring one value at the cap, so a huge cell cannot stall the host', () => {
+    const huge = { rows: Array.from({ length: 200_000 }, (_, i) => ({ id: i, note: 'x'.repeat(40) })) };
+    const started = Date.now();
+    const n = valueBytes(huge);
+    expect(n).toBeLessThan(70_000);
+    expect(Date.now() - started).toBeLessThan(500);
+  });
+
+  it('samples across the result, so large values past the head are not priced as small', () => {
+    const head = Array.from({ length: 40 }, () => ['x']);
+    const tail = Array.from({ length: 40 }, () => ['y'.repeat(20_000)]);
+    const skewed = estimateResultBytes(res([...head, ...tail]));
+    const allSmall = estimateResultBytes(res([...head, ...head]));
+    expect(skewed).toBeGreaterThan(allSmall * 10);
+  });
+});
+
 describe('webview rendering', () => {
+  it('leaves the panel askable after Clear, not stuck on a Cancel that points at nothing', () => {
+    const { doc, sent, post } = panel();
+    const send = doc.getElementById('send') as HTMLButtonElement;
+    // panel() opens a turn, so the button is mid-question.
+    expect(send.textContent).toBe('Cancel');
+    post({ type: 'clear' });
+    expect(send.textContent).toBe('Ask');
+    const q = doc.getElementById('q') as HTMLTextAreaElement;
+    q.value = 'how many customers';
+    send.click();
+    expect(sent.at(-1)).toMatchObject({ type: 'ask', text: 'how many customers' });
+  });
+
   it('gives a fenced block in an explanation its own Copy, and nothing that runs it', () => {
     const { doc, sent, post, button } = panel();
     post({

@@ -32,7 +32,9 @@ class RoutingCorpusTest {
     private fun routeOf(question: String): String = when {
         Scope.isCapabilityQuestion(question) -> "capability"
         EnginePipeline.isWriteRequest(question) -> "write"
-        EnginePipeline.isSchemaAdviceQuestion(question) || EnginePipeline.isDatabaseOverviewQuestion(question) -> "advice"
+        EnginePipeline.isSchemaAdviceQuestion(question) ||
+            EnginePipeline.isDatabaseOverviewQuestion(question) ||
+            EnginePipeline.isRelationshipQuestion(question) -> "advice"
         EnginePipeline.isMetadataQuestion(question) -> "listing"
         else -> "data"
     }

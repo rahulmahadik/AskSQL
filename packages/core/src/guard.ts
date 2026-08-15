@@ -391,8 +391,11 @@ const ORACLE_DENY_PREFIXES = [
   'dbms_ldap_utl.',
 ];
 
-/** Oracle sequence pseudo-columns: `seq.nextval` mutates the sequence, so it is not read-only. Parsed as a column, not a function. */
-const ORACLE_SEQUENCE_PSEUDO_COLUMNS = new Set(['nextval', 'currval']);
+/**
+ * `seq.nextval` advances the sequence, so it is not read-only, and it parses as a column rather
+ * than a function. `currval` only reports the session's current value, so it stays allowed.
+ */
+const ORACLE_SEQUENCE_PSEUDO_COLUMNS = new Set(['nextval']);
 
 /** Every known-dangerous function is denied on every dialect, closing the "dangerous in A, allowed in B" gap. */
 const UNIVERSAL_DENY: readonly string[] = [
@@ -543,7 +546,10 @@ function looksLikeFileOrUrl(name: string): boolean {
     /^[a-z][a-z0-9+.-]*:\/\//i.test(name) || // scheme:// (http, s3, file, ...)
     /^~/.test(name) || // home dir
     /^[a-zA-Z]:[\\/]/.test(name) || // Windows drive letter
-    /\.(csv|tsv|txt|parquet|json|ndjson|jsonl|xlsx|xls|arrow|avro|orc|feather|db|duckdb|sqlite)$/i.test(name) // bare data file
+    // DuckDB reads a compressed file directly, so data.csv.gz must not slip past as an identifier.
+    /\.(csv|tsv|txt|parquet|json|ndjson|jsonl|xlsx|xls|arrow|avro|orc|feather|db|duckdb|sqlite)(\.(gz|gzip|zst|zstd|bz2|xz|br|lz4|snappy))?$/i.test(
+      name,
+    )
   );
 }
 
@@ -627,7 +633,11 @@ function walk(value: unknown, ctx: WalkContext, depth: number): void {
   // Oracle `seq.nextval` parses as a column, not a function, so the denylist never sees it.
   if (type === 'column_ref' && ctx.engine === 'oracle') {
     const col = columnNameOf(node);
-    if (col && ORACLE_SEQUENCE_PSEUDO_COLUMNS.has(col)) {
+    // Only the qualified form can read a sequence, so a bare NEXTVAL is an ordinary column and no
+    // longer refused. A qualifier stays refused even though a table may own a column of that name:
+    // telling a sequence from a table needs the catalog, and refusing is the safe way to be wrong.
+    const qualified = node['table'] != null;
+    if (col && qualified && ORACLE_SEQUENCE_PSEUDO_COLUMNS.has(col)) {
       ctx.violation = {
         ruleId: `sequence_pseudo_column:${col}`,
         reason: `The sequence pseudo-column ${col} is not read-only.`,
@@ -861,17 +871,31 @@ export function guardSql(input: GuardInput): GuardVerdict {
   let fetchTailText: string | null = null;
   let strippedFetchLimit: number | null = null;
   if (dialect.limitStyle === 'fetch') {
-    // This dialect has no LIMIT. Refusing it here sends the query back to be rewritten, instead of
-    // letting the database reject it (ORA-03049) after the repair loop has already finished.
-    const strayLimit = /\blimit\s+(?:\d+|:\w+|\?)\s*(?:offset\s+\d+\s*)?;?\s*$/iu.exec(
-      stripCommentsAndStrings(inner, dialect.engine),
-    );
-    if (strayLimit) {
-      return blocked(
-        original,
-        'limit_unsupported',
-        `${dialect.promptLabel} has no LIMIT clause. Remove it and order the results instead; the row cap is applied when the query runs.`,
+    // This dialect has no LIMIT. A plain trailing `LIMIT n` has an exact equivalent, so it is
+    // translated rather than refused: a small model reaches for LIMIT no matter what the prompt
+    // says, and the repair loop cannot talk it out of it. The result goes through the fetch-tail
+    // path below like any other, so it is validated and lowered to the row cap as usual.
+    const masked = maskCommentsAndStrings(inner, dialect.engine);
+    const plainLimit = /\blimit\s+(\d+)\s*(?=;?\s*$)/iu.exec(masked);
+    if (plainLimit && oracleFetchTail(inner) === null) {
+      const rows = Number(plainLimit[1]);
+      inner =
+        inner.slice(0, plainLimit.index) +
+        `FETCH FIRST ${rows} ROWS ONLY` +
+        inner.slice(plainLimit.index + plainLimit[0].length);
+    } else {
+      // An offset or a placeholder count has no single-clause equivalent, so it goes back to be
+      // rewritten rather than letting the database reject it (ORA-03049) after repairs are spent.
+      const strayLimit = /\blimit\s+(?:\d+|:\w+|\?)\s*(?:offset\s+\d+\s*)?;?\s*$/iu.exec(
+        stripCommentsAndStrings(inner, dialect.engine),
       );
+      if (strayLimit) {
+        return blocked(
+          original,
+          'limit_unsupported',
+          `${dialect.promptLabel} has no LIMIT clause. Remove it and order the results instead; the row cap is applied when the query runs.`,
+        );
+      }
     }
     const fetchTail = oracleFetchTail(inner);
     if (fetchTail) {

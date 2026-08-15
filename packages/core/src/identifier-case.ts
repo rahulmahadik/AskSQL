@@ -41,9 +41,12 @@ function skipTo(sql: string, i: number, doubleQuoteIsLiteral: boolean, backslash
     return close === -1 ? sql.length : close + 2;
   }
   if (ch === "'" || (ch === '"' && doubleQuoteIsLiteral)) {
+    // E'a\'b' is one literal on Postgres and DuckDB: the backslash escapes the quote whatever the
+    // dialect's default is. Reading it as two literals hands the middle to the rewriter as code.
+    const escaped = backslashEscapes || /\bE$/i.test(sql.slice(Math.max(0, i - 2), i));
     let j = i + 1;
     while (j < sql.length) {
-      if (backslashEscapes && sql[j] === '\\') j += 2;
+      if (escaped && sql[j] === '\\') j += 2;
       else if (sql[j] === ch) {
         // A doubled quote is an escaped one, so the literal continues past it.
         if (sql[j + 1] === ch) j += 2;
@@ -108,7 +111,9 @@ export function correctTableCase(
         const canonical = byLower.get(target.toLowerCase());
         if (!canonical) return whole;
         // A third part means what matched is a qualifier: prod.sales.orders names orders, not sales.
-        if (/^\s*\./.test(sql.slice(offset + whole.length))) return whole;
+        // `offset` is relative to this chunk, so indexing the whole statement reads an earlier
+        // position once any literal or comment has split it, and the guard silently stops firing.
+        if (/^\s*\./.test(code.slice(offset + whole.length))) return whole;
         // An unquoted name is resolved folded, so what matters is what the database will look up.
         const wasQuoted = (second === undefined ? open : (_open2 ?? '')) !== '';
         const resolvesTo = wasQuoted ? target : folded(target, folding);
@@ -150,6 +155,9 @@ const BARE_IDENTIFIER = /([A-Za-z_][\w$]*)(\s*[.(]?)/g;
 const NAME_POSITION = /(?:\bfrom|\bjoin|\bupdate|\binto|\.)\s*$/i;
 
 /** The first argument of these is a keyword, not a name: EXTRACT(MONTH FROM d), TRIM(BOTH x FROM s). */
+/** Directly after one of these, a name before a dot is a schema rather than a table. */
+const QUALIFIER_POSITION = /(?:\bfrom|\bjoin|\bupdate|\binto)\s+$/i;
+
 const KEYWORD_ARGUMENT = /\b(?:extract|trim|position|overlay|substring)\s*\(\s*$/i;
 
 /**
@@ -183,8 +191,11 @@ export function quoteCatalogIdentifiers(
       // TIMESTAMP '2024-01-01' and DATE '...' are typed literals: the word is syntax, not a name.
       // The literal is its own segment, so this reads the statement rather than the chunk.
       if (/^\s*'/.test(sql.slice(chunkStart + offset + token.length))) return whole;
-      // A token before a dot qualifies what follows; quoting a schema name breaks a working query.
-      if (tail.trimStart().startsWith('.') && !tables.has(token.toLowerCase())) return whole;
+      // A token before a dot qualifies what follows: after FROM/JOIN it is a SCHEMA, so a table of
+      // the same name must not lend it its casing. Elsewhere it is table.column, where it should.
+      if (tail.trimStart().startsWith('.') && (QUALIFIER_POSITION.test(before) || !tables.has(token.toLowerCase()))) {
+        return whole;
+      }
       // Rewriting a keyword blindly turns ORDER BY into "order" BY, so one must announce itself.
       if (ANY_RESERVED.has(token.toLowerCase()) && !NAME_POSITION.test(before)) return whole;
       changed = true;
@@ -277,6 +288,58 @@ export function hasUnterminatedLiteral(sql: string, backslashEscapes = false): b
     } else i++;
   }
   return open;
+}
+
+/**
+ * An alias is just a name, so a reserved word used as one only needs quoting. A model writes
+ * `RANK() OVER (...) AS rank`, which MySQL rejects outright because RANK is reserved there.
+ *
+ * A type is not an alias: the word after AS in CAST(x AS DATE) is followed by a closing bracket, and
+ * quoting it would turn a cast into a reference to a column that does not exist.
+ */
+/** A clause keyword after an alias ends the select item; any other bare word means it was a type. */
+const CLAUSE_KEYWORD = /^\s+(?:from|where|group|order|having|limit|offset|union|join|on|window|fetch|into)\b/i;
+const RESERVED_ALIAS = /\bas\s+([A-Za-z_][\w$]*)\s*(?=,|\)|$|\s)/gi;
+
+export function quoteReservedAliases(sql: string, quoteChar: string, engine: string): string | null {
+  const reserved = reservedWordsFor(engine);
+  let changed = false;
+  const fixCode = (code: string): string =>
+    code.replace(RESERVED_ALIAS, (whole, alias: string, offset: number) => {
+      if (!reserved.has(alias.toLowerCase())) return whole;
+      const rest = code.slice(offset + whole.length);
+      // A closing bracket right after means this was a cast's type, not a select-list alias.
+      if (/^\s*\)/.test(rest)) return whole;
+      // So does a following bare word: CAST(x AS UNSIGNED INTEGER) would otherwise have its type
+      // quoted, and the guard then rejects the statement and discards the whole rewrite.
+      if (/^\s+[A-Za-z_]/.test(rest) && !CLAUSE_KEYWORD.test(rest)) return whole;
+      changed = true;
+      return whole.replace(alias, quoted(alias, quoteChar));
+    });
+
+  const doubleQuoteIsLiteral = quoteChar !== '"';
+  const backslashEscapes = quoteChar === '`';
+  let out = '';
+  let start = 0;
+  let i = 0;
+  while (i < sql.length) {
+    if (sql[i] === quoteChar) {
+      const close = sql.indexOf(CLOSING[quoteChar] ?? quoteChar, i + 1);
+      const end = close === -1 ? sql.length : close + 1;
+      out += fixCode(sql.slice(start, i)) + sql.slice(i, end);
+      start = end;
+      i = end;
+      continue;
+    }
+    const end = skipTo(sql, i, doubleQuoteIsLiteral, backslashEscapes);
+    if (end >= 0) {
+      out += fixCode(sql.slice(start, i)) + sql.slice(i, end);
+      start = end;
+      i = end;
+    } else i++;
+  }
+  out += fixCode(sql.slice(start));
+  return changed ? out : null;
 }
 
 /** Matches the unknown-table wording of every engine AskSQL supports. */

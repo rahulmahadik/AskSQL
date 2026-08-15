@@ -1,5 +1,58 @@
 # @asksql/core
 
+## 0.7.0
+
+### Minor Changes
+
+- Answer the questions a model kept guessing at, and hold the line on the ones it should not answer.
+
+  Structure questions now run SQL written here rather than guessed. "How many rows are in each table?",
+  "which tables have no primary key?" and "what tables are in this database?" are answered from each
+  engine's own catalog, with every name quoted, because a model that has never seen
+  `information_schema` invents columns on it. A name holding a quote character survives, and the
+  generated statement is validated by the guard like any other.
+
+  Question routing decides what a question actually is before a query is written. A relationship
+  question ("how do customers and orders relate?") is answered from the foreign keys rather than by
+  returning rows of a join. A question about nothing in the database is declined in one sentence
+  instead of producing a confident answer about the wrong thing, and a question that names a table the
+  catalog has never seen triggers one bounded re-read in case the schema changed, at most once every 30
+  seconds per connection. A write request still reaches the proposal path and is never executed.
+
+  Oracle no longer refuses a query for the one thing a small model cannot stop doing. Oracle has no
+  LIMIT clause, so `SELECT ... LIMIT 10` was refused and the repair loop spent every attempt failing to
+  talk the model out of it, identically each time. A plain trailing `LIMIT n` is now translated to
+  `FETCH FIRST n ROWS ONLY`, which is the same query, and lowered to the row cap as usual. Forms with
+  no single-clause equivalent, `LIMIT n OFFSET m` and a placeholder count, are still refused. Consumers
+  that relied on `limit_unsupported` for the plain form will now see the translated statement.
+
+  MongoDB gained the same care. A distinct count written as `$addToSet` plus `$size` is rewritten to a
+  grouped count that spills to disk rather than being refused for the 16MB document limit, and the
+  rewrite drops documents missing the field so the count matches what `$addToSet` would have produced.
+  A pipeline naming a field no stage can resolve is caught before it runs, and refusals now say what to
+  write instead.
+
+  Database error text is redacted before it reaches a model. A driver quotes the offending row, and
+  Postgres appends the whole row as a DETAIL, so a repair prompt carried cell values the user never
+  agreed to send.
+
+  New exports: `isRelationshipQuestion`, `isCapabilityQuestion`, `isPromptInjection`,
+  `danglingReference`, and from the mongo entry point `rewriteDistinctCount`, `firstMisquotedField` and
+  `firstUnknownStageField`.
+
+  Five checks were silently switched off on Oracle. A top-N question makes the model write
+  `FETCH FIRST n ROWS ONLY`, the parser these checks use cannot read that clause, and each of them
+  fails open by design, so the column floor, the table floor, the fan-out floor, the ungrouped-aggregate
+  lint and the ambiguous-column floor all went quiet. A query selecting a column no table has reached
+  the database instead of being caught and corrected. Every check now reads the statement with that
+  tail removed, and a test gives each one a query it must flag on every dialect, so one going quiet
+  fails the suite rather than shipping.
+
+  A correction now names where the column actually lives. Telling a model only that a column does not
+  exist leaves it renaming the alias and failing the same way; naming the table that has the column and
+  the join that reaches it recovers the query. Measured on a 7B model against Oracle: 0 of 3 before,
+  3 of 3 after.
+
 ## 0.6.3
 
 ### Patch Changes

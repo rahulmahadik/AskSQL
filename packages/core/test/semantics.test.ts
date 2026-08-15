@@ -143,7 +143,7 @@ describe('shapes the fan-out check must not misread', () => {
     expect(check(sql)).toBeNull();
   });
 
-  it('does not read a subquery aggregate as the outer query\'s', () => {
+  it("does not read a subquery aggregate as the outer query's", () => {
     const sql =
       'SELECT c.id, (SELECT SUM(o.total_cents) FROM orders o WHERE o.customer_id=c.id) AS total FROM customers c JOIN order_items oi ON oi.order_id=c.id';
     expect(check(sql)).toBeNull();

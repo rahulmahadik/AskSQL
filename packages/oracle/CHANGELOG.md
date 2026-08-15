@@ -1,5 +1,20 @@
 # @asksql/oracle
 
+## 0.3.0
+
+### Minor Changes
+
+- Read the schema an account was granted, not just its own.
+
+  Introspection scopes to the session's `CURRENT_SCHEMA`, which is empty for an account that holds
+  grants on another owner's tables: the catalog came back with nothing and every question failed
+  against an apparently empty database. A new `schema` config option names the owner to read, and the
+  session is put in that schema so an unqualified name resolves where the catalog says it is. The name
+  is checked against Oracle's identifier rules before use, since it cannot be bound as a parameter.
+
+  When the scope really is empty, the warning now names the schemas the account can read instead of
+  reporting a database with no tables.
+
 ## 0.2.0
 
 ### Minor Changes

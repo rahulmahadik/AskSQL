@@ -129,7 +129,7 @@ class AskSqlConfigurable : Configurable {
                 row {
                     checkBox("Require explicit approval before running generated SQL")
                         .bindSelected({ requireApprovalField }, { requireApprovalField = it })
-                        .comment("Off by default: the SQL is always shown before it runs either way - this adds an extra Run/Cancel click.")
+                        .comment("Off by default: the SQL is shown for every answer either way - this adds an extra Run/Cancel click before it executes.")
                 }
                 row {
                     checkBox("Describe each answer automatically")

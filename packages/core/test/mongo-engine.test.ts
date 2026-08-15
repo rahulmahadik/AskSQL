@@ -117,6 +117,19 @@ describe('mongo engine floors and repair', () => {
     await expect(engine.ask('all customers')).rejects.toBeInstanceOf(AskSqlError);
   });
 
+  it('sends a relationship question to the prose path, not a pipeline over the documents', async () => {
+    const conn = new FakeMongo();
+    // The model would happily write one; the question is about the link, which the schema states.
+    const engine = createMongoAskSql({
+      connector: conn,
+      model: model(['```js\ndb.orders.aggregate([{"$match": {}}])\n```']),
+    });
+    await expect(engine.ask('How do orders and customers relate?')).rejects.toMatchObject({
+      code: 'LLM_BAD_OUTPUT',
+      detail: 'schema-advice question routed to the prose path',
+    });
+  });
+
   it('surfaces the IMPOSSIBLE sentinel as a friendly error', async () => {
     const conn = new FakeMongo();
     const engine = createMongoAskSql({

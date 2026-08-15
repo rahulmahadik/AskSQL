@@ -173,14 +173,38 @@ object SqlGuard {
 
         if (explainPrefix.isEmpty()) {
             val target = effectiveLimitTarget(statement)
-            // This dialect has no LIMIT. Refusing it sends the query back to be rewritten, instead of
-            // appending FETCH FIRST to a statement the database will reject anyway.
-            if (dialect.limitStyle == LimitStyle.FETCH && target?.limit != null) {
-                return blocked(
-                    sql,
-                    "limit_unsupported",
-                    "${dialect.promptLabel} has no LIMIT clause. Remove it and order the results instead; " +
-                        "the row cap is applied when the query runs.",
+            // This dialect has no LIMIT, and a small model writes one however the prompt is worded.
+            // A plain trailing count has an exact equivalent, so it is translated; anything else is
+            // refused here rather than left for the database to reject after repairs are spent.
+            val strayTarget = target?.takeIf { dialect.limitStyle == LimitStyle.FETCH && it.limit != null }
+            if (strayTarget != null) {
+                val strayLimit = strayTarget.limit
+                val rows = (strayLimit.rowCount as? LongValue)?.value
+                val hasOffset = strayLimit.offset != null || strayTarget.offset != null
+                if (rows == null || rows <= 0 || hasOffset || strayTarget.fetch != null) {
+                    return blocked(
+                        sql,
+                        "limit_unsupported",
+                        "${dialect.promptLabel} has no LIMIT clause. Remove it and order the results instead; " +
+                            "the row cap is applied when the query runs.",
+                    )
+                }
+                val capped = minOf(rows, policy.maxRows.toLong())
+                if (capped < rows) loweredLimit = true
+                strayTarget.limit = null
+                // Textual append on its own line, the same way an absent limit is added below.
+                val rendered = try {
+                    statement.toString()
+                } catch (e: Exception) {
+                    return blocked(sql, "limit_unsupported", "${dialect.promptLabel} has no LIMIT clause.")
+                }
+                return GuardVerdict(
+                    allowed = true,
+                    sql = rendered + "\nFETCH FIRST " + capped + " ROWS ONLY",
+                    warnings = warnings,
+                    autoLimited = false,
+                    loweredLimit = loweredLimit,
+                    tables = tables,
                 )
             }
             when (val status = inspectLimit(target, policy.maxRows, dialect.limitStyle)) {
@@ -464,20 +488,21 @@ object SqlGuard {
             return null
         }
 
-        // Oracle's `seq.NEXTVAL`/`seq.CURRVAL` is a pseudo-column, which JSqlParser parses as a Column.
-        // The table qualifier is required, so a bare column merely named "nextval" is not flagged.
+        // Oracle's `seq.NEXTVAL` is a pseudo-column, which JSqlParser parses as a Column. The table
+        // qualifier is required, so a bare column merely named "nextval" is not flagged. CURRVAL only
+        // reports the session's current value, so it reads without advancing and stays allowed.
         override fun <S> visit(column: Column, context: S): Void? {
             if (stopped) return null
             if (ctx.engine == EngineKind.ORACLE && column.table != null && column.columnName?.lowercase() in SEQUENCE_PSEUDO_COLUMNS) {
                 stopped = true
-                onViolation(Violation("sequence_pseudo_column", "Referencing a sequence's NEXTVAL/CURRVAL is not allowed."))
+                onViolation(Violation("sequence_pseudo_column", "Referencing a sequence's NEXTVAL is not allowed."))
                 return null
             }
             return super.visit(column, context)
         }
     }
 
-    private val SEQUENCE_PSEUDO_COLUMNS = setOf("nextval", "currval")
+    private val SEQUENCE_PSEUDO_COLUMNS = setOf("nextval")
 
     // Hoisted: looksLikeFileOrUrl runs once per relation name on every guard() call, and an
     // inline Regex(...) recompiles its Pattern each time.

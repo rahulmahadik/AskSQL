@@ -57,6 +57,9 @@ class SchemaTreePanel(private val project: Project) : Disposable {
     }
 
     init {
+        // Node labels carry schema, table and column names, which the database supplies. A Swing
+        // cell renderer is a JLabel and interprets text starting with <html>, so turn that off.
+        tree.putClientProperty("html.disable", true)
         component.add(JBScrollPane(tree), BorderLayout.CENTER)
         installContextMenu()
         project.messageBus.connect(this).subscribe(AskSqlSettingsListener.TOPIC, AskSqlSettingsListener { reload(forceRefresh = false) })

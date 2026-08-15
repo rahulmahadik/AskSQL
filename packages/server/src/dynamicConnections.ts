@@ -105,7 +105,16 @@ export function mongoUriHosts(uri: string): string[] {
   const hostPart = authority.slice(authority.lastIndexOf('@') + 1);
   return hostPart
     .split(',')
-    .map((h) => h.split(':')[0]?.trim().toLowerCase() ?? '')
+    .map((h) => {
+      const host = h.trim();
+      // An IPv6 literal is bracketed. Splitting on ':' first yields "[", so the address never
+      // reaches the link-local filter and a metadata endpoint passes as an unrecognised host.
+      if (host.startsWith('[')) {
+        const close = host.indexOf(']');
+        return (close === -1 ? host.slice(1) : host.slice(1, close)).trim().toLowerCase();
+      }
+      return host.split(':')[0]?.trim().toLowerCase() ?? '';
+    })
     .filter((h) => h.length > 0);
 }
 

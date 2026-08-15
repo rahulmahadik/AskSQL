@@ -231,7 +231,9 @@ export async function resolveModel(config: ProviderConfig): Promise<ModelLike> {
           userMessage: 'The OpenAI-compatible provider needs a base URL.',
         });
       }
-      assertBaseUrl(baseURL, Boolean(config.apiKey));
+      // Custom headers carry secrets too (an Authorization header with no apiKey set), and plaintext
+      // http was only flagged when apiKey was present.
+      assertBaseUrl(baseURL, Boolean(config.apiKey) || Object.keys(config.headers ?? {}).length > 0);
       return create({
         name: config.provider,
         baseURL,

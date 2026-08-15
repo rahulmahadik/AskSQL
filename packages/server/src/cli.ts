@@ -36,8 +36,14 @@ export const USAGE = `asksql serve - run a local AskSQL server
 Databases are added by the client at runtime (the browser extension's
 connection form), so no database details are needed here.`;
 
+/**
+ * Addresses that reach this machine only. The whole 127/8 block is loopback, not just 127.0.0.1,
+ * and --host takes an IPv6 address either bracketed or bare.
+ */
 function isLoopback(host: string): boolean {
-  return host === '127.0.0.1' || host === '::1' || host === 'localhost';
+  if (host === 'localhost' || host === '::1' || host === '[::1]') return true;
+  const v4 = /^127\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
+  return v4 !== null && v4.slice(1).every((o) => Number(o) <= 255);
 }
 
 export function parseArgs(argv: readonly string[]): CliOptions {
@@ -115,14 +121,13 @@ export function parseArgs(argv: readonly string[]): CliOptions {
 }
 
 /** Adapts node:http onto the framework-agnostic handler, including the SSE shape /chat streams. */
-const LOOPBACK_BINDS: ReadonlySet<string> = new Set(['127.0.0.1', 'localhost', '::1', '[::1]']);
-
 export function createRequestListener(server: AskSqlServer): http.RequestListener {
   return (req, res) => {
     void (async () => {
       try {
-        // Legitimate bodies are tiny; stop buffering at 10 MB rather than grow the heap unbounded.
-        const MAX_BODY_BYTES = 10 * 1024 * 1024;
+        // The configured cap, not a hardcoded one: this is the transport the browser extension uses,
+        // and maxBodyBytes was silently ignored here while the Express adapter honoured it.
+        const MAX_BODY_BYTES = server.maxBodyBytes ?? 10 * 1024 * 1024;
         const chunks: Buffer[] = [];
         let bodyBytes = 0;
         for await (const chunk of req) {
@@ -196,12 +201,12 @@ export async function buildServer(options: CliOptions): Promise<AskSqlServer> {
       ...(options.allowedHosts ? { allowedHosts: options.allowedHosts } : {}),
       // A client names a server-side file path. That is the machine's own user on a loopback
       // bind, and an unknown caller on any other, so the file engines are refused there.
-      allowFileEngines: LOOPBACK_BINDS.has(options.host),
+      allowFileEngines: isLoopback(options.host),
     },
     engine: { model, policy: { maxRows: options.maxRows } },
     // Single-user local sidecar: the process boundary is the trust boundary.
     auth: () => ({ userId: 'local', allowedConnectionIds: [ANY_CONNECTION] }),
-    requireLoopbackHost: LOOPBACK_BINDS.has(options.host),
+    requireLoopbackHost: isLoopback(options.host),
   });
 }
 

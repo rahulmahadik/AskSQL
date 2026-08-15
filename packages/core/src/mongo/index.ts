@@ -13,6 +13,13 @@ export {
   type MongoGuardVerdict,
 } from './guard.js';
 export { extractPipeline, type MongoExtraction } from './extract.js';
+export { rewriteDistinctCount } from './normalise.js';
+export {
+  firstMisquotedField,
+  firstUnknownStageField,
+  type MisquotedField,
+  type UnknownStageField,
+} from './stage-fields.js';
 export {
   buildPipelineSystem,
   buildPipelineUser,

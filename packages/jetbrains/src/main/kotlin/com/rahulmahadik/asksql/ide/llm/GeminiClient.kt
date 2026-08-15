@@ -65,6 +65,19 @@ internal class GeminiClient(
                 SseReader(r).forEachDataLine { payload ->
                     coroutineContext.ensureActive()
                     val json = try { JsonParser.parseString(payload).asJsonObject } catch (e: Exception) { return@forEachDataLine true }
+                    // Same as the OpenAI-compatible client: a mid-stream error must not read as a
+                    // complete answer with the text that happened to arrive first.
+                    json.getAsJsonObject("error")?.let { err ->
+                        val message = err.get("message")?.takeIf { !it.isJsonNull }?.asString ?: "the provider returned an error mid-stream"
+                        val code = if (LlmClients.isContextOverflowMessage(message)) {
+                            AskSqlErrorCode.LLM_CONTEXT_OVERFLOW
+                        } else if (LlmClients.isBillingExhaustionMessage(message)) {
+                            AskSqlErrorCode.LLM_BILLING
+                        } else {
+                            AskSqlErrorCode.LLM_UNAVAILABLE
+                        }
+                        throw AskSqlException(code, detail = message)
+                    }
                     json.getAsJsonArray("candidates")?.firstOrNull()?.asJsonObject
                         ?.getAsJsonObject("content")?.getAsJsonArray("parts")
                         ?.mapNotNull { it.asJsonObject?.get("text")?.takeIf { t -> !t.isJsonNull }?.asString }

@@ -313,7 +313,7 @@ importers:
   packages/duckdb:
     devDependencies:
       '@asksql/core':
-        specifier: workspace:>=0.6.1
+        specifier: workspace:>=0.7.0
         version: link:../core
       '@duckdb/duckdb-wasm':
         specifier: ^1.32.0
@@ -352,7 +352,7 @@ importers:
   packages/oracle:
     devDependencies:
       '@asksql/core':
-        specifier: workspace:>=0.6.1
+        specifier: workspace:>=0.7.0
         version: link:../core
       oracledb:
         specifier: ^6.5.0
@@ -361,7 +361,7 @@ importers:
   packages/postgres:
     devDependencies:
       '@asksql/core':
-        specifier: workspace:>=0.6.1
+        specifier: workspace:>=0.7.0
         version: link:../core
       '@types/pg':
         specifier: ^8.20.0
@@ -373,7 +373,7 @@ importers:
   packages/react:
     devDependencies:
       '@asksql/core':
-        specifier: workspace:>=0.6.2
+        specifier: workspace:>=0.7.0
         version: link:../core
       '@types/react':
         specifier: ^19.2.17
@@ -395,10 +395,10 @@ importers:
         version: 3.0.9(zod@4.4.3)
     devDependencies:
       '@asksql/core':
-        specifier: workspace:>=0.6.1
+        specifier: workspace:>=0.7.0
         version: link:../core
       '@asksql/duckdb':
-        specifier: workspace:>=0.3.0
+        specifier: workspace:>=0.3.1
         version: link:../duckdb
       '@asksql/mongodb':
         specifier: workspace:>=0.2.0
@@ -407,10 +407,10 @@ importers:
         specifier: workspace:>=0.3.0
         version: link:../mysql
       '@asksql/oracle':
-        specifier: workspace:>=0.2.0
+        specifier: workspace:>=0.3.0
         version: link:../oracle
       '@asksql/postgres':
-        specifier: workspace:>=0.3.0
+        specifier: workspace:>=0.3.1
         version: link:../postgres
       '@asksql/sqlite':
         specifier: workspace:>=0.4.0

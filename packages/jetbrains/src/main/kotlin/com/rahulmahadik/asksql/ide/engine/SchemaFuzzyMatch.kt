@@ -43,4 +43,50 @@ object SchemaFuzzyMatch {
         }
         return dp[a.length][b.length]
     }
+
+    /** Words that carry no schema meaning, so a question made only of these names nothing in particular. */
+    private val QUESTION_NOISE: Set<String> = (
+        "what which how many show me all the a an is are was were do does did have has list of in on for " +
+            "per each every there their it its to from by and or not no with that this these those give tell find get top " +
+            "most least largest biggest highest lowest average total sum count number rows records value values who whom whose " +
+            "when where why can could would should us we our you your my long longest shortest never ever any some more than " +
+            "less over under between about into out up down after before during year years month months day days week weeks " +
+            "time date dates spent using called new old good best worst same different table tables column columns database"
+        ).split(" ").toSet()
+
+    private fun singularOfWord(w: String): String = when {
+        w.endsWith("ies") -> w.dropLast(3) + "y"
+        w.endsWith("s") && !w.endsWith("ss") -> w.dropLast(1)
+        else -> w
+    }
+
+    private val QUESTION_WORD_RE = Regex("""[a-z_][\w]*""")
+
+    /**
+     * True when the question mentions something the catalog actually holds.
+     *
+     * A question that names nothing known is either about structure, or about a relation added since
+     * the catalog was read. The second case answers the wrong question silently: asked for invoices
+     * with only customers in the catalog, a model will happily count customers.
+     */
+    fun namesSomethingInCatalog(question: String, catalog: SchemaCatalog): Boolean {
+        val known = HashSet<String>()
+        for (t in catalog.tables) {
+            known += t.name.lowercase()
+            known += singularOfWord(t.name.lowercase())
+            for (c in t.columns) {
+                known += c.name.lowercase()
+                known += singularOfWord(c.name.lowercase())
+            }
+        }
+        if (known.isEmpty()) return true // nothing to match against; a refresh would not help
+
+        val words = QUESTION_WORD_RE.findAll(question.lowercase()).map { it.value }
+            .filter { it.length > 2 && it !in QUESTION_NOISE }
+            .toList()
+        return words.any { w ->
+            w in known || singularOfWord(w) in known ||
+                known.any { k -> k.length > 3 && (k.contains(w) || w.contains(k)) }
+        }
+    }
 }

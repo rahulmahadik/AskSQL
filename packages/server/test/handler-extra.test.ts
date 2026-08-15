@@ -130,6 +130,20 @@ describe('connection resolution', () => {
     expect((r.body as { error: { code: string } }).error.code).toBe('INVALID_INPUT');
   });
 
+  it('answers a forbidden id the same way whether or not it exists, so a caller cannot enumerate', async () => {
+    // Two connections exist; the caller may use neither. A 400 for one and a 403 for the other
+    // would tell an outsider which ids are real.
+    const s = new AskSqlServer({
+      connectors: [new FakeConnector('db_a', 'DB A'), new FakeConnector('db_b', 'DB B')],
+      engine: { model },
+      auth: () => ({ userId: 'u', allowedConnectionIds: ['db_a'] }),
+    });
+    const real = await statusOf(await s.handle(req('GET', '/schema', undefined, { connectionId: 'db_b' })));
+    const fake = await statusOf(await s.handle(req('GET', '/schema', undefined, { connectionId: 'ghost' })));
+    expect(real).toBe(403);
+    expect(fake).toBe(403);
+  });
+
   it('denies when the caller has no connections at all', async () => {
     const s = makeServer({ auth: (() => ({ userId: 'u', allowedConnectionIds: [] })) as never });
     expect(await statusOf(await s.handle(req('GET', '/schema')))).toBe(403);

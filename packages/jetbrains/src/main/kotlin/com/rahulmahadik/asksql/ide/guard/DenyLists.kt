@@ -132,9 +132,11 @@ object DenyLists {
     /** Defense in depth: every known-dangerous function is blocked on every dialect, not only its native one. */
     fun denySetFor(engine: EngineKind, policy: com.rahulmahadik.asksql.ide.model.GuardPolicy): Set<String> {
         val base = UNIVERSAL_DENY.toMutableSet()
-        if (engine == EngineKind.DUCKDB && !policy.allowFileFunctions) {
-            base += DUCKDB_FILE_FUNCTIONS
+        if (engine == EngineKind.DUCKDB) {
+            // allowFileFunctions is about FILES. Settings and credential disclosure stay denied
+            // either way, as they do in core; dropping both let a secret leak once files were on.
             base += DUCKDB_ONLY_DENY
+            if (!policy.allowFileFunctions) base += DUCKDB_FILE_FUNCTIONS
         }
         base += policy.denyFunctions
         return base.map { it.lowercase() }.toSet()

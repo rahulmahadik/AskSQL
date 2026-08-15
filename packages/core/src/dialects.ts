@@ -14,6 +14,7 @@ export const POSTGRES_DIALECT: DialectInfo = Object.freeze({
   promptNotes: Object.freeze([
     'Quote mixed-case or reserved identifiers with double quotes.',
     'Use ILIKE for case-insensitive text matching.',
+    "Combine values into one string with string_agg(col, ', ').",
     "Use date_trunc / interval arithmetic for date math (e.g. now - interval '30 days').",
   ]),
 });
@@ -27,6 +28,7 @@ export const MYSQL_DIALECT: DialectInfo = Object.freeze({
   promptNotes: Object.freeze([
     'Quote identifiers with backticks when needed.',
     'Use DATE_SUB / DATE_ADD / DATE_FORMAT for date math.',
+    "Combine values into one string with GROUP_CONCAT(col SEPARATOR ', ').",
   ]),
 });
 
@@ -40,6 +42,7 @@ export const SQLITE_DIALECT: DialectInfo = Object.freeze({
   promptNotes: Object.freeze([
     "Use date/datetime/strftime for date math (e.g. date('now','-30 days')).",
     'There are no schemas; refer to tables by bare name.',
+    "Combine values into one string with group_concat(col, ', ').",
   ]),
 });
 
@@ -57,6 +60,7 @@ export const ORACLE_DIALECT: DialectInfo = Object.freeze({
     'Unquoted identifiers are case-insensitive and stored upper case; double-quote to preserve case.',
     'Select a literal from the DUAL table (e.g. SELECT 1 FROM DUAL), not a bare SELECT 1.',
     'There is no boolean type; a comparison is not a directly selectable value.',
+    'The safety validator cannot read LISTAGG ... WITHIN GROUP, so return the rows themselves rather than combining them into one string.',
   ]),
 });
 
@@ -68,6 +72,7 @@ export const DUCKDB_DIALECT: DialectInfo = Object.freeze({
   limitStyle: 'limit',
   promptNotes: Object.freeze([
     'DuckDB follows PostgreSQL syntax for queries.',
+    "Combine values into one string with string_agg(col, ', '); SEPARATOR is MySQL syntax and is rejected here.",
     'Uploaded files are already registered as tables - query them by table name, never by file path.',
   ]),
 });

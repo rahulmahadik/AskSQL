@@ -87,11 +87,26 @@ export function isDatabaseOverviewQuestion(question: string): boolean {
   return OVERVIEW_INTENT.test(question) && OVERVIEW_OBJECT.test(question);
 }
 
+/**
+ * "How do X and Y relate?" asks about the link itself, which the schema already states. Answering it
+ * with a query returns rows of the join rather than the foreign key the question was about.
+ *
+ * Anchored at the start so filtering by a relationship stays a data question: "show me customers
+ * related to store 1" asks for rows and must still produce a query. First person is excluded too:
+ * "how do I relate this to revenue" is the reader relating something, not two tables.
+ */
+const RELATIONSHIP_QUESTION =
+  /^\s*(?:(?:so|and|ok|okay)\s+)?(?:how\s+(?:do|does|are|is)\b(?!\s+i\b)[^.?!]{0,60}\b(?:relate[sd]?|connect(?:ed|s)?|link(?:ed|s)?|associated|tied?\s+together|map\s+to)\b|what(?:'s|\u2019s|\s+is|\s+are)?\s+the\s+(?:relationships?|link|connection|association)\s+between\b(?![^.?!]*\d))/i;
+
+export function isRelationshipQuestion(question: string): boolean {
+  return RELATIONSHIP_QUESTION.test(question);
+}
+
 /** "write/give me a statement that deletes ..." - the write verb has to come AFTER the noun. */
 const WRITE_REQUEST =
   // An imperative opening is a write request even with no "statement"/"query" noun: "delete all
   // cancelled orders" is the commonest phrasing there is, and answering it with a SELECT is silent.
-  /^\s*(?:(?:please|now|ok|okay|so)\s+|(?:can|could|would|will)\s+(?:you|we)\s+(?:please\s+)?|i\s+(?:want|need)\s+(?:you\s+)?to\s+|go ahead and\s+|let'?s\s+)*(?:(?:delete|truncate|erase|purge|wipe|nuke|remove(?!\s+duplicates?\b))\b|(?:drop(?!\s+(?:rows?|records?|duplicates?|nulls?)\b)|insert|update|alter|rename|clear|empty|flush)\b[^.?!]{0,60}\b(?:table|column|row|rows|record|records|from|into|set|every|all|the|this|my|our)\b)|\b(?:write|create|give|show|generate|produce|draft|compose|need|want|how (?:do|can|would) i)\b[^.?!]{0,60}\b(?:statement|query|sql|ddl|command|script|migration)\b[^.?!]{0,60}\b(?:insert|inserts|inserting|update|updates|updating|delete|deletes|deleting|drop|drops(?!\s+(?:rows?|records?|duplicates?|nulls?)\b)|dropping|truncate|truncates|truncating|alter|alters|altering|remove|removes(?!\s+duplicates?\b)|removing|rename|renames|renaming|wipes?|wiping|purges?|purging|erases?|erasing|clears?|clearing|empties|emptying|flushes?|flushing|add\b[^.?!]{0,24}\b(?:column|index|constraint|table|field|foreign key))\b|\b(?:write|create|give|show|generate|produce|draft|compose|need|want)\b[^.?!]{0,30}\b(?:insert|update|delete|drop|truncate|alter|rename|merge|upsert)\s+(?:statement|query|sql|ddl|command|script|migration)\b|\b(?:write|create|give|show|generate|produce|draft|compose|need|want)\b[^.?!]{0,20}\b(?:insert|update|delete|drop|truncate|alter|merge|upsert)\b\s+(?:that|to|which|for|removing|adding|setting)\b|\b(?:statement|query|sql|ddl|command|script|migration)\b[^.?!]{0,40}\b(?:that|to|which)\b[^.?!]{0,40}\b(?:insert|inserts|update|updates|delete|deletes|drop|drops(?!\s+(?:rows?|records?|duplicates?|nulls?)\b)|truncate|truncates|alter|alters|remove|removes(?!\s+duplicates?\b)|rename|renames|wipes?|purges?|erases?|clears?|empties|flushes?|add\b[^.?!]{0,24}\b(?:column|index|constraint|table|field|foreign key))\b/i;
+  /^\s*(?:(?:please|now|ok|okay|so)\s+|(?:can|could|would|will)\s+(?:you|we)\s+|i\s+(?:want|need)\s+(?:you\s+)?to\s+|go ahead and\s+|let'?s\s+)*(?:(?:delete|truncate|erase|purge|wipe|nuke|remove(?!\s+duplicates?\b))\b|(?:drop(?!\s+(?:rows?|records?|duplicates?|nulls?)\b)|insert|update|alter|rename|clear|empty|flush)\b[^.?!]{0,60}\b(?:table|column|row|rows|record|records|from|into|set|every|all|the|this|my|our|to|by|with)\b|(?:add|create)\b[^.?!]{0,60}\b(?:column|table|index|constraint|view|field|foreign key|primary key)\b(?!\s+(?:with|showing|for|of|that|containing|listing|per|by|which)\b))|\b(?:write|create|give|show|generate|produce|draft|compose|need|want|how (?:do|can|would) i)\b[^.?!]{0,60}\b(?:statement|query|sql|ddl|command|script|migration)\b[^.?!]{0,60}\b(?:insert|inserts|inserting|update|updates|updating|delete|deletes|deleting|drop|drops(?!\s+(?:rows?|records?|duplicates?|nulls?)\b)|dropping|truncate|truncates|truncating|alter|alters|altering|remove|removes(?!\s+duplicates?\b)|removing|rename|renames|renaming|wipes?|wiping|purges?|purging|erases?|erasing|clears?|clearing|empties|emptying|flushes?|flushing|add\b[^.?!]{0,24}\b(?:column|index|constraint|table|field|foreign key))\b|\b(?:write|create|give|show|generate|produce|draft|compose|need|want)\b[^.?!]{0,30}\b(?:insert|update|delete|drop|truncate|alter|rename|merge|upsert)\s+(?:statement|query|sql|ddl|command|script|migration)\b|\b(?:write|create|give|show|generate|produce|draft|compose|need|want)\b[^.?!]{0,20}\b(?:insert|update|delete|drop|truncate|alter|merge|upsert)\b\s+(?:that|to|which|for|removing|adding|setting)\b|\b(?:statement|query|sql|ddl|command|script|migration)\b[^.?!]{0,40}\b(?:that|to|which)\b[^.?!]{0,40}\b(?:insert|inserts|update|updates|delete|deletes|drop|drops(?!\s+(?:rows?|records?|duplicates?|nulls?)\b)|truncate|truncates|alter|alters|remove|removes(?!\s+duplicates?\b)|rename|renames|wipes?|purges?|erases?|clears?|empties|flushes?|add\b[^.?!]{0,24}\b(?:column|index|constraint|table|field|foreign key))\b/i;
 
 /** True when the user wants a write statement handed to them; a capability question is not one. */
 export function isWriteRequest(question: string): boolean {
@@ -100,7 +115,7 @@ export function isWriteRequest(question: string): boolean {
 
 /** "run that query", "show me those results": the user means the query they just read, not a new one. */
 const RERUN_PREVIOUS =
-  /^\s*(?:(?:please|now|ok|okay|yes)\s+|(?:can|could|would|will)\s+(?:you|we)\s+(?:please\s+)?)*(?:re-?)?(?:run|execute|show(?:\s+me)?|give(?:\s+me)?|display)\b[^.?!]{0,40}\b(?:this|that|the\s+(?:previous|last|above|same|first|second|aggregation|aggregate))\b[^.?!]{0,40}$/i;
+  /^\s*(?:(?:please|now|ok|okay|yes)\s+|(?:can|could|would|will)\s+(?:you|we)\s+)*(?:re-?)?(?:run|execute|show(?:\s+me)?|give(?:\s+me)?|display)\b[^.?!]{0,40}\b(?:this|that|the\s+(?:previous|last|above|same|first|second|aggregation|aggregate))\b[^.?!]{0,40}$/i;
 
 /** True when the question asks to run a query already shown, rather than for a new one. */
 export function isRerunPreviousRequest(question: string): boolean {
@@ -149,4 +164,51 @@ export function closestTableName(question: string, catalog: SchemaCatalog): stri
       }
     }
   return best;
+}
+
+/**
+ * Words that carry no schema meaning, so a question made only of these names nothing in particular.
+ */
+const QUESTION_NOISE: ReadonlySet<string> = new Set(
+  (
+    'what which how many show me all the a an is are was were do does did have has list of in on for ' +
+    'per each every there their it its to from by and or not no with that this these those give tell find get top ' +
+    'most least largest biggest highest lowest average total sum count number rows records value values who whom whose ' +
+    'when where why can could would should us we our you your my long longest shortest never ever any some more than ' +
+    'less over under between about into out up down after before during year years month months day days week weeks ' +
+    'time date dates spent using called new old good best worst same different table tables column columns database'
+  ).split(' '),
+);
+
+const singularOfWord = (w: string): string =>
+  w.endsWith('ies') ? `${w.slice(0, -3)}y` : w.endsWith('s') && !w.endsWith('ss') ? w.slice(0, -1) : w;
+
+/**
+ * True when the question mentions something the catalog actually holds.
+ *
+ * A question that names nothing known is either about structure, or about a relation added since the
+ * catalog was read. The second case answers the wrong question silently: asked for invoices with only
+ * customers in the catalog, a model will happily count customers.
+ */
+export function namesSomethingInCatalog(question: string, catalog: SchemaCatalog): boolean {
+  const known = new Set<string>();
+  for (const t of catalog.tables) {
+    known.add(t.name.toLowerCase());
+    known.add(singularOfWord(t.name.toLowerCase()));
+    for (const c of t.columns) {
+      known.add(c.name.toLowerCase());
+      known.add(singularOfWord(c.name.toLowerCase()));
+    }
+  }
+  if (known.size === 0) return true; // nothing to match against; a refresh would not help
+
+  const words = (question.toLowerCase().match(/[a-z_][\w]*/g) ?? []).filter(
+    (w) => w.length > 2 && !QUESTION_NOISE.has(w),
+  );
+  return words.some(
+    (w) =>
+      known.has(w) ||
+      known.has(singularOfWord(w)) ||
+      [...known].some((k) => k.length > 3 && (k.includes(w) || w.includes(k))),
+  );
 }

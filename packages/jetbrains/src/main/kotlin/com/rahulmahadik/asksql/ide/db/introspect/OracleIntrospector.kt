@@ -43,8 +43,30 @@ object OracleIntrospector : Introspector {
             schemas = listOfNotNull(currentSchema),
             tables = tables,
             routines = routines(connection, currentSchema),
+            warnings = if (tables.isEmpty()) readableSchemaHint(connection, currentSchema) else emptyList(),
         )
     }
+
+    /**
+     * An account that only holds grants sees nothing in its own schema while its tables sit under
+     * another owner. Naming those owners turns an empty tree into something the user can act on.
+     */
+    private fun readableSchemaHint(connection: Connection, schema: String?): List<String> = runCatching {
+        val owners = mutableListOf<String>()
+        connection.prepareStatement(
+            "SELECT owner, COUNT(*) AS n FROM all_tables WHERE owner <> ? AND owner NOT IN " +
+                "('SYS','SYSTEM','XDB','MDSYS','CTXSYS','OUTLN','DBSNMP','APPQOSSYS','AUDSYS','GSMADMIN_INTERNAL'," +
+                "'OJVMSYS','ORDSYS','ORDDATA','OLAPSYS','LBACSYS','WMSYS','DVSYS','RDSADMIN') " +
+                "GROUP BY owner ORDER BY COUNT(*) DESC FETCH FIRST 5 ROWS ONLY",
+        ).use { ps ->
+            ps.setString(1, schema ?: "")
+            ps.executeQuery().use { rs ->
+                while (rs.next()) owners.add("${rs.getString("owner")} (${rs.getInt("n")} tables)")
+            }
+        }
+        if (owners.isEmpty()) emptyList()
+        else listOf("No tables are visible in ${schema ?: "this schema"}. Readable schemas: ${owners.joinToString(", ")}.")
+    }.getOrDefault(emptyList())
 
     private fun tableComments(connection: Connection, schema: String?): Map<String, String> {
         val map = mutableMapOf<String, String>()

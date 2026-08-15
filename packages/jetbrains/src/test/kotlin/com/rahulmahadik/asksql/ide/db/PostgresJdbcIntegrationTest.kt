@@ -7,6 +7,7 @@ import com.rahulmahadik.asksql.ide.model.EngineKind
 import com.rahulmahadik.asksql.ide.model.RoutineVolatility
 import com.rahulmahadik.asksql.ide.test.IntegrationTest
 import com.rahulmahadik.asksql.ide.test.fakeProject
+import com.rahulmahadik.asksql.ide.ui.displayString
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -113,8 +114,10 @@ class PostgresJdbcIntegrationTest {
         openConnection().use { connection ->
             val result = JdbcExecutor.execute(connection, "SELECT 1::int AS n", maxRows = 1, timeoutMs = 5000, EngineKind.POSTGRES)
             val cell = result.rows.first().first()
-            assertTrue("expected ExactNumeric for INTEGER, got $cell", cell is CellValue.ExactNumeric)
-            assertEquals("1", (cell as CellValue.ExactNumeric).value)
+            // A number, like the TypeScript connectors return, so it sorts and charts as one...
+            assertTrue("expected Number for INTEGER, got $cell", cell is CellValue.Number)
+            // ...and still shown without a decimal the database never had.
+            assertEquals("1", displayString(cell))
         }
     }
 

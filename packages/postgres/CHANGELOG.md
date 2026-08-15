@@ -1,5 +1,17 @@
 # @asksql/postgres
 
+## 0.3.1
+
+### Patch Changes
+
+- A composite foreign key paired its columns in the wrong order. The column lists were expanded with
+  `unnest` and joined, which does not preserve array order, so a two-column key could be reported as
+  referencing the wrong pair. The expansion is now ordered with `WITH ORDINALITY`.
+
+  An expression index was parsed into a fragment presented as a column name: `(lower(name))` became
+  `lower(name`, because the key list was read to the first closing bracket rather than the last. An
+  expression index now lists no columns, and its definition still carries the detail.
+
 ## 0.3.0
 
 ### Minor Changes

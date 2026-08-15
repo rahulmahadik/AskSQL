@@ -4,6 +4,32 @@ All notable changes to the AskSQL VS Code extension are documented here. The for
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.2] - 2026-08-15
+
+### Added
+- Structure questions are answered with SQL written by the extension rather than guessed by the
+  model. "How many rows are in each table?", "which tables have no primary key?" and "what tables are
+  in this database?" now read each engine's own catalog, with every name quoted.
+- A relationship question ("how do customers and orders relate?") is answered from the foreign keys
+  instead of returning rows of a join.
+
+### Fixed
+- Clear during a question left the button reading "Cancel" with nothing to cancel, and refused the
+  next question because the panel still believed it was busy.
+- A result holding large JSON or BLOB cells was measured as if every cell were tiny, so the result
+  store could hold far more memory than its budget. Sizing now samples across the result rather than
+  its first rows, and measures a large value up to a bound rather than assuming.
+- A question about nothing in the database is declined in one sentence instead of answering
+  confidently about the wrong thing.
+- On Oracle, a query the model wrote with `LIMIT` was refused and the correction attempts all failed
+  the same way. A plain trailing `LIMIT n` is now read as `FETCH FIRST n ROWS ONLY`, which is the
+  same query.
+- Database error text is redacted before it reaches the model. A driver quotes the offending row, and
+  Postgres appends the whole row, so a correction prompt carried cell values.
+- On MongoDB, a distinct count written with `$addToSet` is rewritten to a grouped count rather than
+  refused for the 16MB document limit, and it no longer reports one distinct value too many when
+  documents are missing the field.
+
 ## [0.7.1] - 2026-08-14
 
 ### Fixed

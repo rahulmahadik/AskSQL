@@ -350,25 +350,78 @@ export function buildDuckCatalog(
 /** Shape a raw DuckDB cell value to a JSON-safe {@link CellValue}. */
 export function shapeDuckValue(v: unknown, kind: ResultColumn['kind']): CellValue {
   if (v === null || v === undefined) return null;
+  // Exactness first: a decimal or bigint arriving as a number must not be re-rounded via JSON.
+  if (kind === 'bigint' || kind === 'decimal') {
+    if (typeof v === 'string' || typeof v === 'number' || typeof v === 'bigint') return String(v);
+  }
+  const plain = toPlain(v);
+  if (plain === null || typeof plain === 'string' || typeof plain === 'number' || typeof plain === 'boolean') {
+    return plain;
+  }
+  if (isBinaryPreview(plain)) return plain;
+  return jsonSafe(plain);
+}
+
+const isBinaryPreview = (v: unknown): v is CellValue =>
+  typeof v === 'object' && v !== null && '__binary' in (v as Record<string, unknown>);
+
+/**
+ * A JSON-safe plain value, at any depth.
+ *
+ * Two drivers hand back two shapes. DuckDB-WASM returns Apache Arrow values, which define `toJSON`
+ * and produce exactly the right structure - including nulls inside a list, which their `toString`
+ * drops. The node driver returns wrapper objects with no `toJSON`, whose storage must not be
+ * serialized: a date would arrive as {"days":19787}. Recursion matters because both nest, so a date
+ * inside a list and a blob inside a struct are shaped like one at the top level.
+ */
+function toPlain(v: unknown): unknown {
+  if (v === null || v === undefined) return null;
   if (typeof v === 'bigint') return v.toString();
+  if (typeof v === 'number') return Number.isFinite(v) ? v : String(v);
+  if (typeof v === 'boolean' || typeof v === 'string') return v;
   if (v instanceof Uint8Array || (typeof Buffer !== 'undefined' && Buffer.isBuffer(v))) {
-    const bytes = v as Uint8Array;
-    const hex = Array.from(bytes.subarray(0, 16))
-      .map((b) => b.toString(16).padStart(2, '0'))
-      .join('');
-    return { __binary: { bytes: bytes.length, hexPreview: hex } };
+    return binaryPreview(v as Uint8Array);
   }
   if (v instanceof Date) return v.toISOString();
-  if (kind === 'bigint' || kind === 'decimal') return typeof v === 'string' ? v : String(v);
-  // DOUBLE supports 'nan'/'inf'; non-finite numbers are not legal JSON (they become null).
-  if (typeof v === 'number') return Number.isFinite(v) ? v : String(v);
-  if (typeof v === 'boolean') return v;
-  // LIST/STRUCT/MAP wrappers can hold bigint members, which JSON.stringify refuses to
-  // serialize - and the throw would escape execute() as a raw TypeError. Stringify them.
-  if (typeof v === 'object') {
-    return JSON.stringify(v, (_key, x: unknown) => (typeof x === 'bigint' ? x.toString() : x));
+  if (Array.isArray(v)) return v.map(toPlain);
+  if (typeof v !== 'object') return String(v);
+
+  const obj = v as Record<string, unknown>;
+  // Arrow first: its toJSON is authoritative, and a WASM struct may genuinely hold a field called
+  // `items` or `bytes` that would otherwise look like a node wrapper.
+  if (typeof obj['toJSON'] === 'function') return toPlain((obj['toJSON'] as () => unknown)());
+  // Beyond here the rules read a DRIVER wrapper, which is a class instance. A plain object is data -
+  // from toJSON, or a struct's members - and a field of its own called `items` is just a field.
+  if (Object.getPrototypeOf(obj) === Object.prototype || Object.getPrototypeOf(obj) === null) {
+    const plain: Record<string, unknown> = {};
+    for (const [k, member] of Object.entries(obj)) plain[k] = toPlain(member);
+    return plain;
   }
-  return String(v);
+  const bytes = obj['bytes'];
+  if (bytes instanceof Uint8Array || (typeof Buffer !== 'undefined' && Buffer.isBuffer(bytes))) {
+    return binaryPreview(bytes as Uint8Array);
+  }
+  if ('items' in obj) return toPlain(obj['items']);
+  if ('entries' in obj) return toPlain(obj['entries']);
+  // Temporal, uuid and decimal wrappers: their toString is the value, their fields are storage.
+  const text = String(v);
+  if (text !== '[object Object]') return text;
+  const out: Record<string, unknown> = {};
+  for (const [k, member] of Object.entries(obj)) out[k] = toPlain(member);
+  return out;
+}
+
+/** First 16 bytes as hex, the preview shape every adapter returns for binary. */
+function binaryPreview(bytes: Uint8Array): CellValue {
+  const hex = Array.from(bytes.subarray(0, 16))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+  return { __binary: { bytes: bytes.length, hexPreview: hex } };
+}
+
+/** A bigint member makes JSON.stringify throw, and the throw would escape execute() as a TypeError. */
+function jsonSafe(v: unknown): string {
+  return JSON.stringify(v, (_key, x: unknown) => (typeof x === 'bigint' ? x.toString() : x));
 }
 
 /**
@@ -378,8 +431,10 @@ export function shapeDuckValue(v: unknown, kind: ResultColumn['kind']): CellValu
 export function classifyDuckType(typeStr: string | undefined): ResultColumn['kind'] {
   if (!typeStr) return 'unknown';
   const t = typeStr.toLowerCase();
-  // Most-specific first: "bigint"/"Int64" beats the generic int check, and "decimal" beats everything numeric.
+  // Most-specific first: composites name their member type, so STRUCT("a" INTEGER) and INTEGER[]
+  // would both read as numbers and be offered as chart measures.
   if (/bool/.test(t)) return 'boolean';
+  if (/struct|\blist\b|\bmap\b|json|array|\[\]/.test(t)) return 'json';
   if (/decimal|numeric/.test(t)) return 'decimal';
   if (/bigint|hugeint|int64|int128/.test(t)) return 'bigint';
   if (/timestamp|datetime/.test(t)) return 'timestamp';
@@ -390,7 +445,6 @@ export function classifyDuckType(typeStr: string | undefined): ResultColumn['kin
     return 'number';
   if (/utf8|string|varchar|char|text|uuid|enum/.test(t)) return 'text';
   if (/binary|blob|bytea|bit/.test(t)) return 'binary';
-  if (/struct|list|map|json|array/.test(t)) return 'json';
   return 'unknown';
 }
 

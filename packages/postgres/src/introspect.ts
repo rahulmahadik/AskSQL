@@ -203,9 +203,14 @@ export async function introspectPostgres(
       db.query(
         `SELECT n.nspname AS schema, c.relname AS table, con.conname AS name, con.contype AS contype,
                 pg_get_constraintdef(con.oid) AS def,
-                ARRAY(SELECT a.attname::text FROM unnest(con.conkey) k JOIN pg_attribute a ON a.attrelid=c.oid AND a.attnum=k)::text[] AS cols,
+                -- WITH ORDINALITY: a join over unnest does not preserve array order, and the two
+                -- arrays are paired positionally, so a composite key came back with its columns
+                -- matched to the wrong referenced columns.
+                ARRAY(SELECT a.attname::text FROM unnest(con.conkey) WITH ORDINALITY AS k(attnum, ord)
+                      JOIN pg_attribute a ON a.attrelid=c.oid AND a.attnum=k.attnum ORDER BY k.ord)::text[] AS cols,
                 fn.nspname AS ref_schema, fc.relname AS ref_table,
-                ARRAY(SELECT a.attname::text FROM unnest(con.confkey) k JOIN pg_attribute a ON a.attrelid=fc.oid AND a.attnum=k)::text[] AS ref_cols
+                ARRAY(SELECT a.attname::text FROM unnest(con.confkey) WITH ORDINALITY AS k(attnum, ord)
+                      JOIN pg_attribute a ON a.attrelid=fc.oid AND a.attnum=k.attnum ORDER BY k.ord)::text[] AS ref_cols
          FROM pg_constraint con
          JOIN pg_class c ON c.oid = con.conrelid
          JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -408,8 +413,18 @@ export async function introspectPostgres(
   for (const r of idxRows.rows) {
     const key = `${str(r['schema'])}.${str(r['table'])}`;
     const def = str(r['def']);
-    const colsMatch = /\(([^)]*)\)/.exec(def);
-    const cols = colsMatch ? colsMatch[1]!.split(',').map((c) => c.trim()) : [];
+    // The key list runs to the LAST closing bracket, not the first: stopping early turned
+    // `(lower(name))` into the fragment `lower(name`, presented as if it were a column.
+    const open = def.indexOf('(');
+    const close = def.lastIndexOf(')');
+    const keyList = open >= 0 && close > open ? def.slice(open + 1, close) : '';
+    // An expression index has no column names to list; the definition already carries the detail.
+    const cols = keyList.includes('(')
+      ? []
+      : keyList
+          .split(',')
+          .map((c) => c.trim())
+          .filter((c) => c.length > 0);
     const arr = idxByTable.get(key) ?? [];
     arr.push({
       name: str(r['name']),

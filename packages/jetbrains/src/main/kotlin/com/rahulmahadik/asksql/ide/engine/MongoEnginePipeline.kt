@@ -139,6 +139,16 @@ class MongoEnginePipeline(
                     MongoIntrospector.introspect(client.getDatabase(dbName))
                 }
             }
+            // An empty catalog WITH warnings is a permission or network failure, not an empty
+            // database; caching it presented the database as empty for the next five minutes.
+            if (fresh.tables.isEmpty() && fresh.warnings.isNotEmpty()) {
+                throw AskSqlException(
+                    AskSqlErrorCode.DB_QUERY_ERROR,
+                    userMessage = "Could not read this database's collections. Check the connection's permissions, then try again.",
+                    detail = "introspection returned no collections with warnings: ${fresh.warnings.joinToString("; ").take(500)}",
+                    retryable = true,
+                )
+            }
             // Skip the write if an edit invalidated mid-fetch, or this stores the old target's schema.
             if (catalogGeneration.get() == gen) catalogCache[descriptor.id] = CachedCatalog(fresh, System.currentTimeMillis())
             withoutSampledData(fresh)
@@ -193,7 +203,11 @@ class MongoEnginePipeline(
                 retryable = false,
             )
         }
-        if (EnginePipeline.isSchemaAdviceQuestion(q) || EnginePipeline.isDatabaseOverviewQuestion(q)) {
+        // A relationship question asks about the link itself, which the schema already states; a
+        // pipeline would return documents instead of describing it. Same routing as the SQL side.
+        if (EnginePipeline.isSchemaAdviceQuestion(q) || EnginePipeline.isDatabaseOverviewQuestion(q) ||
+            EnginePipeline.isRelationshipQuestion(q)
+        ) {
             throw AskSqlException(
                 AskSqlErrorCode.LLM_CANNOT_ANSWER,
                 userMessage = "That asks about the schema itself rather than the data in it, so there is no query to run.",
@@ -312,7 +326,7 @@ class MongoEnginePipeline(
                     )
                 }
                 userPrompt = MongoPrompts.buildRepairUser(
-                    question = q, failedPipeline = extraction.pipelineJson,
+                    question = q, failedPipeline = extraction.pipelineJson, collection = extraction.collection,
                     failure = "That pipeline has no stage that answers the question. Use \$match/\$group/\$project, or reply with IMPOSSIBLE and one sentence saying why.",
                     schemaText = pruned.schemaText,
                 )
@@ -321,7 +335,22 @@ class MongoEnginePipeline(
             }
 
             onEvent?.onEvent(EngineEvent.StageEvent(Stage.GUARD))
-            val verdict = MongoGuard.guard(extraction.pipelineJson, policy)
+            // Judged by the guard: a refused rewrite falls back to the model's own pipeline.
+            // parsePipeline expects an already-guarded pipeline; this runs before the guard, where
+            // shell syntax like new Date(...) throws instead of repairing.
+            val rewritten = try {
+                MongoNormalise.rewriteDistinctCount(MongoGuard.parsePipeline(extraction.pipelineJson))
+            } catch (e: Exception) {
+                null
+            }
+            val rewrittenVerdict = rewritten?.let { stages ->
+                MongoGuard.guard(stages.joinToString(",", "[", "]") { it.toJson() }, policy)
+            }
+            val verdict = if (rewrittenVerdict?.allowed == true) {
+                rewrittenVerdict
+            } else {
+                MongoGuard.guard(extraction.pipelineJson, policy)
+            }
             if (!verdict.allowed) {
                 if (attempt >= MAX_REPAIRS) {
                     history.add(auditEntry(descriptor.id, q, extraction.pipelineJson, HistoryStatus.BLOCKED, verdict.ruleId))
@@ -332,7 +361,7 @@ class MongoEnginePipeline(
                     )
                 }
                 userPrompt = MongoPrompts.buildRepairUser(
-                    question = q, failedPipeline = extraction.pipelineJson,
+                    question = q, failedPipeline = extraction.pipelineJson, collection = extraction.collection,
                     failure = "The pipeline validator rejected it: ${verdict.reason ?: verdict.ruleId ?: "not allowed"}. Produce a single read-only pipeline.",
                     schemaText = schemaText,
                 )
@@ -351,8 +380,80 @@ class MongoEnginePipeline(
                     )
                 }
                 userPrompt = MongoPrompts.buildRepairUser(
-                    question = q, failedPipeline = verdict.pipelineJson,
+                    question = q, failedPipeline = verdict.pipelineJson, collection = extraction.collection,
                     failure = "Collection \"${extraction.collection}\" does not exist in the schema. Use only collections from the <schema> block.",
+                    schemaText = schemaText,
+                )
+                attempt++
+                continue
+            }
+
+            // Quoting floor: a SQL-quoted path names a field MongoDB does not hold, so an aggregate
+            // over it returns 0 instead of failing, and nothing downstream can notice.
+            // Join-target floor, mirroring packages/core/src/mongo/engine.ts: a $lookup naming a
+            // collection that does not exist, or one cased differently, silently joins nothing -
+            // the pipeline runs and every joined field comes back empty with no error.
+            val unresolvedJoins = verdict.collections.filter { name ->
+                fullCatalog.tables.none { it.name.equals(name, ignoreCase = true) }
+            }
+            if (unresolvedJoins.isNotEmpty()) {
+                if (attempt >= MAX_REPAIRS) {
+                    throw AskSqlException(
+                        AskSqlErrorCode.LLM_CANNOT_ANSWER,
+                        userMessage = "I couldn't find a collection called \"${unresolvedJoins.first()}\" referenced by a join. Try rephrasing, or check the schema.",
+                        detail = "unknown join collection(s) after repairs: ${unresolvedJoins.joinToString(", ")}",
+                        retryable = false,
+                    )
+                }
+                userPrompt = MongoPrompts.buildRepairUser(
+                    question = q, failedPipeline = extraction.pipelineJson, collection = extraction.collection,
+                    failure = "A join references collection(s) not in the schema: ${unresolvedJoins.joinToString(", ")}. " +
+                        "Use only collections from the <schema> block.",
+                    schemaText = schemaText,
+                )
+                attempt++
+                continue
+            }
+
+            val collectionFields = fullCatalog.tables.firstOrNull { it.name == resolvedCollection }
+                ?.columns.orEmpty().map { it.name }.toSet()
+            val misquoted = StageFields.firstMisquotedField(MongoGuard.parsePipeline(verdict.pipelineJson), collectionFields)
+            if (misquoted != null) {
+                if (attempt >= MAX_REPAIRS) {
+                    throw AskSqlException(
+                        AskSqlErrorCode.LLM_BAD_OUTPUT,
+                        userMessage = "The pipeline quotes a field name as `${misquoted.raw}`, which MongoDB reads as a different field.",
+                        detail = "misquoted field after repairs: ${misquoted.raw}",
+                        retryable = false,
+                    )
+                }
+                userPrompt = MongoPrompts.buildRepairUser(
+                    question = q, failedPipeline = extraction.pipelineJson, collection = extraction.collection,
+                    failure = "\"\$${misquoted.raw}\" is not a field. MongoDB has no quoting for field paths, so the quote characters " +
+                        "become part of the name and the field reads as missing. Write \"\$${misquoted.suggestion}\" instead.",
+                    schemaText = schemaText,
+                )
+                attempt++
+                continue
+            }
+
+            // Field floor: MongoDB reports these from inside the plan executor, naming the operator
+            // rather than the field, so repair it here.
+            val stageField = StageFields.firstUnknownStageField(MongoGuard.parsePipeline(verdict.pipelineJson))
+            if (stageField != null) {
+                if (attempt >= MAX_REPAIRS) {
+                    throw AskSqlException(
+                        AskSqlErrorCode.LLM_BAD_OUTPUT,
+                        userMessage = "The pipeline reads a field called \"${stageField.field}\" that no earlier stage produces.",
+                        detail = "unknown field after repairs: ${stageField.field} at stage ${stageField.stage}",
+                        retryable = false,
+                    )
+                }
+                userPrompt = MongoPrompts.buildRepairUser(
+                    question = q, failedPipeline = extraction.pipelineJson, collection = extraction.collection,
+                    failure = "Stage ${stageField.stage + 1} reads \"\$${stageField.field}\", which no earlier stage produces. " +
+                        "At that point the document holds only: ${stageField.available.joinToString(", ")}. " +
+                        "Remember that \$group replaces the document with its _id and its accumulator outputs.",
                     schemaText = schemaText,
                 )
                 attempt++

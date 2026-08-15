@@ -5,6 +5,7 @@
  */
 
 import pkg from 'node-sql-parser';
+import { withoutFetchTail } from './strip.js';
 
 const { Parser } = pkg as unknown as {
   Parser: new () => { parse: (sql: string, opts: { database: string }) => { ast: unknown } };
@@ -76,7 +77,8 @@ function inspect(node: unknown, found: { aggregate: boolean; column: boolean }, 
 export function ungroupedAggregate(sql: string, grammar: string): string | null {
   let ast: unknown;
   try {
-    ast = parser.parse(sql, { database: grammar }).ast;
+    // The Oracle row cap is a tail this parser cannot read, and this check fails open.
+    ast = parser.parse(withoutFetchTail(sql), { database: grammar }).ast;
   } catch {
     return null; // the guard already fails closed on unparsable SQL; never double-report here
   }
@@ -186,7 +188,7 @@ function collectSums(node: unknown, found: { table: string; column: string }[]):
 export function fanOutAggregate(sql: string, grammar: string, catalog: FanOutCatalog): FanOut | null {
   let ast: unknown;
   try {
-    ast = parser.parse(sql, { database: grammar }).ast;
+    ast = parser.parse(withoutFetchTail(sql), { database: grammar }).ast;
   } catch {
     return null;
   }
@@ -221,7 +223,7 @@ export function fanOutAggregate(sql: string, grammar: string, catalog: FanOutCat
 export function nestedAggregate(sql: string, grammar: string): string | null {
   let ast: unknown;
   try {
-    ast = parser.parse(sql, { database: grammar }).ast;
+    ast = parser.parse(withoutFetchTail(sql), { database: grammar }).ast;
   } catch {
     return null; // the guard already parsed it; never double-block here
   }

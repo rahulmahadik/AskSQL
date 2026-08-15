@@ -60,7 +60,7 @@ describe('a query suggested in prose is handed back for the next turn', () => {
   // A write is shown as a proposal to run by hand; "run that" must never resolve to it.
   it('never carries a write proposal', async () => {
     const { engine, close } = harness(
-      'To remove them, run:\n\n```sql\nDELETE FROM orders WHERE status = \'cancelled\'\n```\n\nCheck the rows first.',
+      "To remove them, run:\n\n```sql\nDELETE FROM orders WHERE status = 'cancelled'\n```\n\nCheck the rows first.",
     );
     const answer = await engine.explainSchema('write a statement that deletes cancelled orders');
     expect(answer.proposedSql).toBeUndefined();

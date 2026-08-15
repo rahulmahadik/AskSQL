@@ -49,6 +49,7 @@ export {
 } from './engine.js';
 export {
   isMetadataQuestion,
+  isRelationshipQuestion,
   isSchemaAdviceQuestion,
   isSchemaProposalQuestion,
   isWriteRequest,
@@ -57,5 +58,5 @@ export {
   closestTableName,
 } from './schema-match.js';
 // The remaining routing predicates, exported for the JetBrains parity exporter.
-export { isCapabilityQuestion, isPromptInjection } from './scope.js';
+export { danglingReference, isCapabilityQuestion, isPromptInjection } from './scope.js';
 // MongoDB (non-SQL) engine path: import from '@asksql/core/mongo'.

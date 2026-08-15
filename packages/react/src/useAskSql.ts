@@ -5,7 +5,7 @@
  * build a custom UI.
  */
 
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ResultSet } from '@asksql/core';
 import type { ChatEvent, Transport } from './client.js';
 
@@ -418,6 +418,17 @@ export function useAskSql(opts: UseAskSqlOptions): UseAskSqlResult {
       }
     },
     [turns, opts.transport, opts.connectionId, patch],
+  );
+
+  // Unmounting is a cancel the user cannot click: without this the model stream, the token flush
+  // interval and any pending auto-run outlive the component and write to a dead setState.
+  useEffect(
+    () => () => {
+      abortRef.current?.abort();
+      abortRef.current = null;
+      inFlightRef.current = null;
+    },
+    [],
   );
 
   const cancel = useCallback(() => {

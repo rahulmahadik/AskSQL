@@ -146,7 +146,11 @@ describe('backticks wrap more than identifiers', () => {
   });
 
   it('does not report a backticked literal or operator as a missing name', () => {
-    for (const answer of ['Use `2024-01-01` as the cutoff.', 'Compare with `>=` on the date.', 'Pass `:customer_id`.']) {
+    for (const answer of [
+      'Use `2024-01-01` as the cutoff.',
+      'Compare with `>=` on the date.',
+      'Pass `:customer_id`.',
+    ]) {
       expect(unknownReferencesInProse(answer, CATALOG)).toEqual([]);
     }
   });

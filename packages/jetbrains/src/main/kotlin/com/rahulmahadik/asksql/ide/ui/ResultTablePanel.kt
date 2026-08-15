@@ -144,6 +144,13 @@ class ResultTablePanel(private val project: Project, private val resultSet: AskS
         /** The raw (unflattened) value of the cell most recently prepared, for the lazy tooltip. */
         private var rawText: String = ""
 
+        init {
+            // A JLabel interprets its text as HTML when it starts with <html>, and a cell value is
+            // attacker-influenced: a row holding "<html><img src=http://…>" would fire an outbound
+            // request from the IDE while the table painted. This turns that off for the renderer.
+            putClientProperty("html.disable", true)
+        }
+
         override fun getTableCellRendererComponent(
             table: javax.swing.JTable,
             value: Any?,
@@ -240,11 +247,21 @@ class ResultTablePanel(private val project: Project, private val resultSet: AskS
 /** Exports run over rows already in memory and stay cancellable; the bound only stops a wedged call. */
 private const val EXPORT_TIMEOUT_MS = 10 * 60_000L
 
+/**
+ * A number cell as text, matching String(value) on the other surfaces: an INTEGER travels as a double,
+ * and "1.0" would show a decimal the database never had. BigDecimal keeps a magnitude past Long exact.
+ */
+internal fun numberText(value: Double): String = when {
+    !value.isFinite() -> value.toString()
+    value == Math.floor(value) -> java.math.BigDecimal(value).toBigInteger().toString()
+    else -> value.toString()
+}
+
 /** The fidelity-safe string form of a cell; null and empty string render distinctly. */
 internal fun displayString(value: CellValue): String = when (value) {
     is CellValue.Null -> "∅ NULL"
     is CellValue.Text -> value.value
-    is CellValue.Number -> value.value.toString()
+    is CellValue.Number -> numberText(value.value)
     is CellValue.Boolean -> value.value.toString()
     is CellValue.ExactNumeric -> value.value
     is CellValue.Binary -> "⟨${value.preview.bytes} bytes: ${value.preview.hexPreview}${if (value.preview.bytes > 32) "…" else ""}⟩"

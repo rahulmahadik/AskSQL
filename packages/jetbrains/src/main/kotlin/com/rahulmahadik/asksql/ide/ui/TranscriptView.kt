@@ -65,7 +65,7 @@ class TranscriptView(project: Project, private val onSamplePick: (String) -> Uni
             },
         )
         inner.add(
-            JBLabel("The SQL is always shown before anything runs, and only read-only queries are allowed.", SwingConstants.CENTER).apply {
+            JBLabel("You see the SQL for every answer, and only read-only queries are allowed.", SwingConstants.CENTER).apply {
                 alignmentX = 0.5f
                 border = JBUI.Borders.emptyBottom(16)
             },
