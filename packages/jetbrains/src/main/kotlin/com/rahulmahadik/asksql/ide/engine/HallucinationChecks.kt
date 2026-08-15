@@ -73,6 +73,73 @@ object HallucinationChecks {
         return null
     }
 
+    /** A USING or NATURAL join makes a shared column legal unqualified, so those are left alone. */
+    private val SHARED_JOIN_RE = Regex("""\b(using|natural)\b""", RegexOption.IGNORE_CASE)
+
+    /**
+     * An unqualified column that more than one table in the FROM list owns. Every engine rejects it,
+     * so catching it here turns a database error and a repair round trip into a straight repair.
+     * Mirrors ambiguousColumn in packages/core/src/engine.ts.
+     */
+    fun ambiguousColumn(sql: String, catalog: SchemaCatalog): String? {
+        val statement = try {
+            CCJSqlParserUtil.parse(sql)
+        } catch (e: Exception) {
+            return null // the guard already parsed it; never double-block here
+        }
+        if (statement !is Select) return null
+
+        val code = withoutLiterals(sql)
+        if (SHARED_JOIN_RE.containsMatchIn(code)) return null
+        // The same attributability limits as the unknown-column floor: one scope only.
+        if (SUBQUERY_OPEN_RE.containsMatchIn(code) || SET_OPERATION_RE.containsMatchIn(code)) return null
+
+        val byTable = mutableMapOf<String, MutableSet<String>>()
+        for (t in catalog.tables) {
+            val set = byTable.getOrPut(t.name.lowercase()) { mutableSetOf() }
+            for (c in t.columns) set += c.name.lowercase()
+        }
+
+        val cteNames = collectCteNames(sql)
+        val queryTables = mutableListOf<String>()
+        val tableNames = try {
+            TablesNamesFinder<Void>().getTables(statement as net.sf.jsqlparser.statement.Statement).toList()
+        } catch (e: Exception) {
+            return null
+        }
+        for (raw in tableNames) {
+            val name = raw.lowercase().substringAfterLast('.')
+            if (name.isBlank()) continue
+            if (cteNames.contains(name) || SYSTEM_SCHEMAS.contains(name)) return null
+            if (!byTable.containsKey(name)) return null // an unknown table may own the column
+            queryTables += name
+        }
+        if (queryTables.size < 2) return null
+
+        val aliases = SELECT_ALIAS_RE.findAll(sql).map { it.groupValues[1].lowercase() }.toSet()
+        val columnRefs = mutableListOf<Pair<String?, String>>()
+        val visitor = object : ExpressionVisitorAdapter<Void>() {
+            override fun <S> visit(column: Column, context: S): Void? {
+                val tableName = column.table?.name?.let { unquoteDotted(it) }?.lowercase()
+                val colName = column.columnName?.let { unquoteSegment(it) }?.lowercase()
+                if (colName != null) columnRefs += tableName to colName
+                return super.visit(column, context)
+            }
+        }
+        try {
+            visitAllExpressions(statement, visitor)
+        } catch (e: Exception) {
+            return null
+        }
+
+        for ((table, column) in columnRefs) {
+            if (column.isBlank() || column == "*" || table != null) continue
+            if (aliases.contains(column)) continue
+            if (queryTables.count { byTable[it]!!.contains(column) } > 1) return column
+        }
+        return null
+    }
+
     fun firstUnknownColumn(sql: String, catalog: SchemaCatalog): UnknownColumn? {
         val statement = try {
             CCJSqlParserUtil.parse(sql)

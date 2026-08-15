@@ -69,6 +69,19 @@ internal class OpenAiCompatibleClient(
                 SseReader(r).forEachDataLine { payload ->
                     coroutineContext.ensureActive()
                     val json = try { JsonParser.parseString(payload).asJsonObject } catch (e: Exception) { return@forEachDataLine true }
+                    // A provider can fail mid-stream. Skipping the payload returned whatever text had
+                    // arrived as a complete answer, so the reader saw truncated SQL and no error.
+                    json.getAsJsonObject("error")?.let { err ->
+                        val message = err.get("message")?.takeIf { !it.isJsonNull }?.asString ?: "the provider returned an error mid-stream"
+                        val code = if (LlmClients.isContextOverflowMessage(message)) {
+                            AskSqlErrorCode.LLM_CONTEXT_OVERFLOW
+                        } else if (LlmClients.isBillingExhaustionMessage(message)) {
+                            AskSqlErrorCode.LLM_BILLING
+                        } else {
+                            AskSqlErrorCode.LLM_UNAVAILABLE
+                        }
+                        throw AskSqlException(code, detail = message)
+                    }
                     val choices = json.getAsJsonArray("choices")
                     val delta = choices?.firstOrNull()?.asJsonObject?.getAsJsonObject("delta")
                     val content = delta?.get("content")?.takeIf { !it.isJsonNull }?.asString

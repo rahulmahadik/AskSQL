@@ -3,6 +3,39 @@
 All notable changes to the AskSQL JetBrains plugin are documented here.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.5.3] - 2026-08-15
+
+### Security
+- A result cell, a schema tree label and a chart tooltip are rendered as text, never as markup. Swing
+  reads a string beginning with `<html>` as HTML, so a value like `<html><img src=http://...>` in a
+  database the plugin displayed would fetch that URL from inside the IDE.
+- Database error text is redacted before it reaches the model. A driver quotes the offending row, so
+  the "suggest a fix" prompt carried cell values that were never meant to leave the machine.
+
+### Added
+- Structure questions are answered with SQL written by the plugin rather than guessed by the model:
+  row counts per table, tables without a primary key, and what the database contains.
+- A relationship question is answered from the foreign keys instead of returning rows of a join.
+- On Oracle, an account that only holds grants on another schema is told which schemas it can read,
+  rather than being shown an empty database.
+
+### Fixed
+- A whole number is shown without a decimal the database never had. An INTEGER column and every
+  MongoDB integer rendered as `1.0` in the result grid, the copy buffer and exported CSV.
+- An INTEGER sorts and charts as a number rather than as text, matching the other surfaces.
+- A SUM across a one-to-many join reports that the total is inflated by the join, instead of
+  presenting the multiplied figure as the answer.
+- On Oracle, a query the model wrote with `LIMIT` was refused and every correction attempt failed the
+  same way. A plain trailing `LIMIT n` is now read as `FETCH FIRST n ROWS ONLY`.
+- A failed schema read is no longer cached as an empty database for five minutes, so fixing the
+  permission and asking again works immediately.
+- A transient rate limit from a provider is reported as a rate limit rather than as a billing
+  problem, which told the user to check a payment method that was fine.
+- A mid-stream error from an OpenAI-compatible provider is surfaced instead of being swallowed and
+  returned as a truncated answer.
+- The follow-up context is updated on the UI thread, and a finished question can no longer clear the
+  busy state of one that is still running.
+
 ## [0.5.2] - 2026-08-14
 
 ### Fixed

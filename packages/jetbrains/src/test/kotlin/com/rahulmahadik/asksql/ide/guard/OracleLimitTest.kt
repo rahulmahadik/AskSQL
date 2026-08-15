@@ -6,22 +6,28 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/** Oracle has no LIMIT; refusing it here lets the repair loop rewrite the query. */
+/** Oracle has no LIMIT: a plain trailing count is translated, and every other form is refused. */
 class OracleLimitTest {
 
     private fun guard(sql: String) = SqlGuard.guard(sql, Dialects.of(EngineKind.ORACLE))
 
     @Test
-    fun `a LIMIT clause is refused`() {
-        for (sql in listOf(
-            "SELECT * FROM emp LIMIT 100",
-            "SELECT ename FROM emp ORDER BY ename LIMIT 10 OFFSET 5",
-            "select * from emp limit 5",
+    fun `a plain trailing LIMIT becomes the clause Oracle has`() {
+        for ((sql, expected) in listOf(
+            "SELECT * FROM emp LIMIT 100" to "FETCH FIRST 100 ROWS ONLY",
+            "select * from emp limit 5" to "FETCH FIRST 5 ROWS ONLY",
         )) {
             val verdict = guard(sql)
-            assertTrue(sql, !verdict.allowed)
-            assertEquals(sql, "limit_unsupported", verdict.ruleId)
+            assertTrue(sql, verdict.allowed)
+            assertTrue("$sql -> ${verdict.sql}", verdict.sql.contains(expected))
         }
+    }
+
+    @Test
+    fun `a LIMIT with an offset is still refused, having no single-clause equivalent`() {
+        val verdict = guard("SELECT ename FROM emp ORDER BY ename LIMIT 10 OFFSET 5")
+        assertTrue(!verdict.allowed)
+        assertEquals("limit_unsupported", verdict.ruleId)
     }
 
     @Test

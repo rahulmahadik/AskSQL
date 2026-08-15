@@ -9,6 +9,32 @@ import org.junit.Test
 class ResultExportTest {
 
     @Test
+    fun `a whole number never shows a decimal the database did not have`() {
+        // INTEGER travels as a double; the grid, the copy buffer and the CSV all read from here.
+        assertEquals("1", displayString(CellValue.Number(1.0)))
+        assertEquals("2026", displayString(CellValue.Number(2026.0)))
+        assertEquals("-7", displayString(CellValue.Number(-7.0)))
+        assertEquals("0", displayString(CellValue.Number(0.0)))
+    }
+
+    @Test
+    fun `a fraction keeps its digits`() {
+        assertEquals("1.5", displayString(CellValue.Number(1.5)))
+        assertEquals("-0.25", displayString(CellValue.Number(-0.25)))
+    }
+
+    @Test
+    fun `a magnitude past Long is written out, not clamped or put in E notation`() {
+        assertEquals("100000000000000000000", displayString(CellValue.Number(1e20)))
+    }
+
+    @Test
+    fun `NaN and infinity keep their names`() {
+        assertEquals("NaN", displayString(CellValue.Number(Double.NaN)))
+        assertEquals("Infinity", displayString(CellValue.Number(Double.POSITIVE_INFINITY)))
+    }
+
+    @Test
     fun `a value containing a comma is quoted`() {
         assertEquals("\"Berlin, DE\"", csvEscape("Berlin, DE"))
     }

@@ -173,6 +173,27 @@ class MongoEnginePipelineTest {
         assertEquals("the model must not be called for a write request", 0, llm.callCount)
     }
 
+    @Test
+    fun `ask sends a relationship question to the prose path, not a pipeline over the documents`() = runTest {
+        val (pipeline, _) = pipeline()
+        val llm = FakeLlmClient(listOf(fence("""[{"${'$'}match": {}}]""")))
+
+        var thrown: AskSqlException? = null
+        try {
+            pipeline.ask(
+                question = "How do orders and customers relate?",
+                descriptor = descriptor(),
+                password = null,
+                llmClient = llm,
+            )
+            fail("expected a relationship question to be routed to the prose path")
+        } catch (e: AskSqlException) {
+            thrown = e
+        }
+        assertEquals(AskSqlErrorCode.LLM_CANNOT_ANSWER, thrown!!.code)
+        assertEquals("the model must not be called for a relationship question", 0, llm.callCount)
+    }
+
     // ---- IMPOSSIBLE sentinel ----
 
     @Test

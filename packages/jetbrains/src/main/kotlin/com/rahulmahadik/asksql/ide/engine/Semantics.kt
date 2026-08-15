@@ -105,6 +105,65 @@ object Semantics {
      * in strict mode, and silently wrong in SQLite - it returns one arbitrary row. Returns the
      * column that needs grouping, or null when the query is fine.
      */
+    /** A SUM over a joined child table, which counts each parent value once per child row. */
+    data class FanOut(val column: String, val parent: String, val child: String)
+
+    private fun sameName(a: String?, b: String?): Boolean = a != null && b != null && a.equals(b, ignoreCase = true)
+
+    /** Every FROM/JOIN item as (table, alias); only plain tables, since a subquery has its own scope. */
+    private fun fromTables(select: PlainSelect): List<Pair<String, String?>> {
+        val out = mutableListOf<Pair<String, String?>>()
+        fun add(item: net.sf.jsqlparser.schema.Table?) {
+            if (item == null) return
+            out.add(item.name.trim('"', '`', '[', ']') to item.alias?.name?.trim('"', '`', '[', ']'))
+        }
+        add(select.fromItem as? net.sf.jsqlparser.schema.Table)
+        select.joins?.forEach { add(it.rightItem as? net.sf.jsqlparser.schema.Table) }
+        return out
+    }
+
+    /** SUM(x.y) in the select list, as (qualifier, column). */
+    private fun selectSums(select: PlainSelect): List<Pair<String?, String>> {
+        val out = mutableListOf<Pair<String?, String>>()
+        for (item in select.selectItems.orEmpty()) {
+            val fn = item.expression as? Function ?: continue
+            if (!fn.name.equals("sum", ignoreCase = true)) continue
+            val col = fn.parameters?.firstOrNull() as? Column ?: continue
+            out.add(col.table?.name?.trim('"', '`', '[', ']') to col.columnName.trim('"', '`', '[', ']'))
+        }
+        return out
+    }
+
+    /**
+     * Mirrors fanOutAggregate in packages/core/src/semantics.ts. Summing a parent's column while
+     * joined to a child that has many rows per parent counts every value once per child row, so the
+     * total comes back too high - read-only, guard-clean, and simply wrong.
+     */
+    fun fanOutAggregate(sql: String, catalog: com.rahulmahadik.asksql.ide.model.SchemaCatalog): FanOut? {
+        val statement = try {
+            CCJSqlParserUtil.parse(sql)
+        } catch (e: Exception) {
+            return null // the guard already parsed it; never double-block here
+        }
+        val select = statement as? Select ?: return null
+        for (plain in plainSelects(select)) {
+            val tables = fromTables(plain)
+            if (tables.size < 2) continue
+            for ((qualifier, column) in selectSums(plain)) {
+                val parent = tables.firstOrNull { (name, alias) -> sameName(alias, qualifier) || sameName(name, qualifier) }?.first
+                    ?: continue
+                for ((candidate, _) in tables) {
+                    if (sameName(candidate, parent)) continue
+                    val child = catalog.tables.firstOrNull { sameName(it.name, candidate) } ?: continue
+                    if (child.foreignKeys.any { sameName(it.refTable, parent) }) {
+                        return FanOut(column, parent, candidate)
+                    }
+                }
+            }
+        }
+        return null
+    }
+
     fun ungroupedAggregate(sql: String): String? {
         val statement = try {
             CCJSqlParserUtil.parse(sql)

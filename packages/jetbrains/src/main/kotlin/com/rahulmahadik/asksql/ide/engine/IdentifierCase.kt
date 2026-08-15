@@ -28,6 +28,8 @@ object IdentifierCase {
     private val DOLLAR_OPEN = Regex("""\$[A-Za-z_]\w*\$|\$\$""")
 
     /** Where a literal or comment ends, or -1 when the position starts neither. */
+    private val E_PREFIX = Regex("""\bE$""", RegexOption.IGNORE_CASE)
+
     private fun skipTo(sql: String, i: Int, doubleQuoteIsLiteral: Boolean, backslashEscapes: Boolean = false): Int {
         val ch = sql[i]
         val next = if (i + 1 < sql.length) sql[i + 1] else ' '
@@ -47,10 +49,13 @@ object IdentifierCase {
             return if (close == -1) sql.length else close + 2
         }
         if (ch == '\'' || (ch == '"' && doubleQuoteIsLiteral)) {
+            // E'a\'b' is one literal on Postgres and DuckDB: the backslash escapes the quote whatever
+            // the dialect's default is. Reading it as two hands the middle to the rewriter as code.
+            val escaped = backslashEscapes || E_PREFIX.containsMatchIn(sql.substring(maxOf(0, i - 2), i))
             var j = i + 1
             while (j < sql.length) {
                 when {
-                    backslashEscapes && sql[j] == '\\' -> j += 2
+                    escaped && sql[j] == '\\' -> j += 2
                     sql[j] == ch -> if (j + 1 < sql.length && sql[j + 1] == ch) j += 2 else return j + 1
                     else -> j++
                 }
@@ -144,6 +149,9 @@ object IdentifierCase {
     private val NAME_POSITION = Regex("""(?:\bfrom|\bjoin|\bupdate|\binto|\.)\s*$""", RegexOption.IGNORE_CASE)
 
     /** The first argument of these is a keyword, not a name: EXTRACT(MONTH FROM d), TRIM(BOTH x FROM s). */
+    /** Directly after one of these, a name before a dot is a schema rather than a table. */
+    private val QUALIFIER_POSITION = Regex("""(?:\bfrom|\bjoin|\bupdate|\binto)\s+$""", RegexOption.IGNORE_CASE)
+
     private val KEYWORD_ARGUMENT =
         Regex("""\b(?:extract|trim|position|overlay|substring)\s*\(\s*$""", RegexOption.IGNORE_CASE)
 
@@ -178,10 +186,12 @@ object IdentifierCase {
             // Rewriting a keyword blindly turns ORDER BY into "order" BY, so one must announce itself.
             val keywordOutOfPlace = token.lowercase() in ANY_RESERVED &&
                 !NAME_POSITION.containsMatchIn(before)
-            // A token before a dot qualifies what follows; quoting a schema name breaks a working query.
-            val qualifierNotATable = tail.trimStart().startsWith(".") && token.lowercase() !in tables
+            // A token before a dot qualifies what follows: after FROM/JOIN it is a SCHEMA, so a
+            // table of the same name must not lend it its casing. Elsewhere it is table.column.
+            val qualifier = tail.trimStart().startsWith(".") &&
+                (QUALIFIER_POSITION.containsMatchIn(before) || token.lowercase() !in tables)
             if (tail.trimStart().startsWith("(") || canonical.isNullOrEmpty() || keywordOutOfPlace ||
-                KEYWORD_ARGUMENT.containsMatchIn(before) || qualifierNotATable || typedLiteral
+                KEYWORD_ARGUMENT.containsMatchIn(before) || qualifier || typedLiteral
             ) {
                 m.value
             } else {
@@ -222,6 +232,63 @@ object IdentifierCase {
      * 'O'Brien' reads as the value 'O', then Brien, then a literal running to the end of the statement.
      * The parser only reports "could not parse", so naming the real cause is what makes the repair land.
      */
+    /** A clause keyword after an alias ends the select item; any other bare word means it was a type. */
+    private val CLAUSE_KEYWORD =
+        Regex("""^\s+(?:from|where|group|order|having|limit|offset|union|join|on|window|fetch|into)\b""", RegexOption.IGNORE_CASE)
+    private val RESERVED_ALIAS = Regex("""\bas\s+([A-Za-z_][\w$]*)\s*(?=,|\)|$|\s)""", RegexOption.IGNORE_CASE)
+
+    /**
+     * Mirrors packages/core/src/identifier-case.ts: a reserved word used as an alias only needs
+     * quoting, and MySQL rejects `... AS rank` outright. Absent here, the same model SQL succeeded on
+     * npm and VS Code and failed in the IDE.
+     */
+    fun quoteReservedAliases(sql: String, quoteChar: Char, engine: String): String? {
+        val reserved = SqlKeywords.reservedWordsFor(engine)
+        var changed = false
+        fun fixCode(code: String): String = RESERVED_ALIAS.replace(code) { m ->
+            val alias = m.groupValues[1]
+            val rest = code.substring(m.range.last + 1)
+            when {
+                alias.lowercase() !in reserved -> m.value
+                // A closing bracket right after means this was a cast's type, not an alias.
+                Regex("""^\s*\)""").containsMatchIn(rest) -> m.value
+                // So does a following bare word: CAST(x AS UNSIGNED INTEGER) is a type, not an alias.
+                Regex("""^\s+[A-Za-z_]""").containsMatchIn(rest) && !CLAUSE_KEYWORD.containsMatchIn(rest) -> m.value
+                else -> {
+                    changed = true
+                    m.value.replace(alias, quoted(alias, quoteChar))
+                }
+            }
+        }
+
+        val doubleQuoteIsLiteral = quoteChar != '"'
+        val backslashEscapes = quoteChar == '`'
+        val out = StringBuilder()
+        var start = 0
+        var i = 0
+        while (i < sql.length) {
+            if (sql[i] == quoteChar) {
+                val closeChar = if (quoteChar == '[') ']' else quoteChar
+                val close = sql.indexOf(closeChar, i + 1)
+                val end = if (close == -1) sql.length else close + 1
+                out.append(fixCode(sql.substring(start, i))).append(sql.substring(i, end))
+                start = end
+                i = end
+                continue
+            }
+            val end = skipTo(sql, i, doubleQuoteIsLiteral, backslashEscapes)
+            if (end >= 0) {
+                out.append(fixCode(sql.substring(start, i))).append(sql.substring(i, end))
+                start = end
+                i = end
+            } else {
+                i++
+            }
+        }
+        out.append(fixCode(sql.substring(start)))
+        return if (changed) out.toString() else null
+    }
+
     fun hasUnterminatedLiteral(sql: String, backslashEscapes: Boolean = false): Boolean {
         var open = false
         var i = 0

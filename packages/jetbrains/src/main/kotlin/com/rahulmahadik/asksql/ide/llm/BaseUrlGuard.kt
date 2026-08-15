@@ -46,8 +46,10 @@ object BaseUrlGuard {
         val mapped = IPV4_MAPPED.find(h)
         if (mapped != null) return isLinkLocal(mapped.groupValues[1])
         if (toIpv4OrNull(h)?.startsWith("169.254.") == true) return true
+        // The whole 169.254/16 is a9fe:XXXX, compressed as `::ffff:a9fe:...` or `::a9fe:...`; core
+        // blocks both and this side matched only the first, so the shorter form reached the network.
         return Regex("""^fe80:""", RegexOption.IGNORE_CASE).containsMatchIn(h) ||
-            Regex("""^::ffff:a9fe:""", RegexOption.IGNORE_CASE).containsMatchIn(h)
+            Regex("""^::(?:ffff:)?a9fe:""", RegexOption.IGNORE_CASE).containsMatchIn(h)
     }
 
     fun assertBaseUrl(url: String, carriesSecret: Boolean) {

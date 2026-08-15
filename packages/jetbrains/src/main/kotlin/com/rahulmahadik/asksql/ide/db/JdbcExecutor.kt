@@ -32,7 +32,8 @@ import java.util.concurrent.ConcurrentHashMap
  */
 object JdbcExecutor {
 
-    private const val HEX_PREVIEW_BYTES = 32
+    /** 16, matching every TypeScript connector: the same cell showed a longer preview here. */
+    private const val HEX_PREVIEW_BYTES = 16
 
     // Serializes per-connection work where the driver needs it: Oracle's arm-then-query pair, and DuckDB, which rejects concurrent statements.
     private val perConnectionLocks = ConcurrentHashMap<Connection, Mutex>()
@@ -177,9 +178,16 @@ object JdbcExecutor {
 
     private fun readCell(rs: java.sql.ResultSet, sqlType: Int, singleBit: Boolean, index: Int): CellValue {
         return when (sqlType) {
-            Types.BIGINT, Types.DECIMAL, Types.NUMERIC, Types.INTEGER, Types.SMALLINT, Types.TINYINT -> {
+            // BIGINT and DECIMAL carry more precision than a double, so they travel as text.
+            Types.BIGINT, Types.DECIMAL, Types.NUMERIC -> {
                 val text = rs.getString(index)
                 if (rs.wasNull() || text == null) CellValue.Null else CellValue.ExactNumeric(text)
+            }
+            // Smaller integers fit a double exactly. TypeScript emits them as JSON numbers, and a
+            // string here made them sort as text and disqualified them as a chart measure.
+            Types.INTEGER, Types.SMALLINT, Types.TINYINT -> {
+                val value = rs.getLong(index)
+                if (rs.wasNull()) CellValue.Null else CellValue.Number(value.toDouble())
             }
             Types.FLOAT, Types.REAL, Types.DOUBLE -> {
                 val value = rs.getDouble(index)

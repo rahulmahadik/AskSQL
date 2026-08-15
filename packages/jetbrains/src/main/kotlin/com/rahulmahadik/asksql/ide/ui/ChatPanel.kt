@@ -248,7 +248,10 @@ class ChatPanel(private val project: Project) : Disposable {
         }
     }
 
-    private fun endBusy() {
+    private fun endBusy(job: Job? = null) {
+        // Only the job holding the slot may clear it. A turn finishing while another owns the slot
+        // reset the button to "Ask" with a query still in flight, and left Cancel pointing at nothing.
+        if (job != null && activeJob !== job) return
         activeJob = null
         onEdt {
             askButton.text = "Ask"
@@ -365,8 +368,11 @@ class ChatPanel(private val project: Project) : Disposable {
                             onEdt { turn.showSchemaAnswer(sa.answer, sa.unknownReferences, sa.isSchemaChange, sa.proposedSql) }
                             // A prose turn is still a turn: without it, "run that query" has nothing to refer to.
                             sa.proposedSql?.let {
-                                contextTurns.addLast(Prompts.ContextTurn(question, it))
-                                while (contextTurns.size > 6) contextTurns.removeFirst()
+                                // contextTurns is EDT state: submitQuestion reads it and Clear empties it.
+                                onEdt {
+                                    contextTurns.addLast(Prompts.ContextTurn(question, it))
+                                    while (contextTurns.size > 6) contextTurns.removeFirst()
+                                }
                             }
                             return@launch
                         }
@@ -441,7 +447,7 @@ class ChatPanel(private val project: Project) : Disposable {
                 val presented = ErrorPresenter.present(e)
                 onEdt { presentAskFailure(turn, presented) }
             } finally {
-                if (!handedOffToExecute) endBusy()
+                if (!handedOffToExecute) endBusy(coroutineContext[Job])
             }
         }
         beginBusy(job)
@@ -491,7 +497,7 @@ class ChatPanel(private val project: Project) : Disposable {
                     onEdt { turn.updateStatus(""); turn.showError(presented.userMessage) }
                 }
             } finally {
-                endBusy()
+                endBusy(coroutineContext[Job])
             }
         }
         beginBusy(job)
@@ -569,7 +575,7 @@ class ChatPanel(private val project: Project) : Disposable {
                     onEdt { turn.updateStatus(""); turn.showError(presented.userMessage) }
                 }
             } finally {
-                endBusy()
+                endBusy(coroutineContext[Job])
             }
         }
         beginBusy(job)

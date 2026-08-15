@@ -56,13 +56,28 @@ object LlmClients {
     /** Same classification as core's `classifyLlmError`: a 400/413 whose body talks about context/token/length is a context-overflow, not a generic outage. */
     fun isContextOverflowMessage(message: String): Boolean = CONTEXT_OVERFLOW_RE.containsMatchIn(message)
 
-    private val BILLING_RE = Regex(
-        """insufficient_quota|credit balance is too low|out of credits|billing|exceeded your current quota|quota exceeded""",
+    /** Wordings that always mean the account itself is out of credit. */
+    private val BILLING_ALWAYS_RE = Regex(
+        """insufficient_quota|credit balance is too low|out of credits|billing""",
         RegexOption.IGNORE_CASE,
     )
 
-    /** An exhausted account, as opposed to a per-minute cap: no amount of waiting clears it. */
-    fun isBillingExhaustionMessage(body: String): Boolean = BILLING_RE.containsMatchIn(body)
+    /** Quota wordings vendors also use for transient window caps; billing only without a retry hint. */
+    private val BILLING_QUOTA_RE = Regex("""exceeded your current quota|quota exceeded""", RegexOption.IGNORE_CASE)
+    private val RETRY_HINT_RE = Regex("""retrydelay|retryinfo|try again in""", RegexOption.IGNORE_CASE)
+
+    /**
+     * An exhausted account, as opposed to a per-minute cap: no amount of waiting clears it. Mirrors
+     * isBillingExhaustion in packages/core/src/llm.ts - without the retry-hint exclusion, Gemini's
+     * per-minute 429 ("exceeded your current quota" plus retryDelay) was reported as a dead account.
+     */
+    fun isBillingExhaustionMessage(body: String): Boolean {
+        if (BILLING_ALWAYS_RE.containsMatchIn(body)) return true
+        if (!BILLING_QUOTA_RE.containsMatchIn(body)) return false
+        // A granted limit of zero means no allocation at all - waiting never helps.
+        if (Regex("""limit:\s*0\b""", RegexOption.IGNORE_CASE).containsMatchIn(body)) return true
+        return !RETRY_HINT_RE.containsMatchIn(body)
+    }
 
     /** A shared [HttpClient] wired to the platform's proxy selector, so provider calls honor the IDE's HTTP/SOCKS proxy. */
     val sharedHttpClient: HttpClient by lazy {

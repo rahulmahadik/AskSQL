@@ -352,12 +352,46 @@ class SqlGuardTest {
         assertFalse(guard("SELECT dbms_session.set_role('x') FROM dual", Dialects.ORACLE).allowed)
     }
 
+    @Test fun `translates a plain trailing LIMIT into the clause oracle has`() {
+        // A small model writes LIMIT on Oracle however the prompt is worded, and the repair loop
+        // cannot talk it out of it. Mirrors packages/core/src/guard.ts.
+        for ((sql, expected) in listOf(
+            "SELECT * FROM emp LIMIT 100" to "FETCH FIRST 100 ROWS ONLY",
+            "select * from emp limit 5" to "FETCH FIRST 5 ROWS ONLY",
+            "SELECT ename FROM emp ORDER BY ename LIMIT 10" to "FETCH FIRST 10 ROWS ONLY",
+        )) {
+            val v = guard(sql, Dialects.ORACLE)
+            assertTrue(sql, v.allowed)
+            assertTrue("$sql -> ${v.sql}", v.sql.contains(expected))
+            assertFalse("$sql -> ${v.sql}", v.sql.lowercase().contains("limit"))
+        }
+    }
+
+    @Test fun `still refuses a LIMIT with no single-clause equivalent on oracle`() {
+        for (sql in listOf(
+            "SELECT ename FROM emp ORDER BY ename LIMIT 10 OFFSET 5",
+            "SELECT * FROM emp FETCH FIRST 5 ROWS ONLY LIMIT 3",
+        )) {
+            val v = guard(sql, Dialects.ORACLE)
+            assertFalse(sql, v.allowed)
+        }
+    }
+
+    @Test fun `lowers a translated LIMIT above the row cap`() {
+        val v = guard("SELECT * FROM emp LIMIT 99999", Dialects.ORACLE)
+        assertTrue(v.allowed)
+        assertFalse(v.sql.contains("99999"))
+        assertTrue(v.loweredLimit)
+    }
+
     @Test fun `blocks nextval sequence advancement on oracle`() {
         assertFalse(guard("SELECT my_seq.NEXTVAL FROM dual", Dialects.ORACLE).allowed)
     }
 
-    @Test fun `blocks currval sequence read on oracle`() {
-        assertFalse(guard("SELECT my_seq.CURRVAL FROM dual", Dialects.ORACLE).allowed)
+    @Test fun `allows currval, which reports the current value without advancing it`() {
+        // CURRVAL reports the session's current value; only NEXTVAL moves the sequence.
+        assertTrue(guard("SELECT my_seq.CURRVAL FROM dual", Dialects.ORACLE).allowed)
+        assertTrue(guard("SELECT nextval FROM zzcol", Dialects.ORACLE).allowed)
     }
 
     @Test fun `nextval is only special-cased on oracle, not other engines`() {

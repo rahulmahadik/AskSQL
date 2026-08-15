@@ -81,11 +81,7 @@ object Charts {
         is CellValue.ExactNumeric -> cell.value
         is CellValue.Boolean -> cell.value.toString()
         // A whole number reads as "2026", not "2026.0"; a fraction keeps its digits.
-        is CellValue.Number -> if (cell.value == Math.floor(cell.value) && !cell.value.isInfinite()) {
-            cell.value.toLong().toString()
-        } else {
-            cell.value.toString()
-        }
+        is CellValue.Number -> numberText(cell.value)
         is CellValue.Binary -> "⟨binary⟩"
     }
 }

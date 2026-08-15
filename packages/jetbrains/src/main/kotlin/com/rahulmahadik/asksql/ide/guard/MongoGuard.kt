@@ -32,12 +32,16 @@ object MongoGuard {
             // The BSON extended-JSON parser only parses a single top-level object, not a bare array, so the array is wrapped in one.
             Document.parse("{\"p\": $trimmed}").getList("p", Document::class.java)
         } catch (e: JsonParseException) {
-            return blocked(pipelineJson, "parse_failed", "The pipeline could not be parsed as a JSON array of stage documents.")
+            return blocked(pipelineJson, "parse_failed", "The pipeline is not valid JSON. Shell constructors are the usual cause: write " +
+                    "{\"\$date\": \"2024-01-01T00:00:00Z\"} rather than new Date(...) or ISODate(...), " +
+                    "{\"\$oid\": \"...\"} rather than ObjectId(...), and {\"\$regex\": \"^P\"} rather than a /^P/ literal.")
         } catch (e: StackOverflowError) {
             // Pathologically deep nesting overflows the parser's own stack before walkPipeline's depth check ever runs.
             return blocked(pipelineJson, "too_deep", "The pipeline is nested too deeply to verify safely.")
         } catch (e: Exception) {
-            return blocked(pipelineJson, "parse_failed", "The pipeline could not be parsed as a JSON array of stage documents.")
+            return blocked(pipelineJson, "parse_failed", "The pipeline is not valid JSON. Shell constructors are the usual cause: write " +
+                    "{\"\$date\": \"2024-01-01T00:00:00Z\"} rather than new Date(...) or ISODate(...), " +
+                    "{\"\$oid\": \"...\"} rather than ObjectId(...), and {\"\$regex\": \"^P\"} rather than a /^P/ literal.")
         }
 
         val collections = mutableListOf<String>()
@@ -84,7 +88,13 @@ object MongoGuard {
 
             walkForDeniedOperators(stage, policy, depth + 1)?.let { return it }
             if (stageName == "\$group" && !bounded && hasArrayAccumulator(stage["\$group"])) {
-                return Violation("unbounded_accumulator", "A \$push/\$addToSet collects an unbounded array; add a \$limit before the \$group.")
+                return Violation(
+                    "unbounded_accumulator",
+                    "A \$push/\$addToSet collects an unbounded array, and one document cannot exceed 16MB. " +
+                        "To count distinct values of a field, write exactly " +
+                        "[{\"\$group\": {\"_id\": \"\$field\"}}, {\"\$count\": \"n\"}] instead of \$addToSet with \$size. " +
+                        "If the array is genuinely needed, put a \$limit before the \$group.",
+                )
             }
             if (boundsRowCount(stageName, stage[stageName])) bounded = true
             collectCollectionRefs(stageName, stage[stageName], collections)

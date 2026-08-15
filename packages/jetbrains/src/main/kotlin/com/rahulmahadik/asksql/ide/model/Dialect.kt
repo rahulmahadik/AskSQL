@@ -52,6 +52,7 @@ object Dialects {
         promptNotes = listOf(
             "Quote mixed-case or reserved identifiers with double quotes.",
             "Use ILIKE for case-insensitive text matching.",
+            "Combine values into one string with string_agg(col, ', ').",
             "Use date_trunc / interval arithmetic for date math (e.g. now - interval '30 days').",
         ),
     )
@@ -64,6 +65,7 @@ object Dialects {
         promptNotes = listOf(
             "Quote identifiers with backticks when needed.",
             "Use DATE_SUB / DATE_ADD / DATE_FORMAT for date math.",
+            "Combine values into one string with GROUP_CONCAT(col SEPARATOR ', ').",
         ),
     )
 
@@ -75,6 +77,7 @@ object Dialects {
         promptNotes = listOf(
             "Use date/datetime/strftime for date math (e.g. date('now','-30 days')).",
             "There are no schemas; refer to tables by bare name.",
+            "Combine values into one string with group_concat(col, ', ').",
         ),
     )
 
@@ -85,6 +88,7 @@ object Dialects {
         limitStyle = LimitStyle.LIMIT,
         promptNotes = listOf(
             "DuckDB follows PostgreSQL syntax for queries.",
+            "Combine values into one string with string_agg(col, ', '); SEPARATOR is MySQL syntax and is rejected here.",
             "Uploaded files are already registered as tables - query them by table name, never by file path.",
         ),
     )
@@ -99,6 +103,7 @@ object Dialects {
             "Use FETCH FIRST n ROWS ONLY for row limits, never LIMIT.",
             "Use TO_DATE / TO_CHAR / SYSDATE and interval arithmetic for date math.",
             "Unquoted identifiers are case-insensitive and stored upper-case; double-quote to preserve case.",
+            "The safety validator cannot read LISTAGG ... WITHIN GROUP, so return the rows themselves rather than combining them into one string.",
             "Select a literal value from the DUAL table (e.g. SELECT 1 FROM DUAL), not bare SELECT 1.",
             "There is no boolean type; comparisons return no directly selectable boolean.",
         ),

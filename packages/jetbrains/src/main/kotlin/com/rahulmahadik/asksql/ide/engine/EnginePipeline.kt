@@ -38,6 +38,12 @@ class EnginePipeline(
     companion object {
         private const val MAX_REPAIRS = 2
         private val CATALOG_TTL = 300.seconds
+
+        /** At most one staleness-driven re-read per connection in this window. */
+        private const val STALE_REFRESH_COOLDOWN_MS = 30_000L
+
+        /** A partially-failed introspection (warnings present) is cached only briefly. */
+        private const val WARNED_CATALOG_TTL_MS = 30_000L
         private const val DEFAULT_QUERY_TIMEOUT_MS = 30_000L
 
         /** "SELECT 'canned reply' AS x" with no FROM - a model faking conversation as data. */
@@ -99,6 +105,19 @@ class EnginePipeline(
             Regex("""\b(?:schemas?|databases?|db|data ?model)\b""", RegexOption.IGNORE_CASE)
 
         /** True when the question asks for a description of the database as a whole. */
+        /**
+         * "How do X and Y relate?" asks about the link itself, which the schema already states.
+         * Anchored at the start so filtering by a relationship stays a data question, and first
+         * person is excluded: "how do I relate this to revenue" is the reader relating something.
+         */
+        private val RELATIONSHIP_QUESTION_RE = Regex(
+            """^\s*(?:(?:so|and|ok|okay)\s+)?(?:how\s+(?:do|does|are|is)\b(?!\s+i\b)[^.?!]{0,60}\b(?:relate[sd]?|connect(?:ed|s)?|link(?:ed|s)?|associated|tied?\s+together|map\s+to)\b|what(?:'s|\u2019s|\s+is|\s+are)?\s+the\s+(?:relationships?|link|connection|association)\s+between\b(?![^.?!]*\d))""",
+            RegexOption.IGNORE_CASE,
+        )
+
+        internal fun isRelationshipQuestion(question: String): Boolean =
+            RELATIONSHIP_QUESTION_RE.containsMatchIn(question)
+
         internal fun isDatabaseOverviewQuestion(question: String): Boolean {
             if (STRUCTURE_OF_TABLE_RE.containsMatchIn(question) && !NAMES_THE_DATABASE_RE.containsMatchIn(question)) return false
             return OVERVIEW_INTENT_RE.containsMatchIn(question) && OVERVIEW_OBJECT_RE.containsMatchIn(question)
@@ -109,7 +128,7 @@ class EnginePipeline(
          * The write verb has to come AFTER the noun: "write a query that adds up revenue" is a read.
          */
         private val WRITE_REQUEST_RE = Regex(
-            """^\s*(?:(?:please|now|ok|okay|so)\s+|(?:can|could|would|will)\s+(?:you|we)\s+(?:please\s+)?|i\s+(?:want|need)\s+(?:you\s+)?to\s+|go ahead and\s+|let'?s\s+)*(?:(?:delete|truncate|erase|purge|wipe|nuke|remove(?!\s+duplicates?\b))\b|(?:drop(?!\s+(?:rows?|records?|duplicates?|nulls?)\b)|insert|update|alter|rename|clear|empty|flush)\b[^.?!]{0,60}\b(?:table|column|row|rows|record|records|from|into|set|every|all|the|this|my|our)\b)|\b(?:write|create|give|show|generate|produce|draft|compose|need|want|how (?:do|can|would) i)\b[^.?!]{0,60}\b(?:statement|query|sql|ddl|command|script|migration)\b[^.?!]{0,60}\b(?:insert|inserts|inserting|update|updates|updating|delete|deletes|deleting|drop|drops(?!\s+(?:rows?|records?|duplicates?|nulls?)\b)|dropping|truncate|truncates|truncating|alter|alters|altering|remove|removes(?!\s+duplicates?\b)|removing|rename|renames|renaming|wipes?|wiping|purges?|purging|erases?|erasing|clears?|clearing|empties|emptying|flushes?|flushing|add\b[^.?!]{0,24}\b(?:column|index|constraint|table|field|foreign key))\b|\b(?:write|create|give|show|generate|produce|draft|compose|need|want)\b[^.?!]{0,30}\b(?:insert|update|delete|drop|truncate|alter|rename|merge|upsert)\s+(?:statement|query|sql|ddl|command|script|migration)\b|\b(?:write|create|give|show|generate|produce|draft|compose|need|want)\b[^.?!]{0,20}\b(?:insert|update|delete|drop|truncate|alter|merge|upsert)\b\s+(?:that|to|which|for|removing|adding|setting)\b|\b(?:statement|query|sql|ddl|command|script|migration)\b[^.?!]{0,40}\b(?:that|to|which)\b[^.?!]{0,40}\b(?:insert|inserts|update|updates|delete|deletes|drop|drops(?!\s+(?:rows?|records?|duplicates?|nulls?)\b)|truncate|truncates|alter|alters|remove|removes(?!\s+duplicates?\b)|rename|renames|wipes?|purges?|erases?|clears?|empties|flushes?|add\b[^.?!]{0,24}\b(?:column|index|constraint|table|field|foreign key))\b""",
+            """^\s*(?:(?:please|now|ok|okay|so)\s+|(?:can|could|would|will)\s+(?:you|we)\s+|i\s+(?:want|need)\s+(?:you\s+)?to\s+|go ahead and\s+|let'?s\s+)*(?:(?:delete|truncate|erase|purge|wipe|nuke|remove(?!\s+duplicates?\b))\b|(?:drop(?!\s+(?:rows?|records?|duplicates?|nulls?)\b)|insert|update|alter|rename|clear|empty|flush)\b[^.?!]{0,60}\b(?:table|column|row|rows|record|records|from|into|set|every|all|the|this|my|our|to|by|with)\b|(?:add|create)\b[^.?!]{0,60}\b(?:column|table|index|constraint|view|field|foreign key|primary key)\b(?!\s+(?:with|showing|for|of|that|containing|listing|per|by|which)\b))|\b(?:write|create|give|show|generate|produce|draft|compose|need|want|how (?:do|can|would) i)\b[^.?!]{0,60}\b(?:statement|query|sql|ddl|command|script|migration)\b[^.?!]{0,60}\b(?:insert|inserts|inserting|update|updates|updating|delete|deletes|deleting|drop|drops(?!\s+(?:rows?|records?|duplicates?|nulls?)\b)|dropping|truncate|truncates|truncating|alter|alters|altering|remove|removes(?!\s+duplicates?\b)|removing|rename|renames|renaming|wipes?|wiping|purges?|purging|erases?|erasing|clears?|clearing|empties|emptying|flushes?|flushing|add\b[^.?!]{0,24}\b(?:column|index|constraint|table|field|foreign key))\b|\b(?:write|create|give|show|generate|produce|draft|compose|need|want)\b[^.?!]{0,30}\b(?:insert|update|delete|drop|truncate|alter|rename|merge|upsert)\s+(?:statement|query|sql|ddl|command|script|migration)\b|\b(?:write|create|give|show|generate|produce|draft|compose|need|want)\b[^.?!]{0,20}\b(?:insert|update|delete|drop|truncate|alter|merge|upsert)\b\s+(?:that|to|which|for|removing|adding|setting)\b|\b(?:statement|query|sql|ddl|command|script|migration)\b[^.?!]{0,40}\b(?:that|to|which)\b[^.?!]{0,40}\b(?:insert|inserts|update|updates|delete|deletes|drop|drops(?!\s+(?:rows?|records?|duplicates?|nulls?)\b)|truncate|truncates|alter|alters|remove|removes(?!\s+duplicates?\b)|rename|renames|wipes?|purges?|erases?|clears?|empties|flushes?|add\b[^.?!]{0,24}\b(?:column|index|constraint|table|field|foreign key))\b""",
             RegexOption.IGNORE_CASE,
         )
 
@@ -148,7 +167,7 @@ class EnginePipeline(
 
         /** "run that query", "show me those results": the user means the query they just read, not a new one. */
         private val RERUN_PREVIOUS_RE = Regex(
-            """^\s*(?:(?:please|now|ok|okay|yes)\s+|(?:can|could|would|will)\s+(?:you|we)\s+(?:please\s+)?)*(?:re-?)?(?:run|execute|show(?:\s+me)?|give(?:\s+me)?|display)\b[^.?!]{0,40}\b(?:this|that|the\s+(?:previous|last|above|same|first|second|aggregation|aggregate))\b[^.?!]{0,40}$""",
+            """^\s*(?:(?:please|now|ok|okay|yes)\s+|(?:can|could|would|will)\s+(?:you|we)\s+)*(?:re-?)?(?:run|execute|show(?:\s+me)?|give(?:\s+me)?|display)\b[^.?!]{0,40}\b(?:this|that|the\s+(?:previous|last|above|same|first|second|aggregation|aggregate))\b[^.?!]{0,40}$""",
             RegexOption.IGNORE_CASE,
         )
 
@@ -223,9 +242,28 @@ class EnginePipeline(
         val repairs: Int,
     )
 
-    private data class CachedCatalog(val catalog: SchemaCatalog, val fetchedAtMillis: Long)
+    private data class CachedCatalog(
+        val catalog: SchemaCatalog,
+        val fetchedAtMillis: Long,
+        /** Shorter when the introspection carried warnings, so a degraded read is retried sooner. */
+        val ttlMillis: Long = CATALOG_TTL.inWholeMilliseconds,
+    )
 
     private val catalogCache = ConcurrentHashMap<String, CachedCatalog>()
+
+    /**
+     * A forced re-read skips the TTL, and most business questions name nothing in the catalog, so
+     * doing it per question meant a full introspection on nearly every ask. One per cooldown still
+     * notices a table added mid-session, which is the point of the re-read.
+     */
+    private val staleRefreshAt = ConcurrentHashMap<String, Long>()
+
+    private fun mayRefreshForStaleness(connectionId: String): Boolean {
+        val last = staleRefreshAt[connectionId] ?: 0L
+        if (System.currentTimeMillis() - last < STALE_REFRESH_COOLDOWN_MS) return false
+        staleRefreshAt[connectionId] = System.currentTimeMillis()
+        return true
+    }
     private val catalogLocks = ConcurrentHashMap<String, Mutex>()
     private val catalogGeneration = java.util.concurrent.atomic.AtomicLong(0)
 
@@ -248,7 +286,7 @@ class EnginePipeline(
 
     suspend fun catalog(descriptor: ConnectionDescriptor, password: String?, refresh: Boolean = false): SchemaCatalog {
         val cached = catalogCache[descriptor.id]
-        if (!refresh && cached != null && System.currentTimeMillis() - cached.fetchedAtMillis < CATALOG_TTL.inWholeMilliseconds) {
+        if (!refresh && cached != null && System.currentTimeMillis() - cached.fetchedAtMillis < cached.ttlMillis) {
             return cached.catalog
         }
         val lock = catalogLocks.getOrPut(descriptor.id) { Mutex() }
@@ -264,8 +302,23 @@ class EnginePipeline(
                     Introspectors.forEngine(descriptor.engine).introspect(connection)
                 }
             }
+            // An empty catalog WITH warnings is a permission or network failure, not an empty
+            // database. Core throws a retryable error; caching it here presented the database as
+            // empty for the next five minutes and every question answered "no tables".
+            if (fresh.tables.isEmpty() && fresh.warnings.isNotEmpty()) {
+                throw AskSqlException(
+                    AskSqlErrorCode.DB_QUERY_ERROR,
+                    userMessage = "Could not read this database's schema. Check the connection's permissions, then try again.",
+                    detail = "introspection returned no tables with warnings: ${fresh.warnings.joinToString("; ").take(500)}",
+                    retryable = true,
+                )
+            }
             // Skip the write if an edit invalidated the cache mid-fetch.
-            if (catalogGeneration.get() == gen) catalogCache[descriptor.id] = CachedCatalog(fresh, System.currentTimeMillis())
+            // A partially-failed introspection is cached only briefly, as in core.
+            val cacheFor = if (fresh.warnings.isNotEmpty()) WARNED_CATALOG_TTL_MS else CATALOG_TTL.inWholeMilliseconds
+            if (catalogGeneration.get() == gen) {
+                catalogCache[descriptor.id] = CachedCatalog(fresh, System.currentTimeMillis(), cacheFor)
+            }
             fresh
         }
     }
@@ -322,7 +375,7 @@ class EnginePipeline(
                 retryable = false,
             )
         }
-        if (isSchemaAdviceQuestion(q) || isDatabaseOverviewQuestion(q)) {
+        if (isSchemaAdviceQuestion(q) || isDatabaseOverviewQuestion(q) || isRelationshipQuestion(q)) {
             throw AskSqlException(
                 AskSqlErrorCode.LLM_CANNOT_ANSWER,
                 userMessage = "That asks about the schema itself rather than the data in it, so there is no query to run.",
@@ -334,7 +387,30 @@ class EnginePipeline(
         val dialect = Dialects.of(descriptor.engine)
 
         onEvent?.onEvent(EngineEvent.StageEvent(Stage.CATALOG))
-        val fullCatalog = catalog(descriptor, password)
+        var fullCatalog = catalog(descriptor, password)
+        // A question naming nothing we hold usually means the catalog is stale, not that the question
+        // is wrong. Gated on age because a refresh skips the TTL, and most business questions name
+        // nothing either.
+        if (!SchemaFuzzyMatch.namesSomethingInCatalog(q, fullCatalog) && mayRefreshForStaleness(descriptor.id)) {
+            fullCatalog = try { catalog(descriptor, password, refresh = true) } catch (e: Exception) { fullCatalog }
+        }
+
+        // A handful of structure questions have an exact answer, and a model reliably guesses the
+        // system-catalog columns wrong. Writing those here skips the model rather than repairing it.
+        CatalogAnswers.catalogQueryFor(q, fullCatalog, dialect)?.let { written ->
+            val verdict = SqlGuard.guard(written.sql, dialect, policy)
+            if (verdict.allowed) {
+                onEvent?.onEvent(EngineEvent.StageEvent(Stage.DONE))
+                return AskResult(
+                    sql = verdict.sql,
+                    explanation = written.explanation,
+                    guard = verdict,
+                    connectionId = descriptor.id,
+                    repairs = 0,
+                )
+            }
+        }
+
         // Names the engine would not read back as themselves: folded case, reserved words, symbols.
         // A name spelled two ways across the catalog is skipped: rewriting "status" to "Status" would
         // ask one table for another table's column.
@@ -467,11 +543,26 @@ class EnginePipeline(
             onEvent?.onEvent(EngineEvent.StageEvent(Stage.GUARD))
             // Quote first: a folding engine resolves a bare name elsewhere, and the parser cannot read a
             // bare table named like a keyword. Falls back untouched if quoting makes it unparseable.
-            val normalised =
+            val quotedNames =
                 IdentifierCase.quoteCatalogIdentifiers(extraction.sql, quotableNames, dialect.quoteChar, quotableTables)
+            // A reserved word used as an alias only needs quoting: MySQL rejects `... AS rank` outright.
+            val withAliases =
+                IdentifierCase.quoteReservedAliases(quotedNames ?: extraction.sql, dialect.quoteChar, descriptor.engine.name.lowercase())
+            val normalised = withAliases ?: quotedNames
             val normalisedVerdict = normalised?.let { SqlGuard.guard(it, dialect, policy) }
-            val verdict = if (normalisedVerdict?.allowed == true) normalisedVerdict
-            else SqlGuard.guard(extraction.sql, dialect, policy)
+            // Falling back to the model's SQL would drop the identifier quoting too, and on a
+            // folding engine that quoting is what makes a mixed-case name resolve at all.
+            val namesOnlyVerdict =
+                if (normalisedVerdict?.allowed != true && quotedNames != null && quotedNames != normalised) {
+                    SqlGuard.guard(quotedNames, dialect, policy)
+                } else {
+                    null
+                }
+            val verdict = when {
+                normalisedVerdict?.allowed == true -> normalisedVerdict
+                namesOnlyVerdict?.allowed == true -> namesOnlyVerdict
+                else -> SqlGuard.guard(extraction.sql, dialect, policy)
+            }
             if (!verdict.allowed) {
                 if (attempt >= MAX_REPAIRS) {
                     history.add(auditEntry(descriptor.id, q, extraction.sql, HistoryStatus.BLOCKED, verdict.ruleId))
@@ -482,12 +573,18 @@ class EnginePipeline(
                     )
                 }
                 // "could not parse" alone leaves the model repeating the same statement; name the real cause.
+                // The validator's parser rejects WITHIN GROUP, for a reason "cannot parse" hides.
+                val orderedSetHint = if (Regex("""\bwithin\s+group\b""", RegexOption.IGNORE_CASE).containsMatchIn(extraction.sql)) {
+                    " The safety validator cannot read WITHIN GROUP here. Answer without it: return the rows themselves rather than concatenating them into one value."
+                } else {
+                    ""
+                }
                 val quoteHint = if (IdentifierCase.hasUnterminatedLiteral(extraction.sql, dialect.quoteChar == '`')) {
                     " A text value contains an apostrophe that is not escaped: write it doubled, as 'O''Brien'."
                 } else ""
                 userPrompt = Prompts.buildRepairUser(
                     question = q, failedSql = extraction.sql,
-                    failure = "The SQL validator rejected it: ${verdict.reason ?: verdict.ruleId ?: "not allowed"}.$quoteHint Produce a single read-only SELECT.",
+                    failure = "The SQL validator rejected it: ${verdict.reason ?: verdict.ruleId ?: "not allowed"}.$quoteHint$orderedSetHint Produce a single read-only SELECT.",
                     schemaText = schemaText, dialect = dialect,
                 )
                 attempt++
@@ -524,6 +621,19 @@ class EnginePipeline(
                 userPrompt = Prompts.buildRepairUser(
                     question = q, failedSql = verdict.sql,
                     failure = "Table \"$unknownTable\" does not exist in the schema.$didYouMean Use only tables from the <schema> block.",
+                    schemaText = schemaText, dialect = dialect, allowImpossible = true,
+                )
+                attempt++
+                continue
+            }
+
+            // Semantic floor: a column two joined tables both own. Every engine rejects it unqualified.
+            val ambiguous = HallucinationChecks.ambiguousColumn(verdict.sql, fullCatalog)
+            if (ambiguous != null && attempt < MAX_REPAIRS) {
+                userPrompt = Prompts.buildRepairUser(
+                    question = q, failedSql = verdict.sql,
+                    failure = "\"$ambiguous\" exists on more than one of the joined tables, so on its own it is " +
+                        "ambiguous. Qualify it with the table or alias it belongs to.",
                     schemaText = schemaText, dialect = dialect,
                 )
                 attempt++
@@ -558,6 +668,23 @@ class EnginePipeline(
                 continue
             }
 
+            // Fan-out floor, mirroring packages/core/src/engine.ts: summing a parent's column across a
+            // one-to-many join counts each value once per child row. Read-only, guard-clean, and the
+            // total is simply too high - the reader has no way to tell.
+            val fanOut = Semantics.fanOutAggregate(verdict.sql, fullCatalog)
+            if (fanOut != null && attempt < MAX_REPAIRS) {
+                userPrompt = Prompts.buildRepairUser(
+                    question = q, failedSql = verdict.sql,
+                    failure = "The query sums \"${fanOut.parent}.${fanOut.column}\" while joined to \"${fanOut.child}\", which has " +
+                        "many rows per \"${fanOut.parent}\" row, so each value is counted once per \"${fanOut.child}\" row and the " +
+                        "total is too high. Aggregate \"${fanOut.child}\" in a separate subquery or CTE and join the result, or " +
+                        "drop the join if the question does not need it.",
+                    schemaText = schemaText, dialect = dialect,
+                )
+                attempt++
+                continue
+            }
+
             val unknownColumn = HallucinationChecks.firstUnknownColumn(verdict.sql, fullCatalog)
             if (unknownColumn != null) {
                 if (attempt >= MAX_REPAIRS) {
@@ -575,17 +702,30 @@ class EnginePipeline(
                 userPrompt = Prompts.buildRepairUser(
                     question = q, failedSql = verdict.sql,
                     failure = "Column \"${unknownColumn.column}\" does not exist on table \"${unknownColumn.table}\". Its real columns are: ${unknownColumn.available.joinToString(", ")}.",
-                    schemaText = schemaText, dialect = dialect,
+                    schemaText = schemaText, dialect = dialect, allowImpossible = true,
                 )
                 attempt++
                 continue
             }
 
+            // Non-blocking: the query still runs. A pronoun with no antecedent means the model chose a
+            // subject on its own, which is worth saying rather than refusing over.
+            val dangling = Scope.danglingReference(q, context.any { it.sql.isNotBlank() })
+            val notes = if (dangling != null) {
+                listOf(
+                    "\"$dangling\" does not refer to anything earlier in this conversation, so the query below " +
+                        "picked a subject on its own. Name who you mean and ask again if that is wrong.",
+                )
+            } else {
+                emptyList()
+            }
+            for (note in notes) onEvent?.onEvent(EngineEvent.Warning(note))
+
             onEvent?.onEvent(EngineEvent.StageEvent(Stage.DONE))
             return AskResult(
                 sql = verdict.sql,
                 explanation = extraction.explanation,
-                guard = verdict,
+                guard = if (notes.isEmpty()) verdict else verdict.copy(warnings = verdict.warnings + notes),
                 connectionId = descriptor.id,
                 repairs = attempt,
             )
@@ -622,6 +762,9 @@ class EnginePipeline(
             }
             history.add(auditEntry(descriptor.id, question, verdict.sql, HistoryStatus.OK, durationMs = System.currentTimeMillis() - started, rowCount = result.rowCount))
             val warnings = result.warnings.toMutableList()
+            // Notes attached at ask time (a dangling pronoun) ride the verdict. The Warning event
+            // goes to a transient status label the next update overwrites, so carry them here too.
+            warnings += verdict.warnings
             if (verdict.autoLimited) warnings += "A row limit of ${policy.maxRows} was added automatically - export to get everything."
             if (verdict.loweredLimit) warnings += "The row limit was lowered to ${policy.maxRows}."
             // The injected LIMIT equals maxRows, so an auto-limited result that fills the cap counts as truncated.
@@ -669,7 +812,8 @@ class EnginePipeline(
             val schemaText = CatalogPruner.pruneCatalog(catalog, q).schemaText
             val repairPrompt = Prompts.buildRepairUser(
                 question = q, failedSql = bad,
-                failure = "The database rejected it: ${errorDetail ?: "the query failed to run"}",
+                // A driver error can quote the offending row; the reader never asked to send it.
+                failure = "The database rejected it: ${errorDetail?.let { ErrorRedaction.redactValuesInError(it) } ?: "the query failed to run"}",
                 schemaText = schemaText, dialect = dialect,
             )
             val repaired = com.rahulmahadik.asksql.ide.llm.LlmClients.withChatTimeout {
@@ -747,6 +891,9 @@ class EnginePipeline(
         }
         // Advice counts too: names that do not exist yet are proposals, not hallucinations.
         val isSchemaChange = Grounding.SCHEMA_CHANGE_RE.containsMatchIn(q) || isSchemaProposalQuestion(q)
+        // A write request is a proposal too, and AskSQL has promised to write the statement out. The
+        // model is neither offered the refusal nor left unable to state the statement.
+        val proposesWrite = isWriteRequest(q)
         // A whole-schema question gets a compact list of ALL tables plus the full join graph instead of term pruning.
         val schemaText: String
         val relationships: List<String>
@@ -774,20 +921,21 @@ class EnginePipeline(
             contextTables = pruned.catalog.tables
         }
         val tables = contextTables.map { if (it.schema != null) "${it.schema}.${it.name}" else it.name }
-        val system = Prompts.buildSchemaAnswerSystem(dialect, isSchemaChange)
+        val system = Prompts.buildSchemaAnswerSystem(dialect, isSchemaChange || proposesWrite, allowOutOfScope = !proposesWrite)
         var answer = com.rahulmahadik.asksql.ide.llm.LlmClients.withChatTimeout {
             llmClient.chat(system, Prompts.buildSchemaAnswerUser(q, schemaText, relationships, context))
         }.text.trim()
         // Naming a real catalog object, or carrying prior turns, makes the question one about this database.
         val questionIsAboutThisDatabase =
-            Scope.looksDatabaseRelated(q) || isSchemaChange || Grounding.mentionsCatalogName(q, fullCatalog) || context.any { it.sql.isNotBlank() }
+            Scope.looksDatabaseRelated(q) || isSchemaChange || proposesWrite ||
+                Grounding.mentionsCatalogName(q, fullCatalog) || context.any { it.sql.isNotBlank() }
         if (Scope.isOffTopic(answer) || (Scope.isDegenerateAnswer(answer) && !PROPOSED_WRITE_RE.containsMatchIn(answer))) {
             // Challenge the refusal once when the question is plainly about data; accept it otherwise.
             if (!questionIsAboutThisDatabase) return Scope.offTopicAnswer(dialect.promptLabel)
             // No sentinel in this system prompt: the question is already known to be about data.
             answer = com.rahulmahadik.asksql.ide.llm.LlmClients.withChatTimeout {
                 llmClient.chat(
-                    Prompts.buildSchemaAnswerSystem(dialect, isSchemaChange, allowOutOfScope = false),
+                    Prompts.buildSchemaAnswerSystem(dialect, isSchemaChange || proposesWrite, allowOutOfScope = false),
                     Prompts.buildSchemaAnswerScopeRepairUser(q, schemaText, dialect.promptLabel, relationships),
                 )
             }.text.trim()
@@ -818,7 +966,7 @@ class EnginePipeline(
             answer = com.rahulmahadik.asksql.ide.llm.LlmClients.withChatTimeout {
                 // No sentinel: this pass only fixes names.
                 llmClient.chat(
-                    Prompts.buildSchemaAnswerSystem(dialect, isSchemaChange, allowOutOfScope = false),
+                    Prompts.buildSchemaAnswerSystem(dialect, isSchemaChange || proposesWrite, allowOutOfScope = false),
                     Prompts.buildSchemaAnswerRepairUser(q, schemaText, unknown, relationships),
                 )
             }.text.trim()

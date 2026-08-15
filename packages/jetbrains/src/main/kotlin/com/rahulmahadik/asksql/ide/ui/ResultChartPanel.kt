@@ -30,13 +30,19 @@ class ResultChartPanel(private val spec: ChartSpec) {
 
     val component: JPanel = ChartCanvas()
 
+    /** Swing reads a tooltip as HTML when it opens with <html>; a leading space stops that. */
+    private fun plainTooltip(text: String): String =
+        if (Regex("""^\s*<\s*html""", RegexOption.IGNORE_CASE).containsMatchIn(text)) " $text" else text
+
     private inner class ChartCanvas : JPanel() {
 
         init {
             isOpaque = false
             preferredSize = Dimension(JBUI.scale(420), JBUI.scale(240))
             minimumSize = Dimension(JBUI.scale(240), JBUI.scale(180))
-            toolTipText = "${spec.labelColumn} vs ${spec.series.joinToString(", ") { it.name }}"
+            // Column names come from the database, and a tooltip beginning with <html> is rendered
+            // as markup - which is how a name like "<html><img src=…>" fetches a URL on hover.
+            toolTipText = plainTooltip("${spec.labelColumn} vs ${spec.series.joinToString(", ") { it.name }}")
         }
 
         override fun paintComponent(g: Graphics) {
