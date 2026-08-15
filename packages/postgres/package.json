@@ -1,6 +1,6 @@
 {
   "name": "@asksql/postgres",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "PostgreSQL connector for AskSQL. Full schema introspection (tables, views, indexes, triggers, functions, enums, FKs) + read-only session enforcement.",
   "type": "module",
   "main": "./dist/index.js",
@@ -23,7 +23,7 @@
     "pg": ">=8.11"
   },
   "devDependencies": {
-    "@asksql/core": "workspace:>=0.6.1",
+    "@asksql/core": "workspace:>=0.7.0",
     "@types/pg": "^8.20.0",
     "pg": "^8.22.0"
   },

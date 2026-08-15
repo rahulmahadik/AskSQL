@@ -1,6 +1,6 @@
 {
   "name": "@asksql/duckdb",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "DuckDB connector for AskSQL. Local analytical processing of CSV/JSON/Parquet files; the zero-backend file-analytics path.",
   "type": "module",
   "main": "./dist/index.js",
@@ -36,7 +36,7 @@
     }
   },
   "devDependencies": {
-    "@asksql/core": "workspace:>=0.6.1",
+    "@asksql/core": "workspace:>=0.7.0",
     "@duckdb/duckdb-wasm": "^1.32.0",
     "@duckdb/node-api": "1.5.4-r.1"
   },

@@ -1,5 +1,22 @@
 # @asksql/react
 
+## 0.3.2
+
+### Patch Changes
+
+- Cancelling a question on the in-process transport raised a red error alert instead of the neutral
+  stopped state the HTTP transport gives, so stopping a query looked like a failure.
+
+  The result table rendered every row it was given, so a large result froze the page while it laid out
+  the DOM. It now renders the first 1000 rows and says how many there are, with export unchanged and
+  still complete.
+
+  Unmounting mid-question left the stream and its flush timer running. The hook now aborts the request
+  and clears its refs on unmount.
+
+  The empty state promised the SQL is shown before anything runs, which is not true when approval is
+  turned off. It now says the SQL is shown for every answer.
+
 ## 0.3.1
 
 ### Patch Changes

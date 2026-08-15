@@ -1,5 +1,19 @@
 # @asksql/server
 
+## 0.6.1
+
+### Patch Changes
+
+- Check access before existence. A caller scoped to one connection got 400 for an id that does not
+  exist and 403 for one that does, which told an outsider which ids are real. Both now answer 403.
+
+  A MongoDB connection created at runtime could never be deleted, so it leaked for the process
+  lifetime, and `/feedback` routed it to the SQL engine and returned 500. Feedback on a MongoDB
+  connection now answers `{ ok: true, stored: false }`, since there is no few-shot store behind it.
+
+  A connection string whose host is a bracketed IPv6 literal was parsed as though the brackets were
+  part of the host, so the allowlist check ran against a name no allowlist would match.
+
 ## 0.6.0
 
 ### Minor Changes
