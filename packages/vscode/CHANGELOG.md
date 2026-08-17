@@ -4,6 +4,24 @@ All notable changes to the AskSQL VS Code extension are documented here. The for
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.3] - 2026-08-18
+
+Carries the engine fixes for SQLite databases written by an Android app, which the extension bundles.
+Nothing in the extension's own code changed.
+
+### Fixed
+- A question about dates against a SQLite database answered confidently and wrongly. Where a timestamp
+  is stored as a number - which is how an Android app's database stores one - comparing it with a date
+  matched nothing and answered zero, while comparing it with the wrong units matched every row and
+  answered with the whole table. Neither raised an error. The schema now records which units such a
+  column is in, and a check catches the comparison before it runs.
+- Full-text search over a SQLite database ran at all: queries using `MATCH` had been refused as
+  unparseable.
+- `SELECT rowid` was refused as an invented column.
+- A SQLite database copied without its `-wal` file reported no tables at all, and every question
+  answered "no such table". It now says which file is missing.
+- A table with a binary column could lose an entire result set on some drivers.
+
 ## [0.7.2] - 2026-08-15
 
 ### Added
