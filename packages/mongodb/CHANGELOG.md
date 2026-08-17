@@ -1,5 +1,16 @@
 # @asksql/mongodb
 
+## 0.2.1
+
+### Patch Changes
+
+- Republished against the engine fix for a date comparison that answered zero, or the whole table,
+  without raising an error.
+
+  The widget bundles the engine, so a fix reaches its users only when it is published. The others take
+  the engine as a peer dependency and pick it up on install; they move here so that every published
+  package in a release is built against the same engine.
+
 ## 0.2.0
 
 ### Minor Changes
