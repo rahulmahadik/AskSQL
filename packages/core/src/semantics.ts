@@ -262,3 +262,116 @@ function aggregateName(node: Node): string {
         : '';
   return text.toUpperCase();
 }
+
+/** A comparison whose two sides cannot mean the same thing: an integer column against a date. */
+export interface EpochMismatch {
+  /** The column as the catalog spells it. */
+  readonly column: string;
+  readonly dbType: string;
+  /** The date expression it was compared against, rendered for the message. */
+  readonly comparedTo: string;
+}
+
+interface TypedCatalog {
+  readonly tables: readonly {
+    readonly name: string;
+    readonly columns: readonly { readonly name: string; readonly dbType?: string }[];
+  }[];
+}
+
+/**
+ * A column that stores a moment as a number: SQLite has no date type, so Room writes epoch
+ * milliseconds into INTEGER, and a hand-rolled schema may write epoch seconds.
+ */
+const INTEGER_DB_TYPE =
+  /^(?:big\s*int|int|integer|int2|int4|int8|smallint|tinyint|mediumint|unsigned\s+big\s+int|numeric|number)\b/i;
+
+/** SQLite's date builders, plus the standard keywords. All of them produce text or a day number. */
+const DATE_FUNCTION =
+  /^(?:date|datetime|time|strftime|julianday|unixepoch|current_date|current_time|current_timestamp|now|getdate|sysdate)$/i;
+
+/** A literal a person writes for a day or an instant, which is text however it is compared. */
+const DATE_LITERAL = /^\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}(?::\d{2})?)?$/;
+
+function renderDateSide(node: Node): string | null {
+  const type = node['type'];
+  if (type === 'function' || type === 'aggr_func') {
+    const name = aggregateName(node);
+    return DATE_FUNCTION.test(name) ? `${name}(...)` : null;
+  }
+  // CURRENT_DATE and friends arrive as a bare keyword rather than a call.
+  if (type === 'origin' || type === 'keyword') {
+    const value = node['value'];
+    return typeof value === 'string' && DATE_FUNCTION.test(value.replace(/\s+/g, '_')) ? value : null;
+  }
+  if (type === 'single_quote_string' || type === 'string') {
+    const value = node['value'];
+    return typeof value === 'string' && DATE_LITERAL.test(value.trim()) ? `'${value}'` : null;
+  }
+  // date('now','-7 days') nested under a cast, or strftime wrapped in one.
+  if (type === 'cast' && isNode(node['expr'])) return renderDateSide(node['expr'] as Node);
+  return null;
+}
+
+/** The catalog type of a column named anywhere in the query, or null when it is not attributable. */
+function dbTypeOf(column: string, catalog: TypedCatalog): string | null {
+  const matches: string[] = [];
+  for (const table of catalog.tables) {
+    for (const c of table.columns) {
+      if (c.name.toLowerCase() === column.toLowerCase() && typeof c.dbType === 'string') matches.push(c.dbType);
+    }
+  }
+  // Two tables typing the same name differently is not attributable from the name alone.
+  if (matches.length === 0) return null;
+  const first = matches[0]!;
+  return matches.every((m) => m.toLowerCase() === first.toLowerCase()) ? first : null;
+}
+
+/**
+ * A column holding a number compared against a date. Against text nothing matches and zero is reported;
+ * against epoch seconds a milliseconds column matches every row. Neither errors.
+ */
+export function epochUnitMismatch(sql: string, grammar: string, catalog: TypedCatalog): EpochMismatch | null {
+  let ast: unknown;
+  try {
+    ast = parser.parse(withoutFetchTail(sql), { database: grammar }).ast;
+  } catch {
+    return null;
+  }
+
+  let found: EpochMismatch | null = null;
+  const visit = (node: unknown): void => {
+    if (found || !isNode(node)) return;
+    if (Array.isArray(node)) {
+      for (const item of node) visit(item);
+      return;
+    }
+    if (node['type'] === 'binary_expr') {
+      const left = node['left'];
+      const right = node['right'];
+      for (const [maybeColumn, maybeDate] of [
+        [left, right],
+        [right, left],
+      ] as const) {
+        if (!isNode(maybeColumn) || maybeColumn['type'] !== 'column_ref') continue;
+        const column = columnNameOf(maybeColumn);
+        if (!column) continue;
+        const dbType = dbTypeOf(column, catalog);
+        if (!dbType || !INTEGER_DB_TYPE.test(dbType.trim())) continue;
+        // BETWEEN carries its bounds as a list; either bound being a date is the same mistake.
+        const candidates =
+          isNode(maybeDate) && Array.isArray(maybeDate['value']) ? (maybeDate['value'] as unknown[]) : [maybeDate];
+        for (const candidate of candidates) {
+          const rendered = isNode(candidate) ? renderDateSide(candidate as Node) : null;
+          if (rendered) {
+            found = { column, dbType, comparedTo: rendered };
+            return;
+          }
+        }
+      }
+    }
+    for (const value of Object.values(node)) visit(value);
+  };
+  visit(ast);
+  return found;
+}

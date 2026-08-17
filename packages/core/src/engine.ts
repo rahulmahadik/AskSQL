@@ -20,7 +20,7 @@ import { withoutFetchTail } from './strip.js';
 import { AskSqlError } from './errors.js';
 import { extractImpossible, extractSql } from './extract.js';
 import { guardSql, resolveGuardPolicy } from './guard.js';
-import { fanOutAggregate, nestedAggregate, ungroupedAggregate } from './semantics.js';
+import { epochUnitMismatch, fanOutAggregate, nestedAggregate, ungroupedAggregate } from './semantics.js';
 import { historyId, MemoryHistoryStore } from './history.js';
 import { callModel } from './llm.js';
 import {
@@ -927,6 +927,32 @@ export function createAskSql(config: AskSqlConfig): AskSqlEngine {
         continue;
       }
 
+      // Semantic floor: a column that stores a moment as a number, compared against a date. Wrong
+      // whichever way the engine resolves it - an empty result reported as zero, or every row
+      // matching because seconds were compared with milliseconds - and it never errors.
+      const epoch = epochUnitMismatch(verdict.sql, conn.dialect.grammar, fullCatalog);
+      if (epoch && attempt >= MAX_REPAIRS) {
+        semanticNotes.push(
+          `This compares "${epoch.column}", which is ${epoch.dbType}, against ${epoch.comparedTo}. A number and a ` +
+            'date are not the same kind of value, so the rows selected are not the rows the question asked for.',
+        );
+      }
+      if (epoch && attempt < MAX_REPAIRS) {
+        userPrompt = buildRepairUser({
+          question: q,
+          failedSql: verdict.sql,
+          failure:
+            `"${epoch.column}" is ${epoch.dbType}, so it holds a number, not a date, and comparing it with ` +
+            `${epoch.comparedTo} does not select the rows intended: against text nothing matches, and against ` +
+            'epoch seconds a column of milliseconds matches everything. Compare it in its own units - build the ' +
+            "bound as a number, for example (strftime('%s','now') - 7*86400) * 1000 for milliseconds - or convert " +
+            'the column with the matching divisor before comparing.',
+          schemaText,
+          dialect: conn.dialect,
+        });
+        continue;
+      }
+
       // Column-level hallucination floor: a column attributed to a real base table must exist on it.
       const unknownColumn = firstUnknownColumn(verdict.sql, fullCatalog, conn.dialect.grammar);
       if (unknownColumn) {
@@ -1359,6 +1385,13 @@ function collectSelectAliases(sql: string): ReadonlySet<string> {
 }
 
 /**
+ * Columns SQLite gives every table without listing them, so `PRAGMA table_info` never reports them.
+ * On a WITHOUT ROWID table the database rejects the name, which the repair loop can act on; refusing
+ * here blocked SQL that works.
+ */
+const SQLITE_IMPLICIT_COLUMNS: ReadonlySet<string> = new Set(['rowid', 'oid', '_rowid_', 'docid', 'rank']);
+
+/**
  * Returns the first column reference whose base table exists in the catalog but
  * does not have that column - the column-level hallucination floor. Fails open (returns null) on
  * unqualified columns, wildcards, CTE or derived-table aliases, and any parse failure.
@@ -1473,6 +1506,7 @@ export function firstUnknownColumn(sql: string, catalog: SchemaCatalog, grammar:
     if (!table || table === 'null') {
       // Unqualified: skip aliases, require every base table known, then flag it if no table has it.
       if (!attributable || aliases.has(column) || queryTables.length === 0) continue;
+      if (catalog.engine === 'sqlite' && SQLITE_IMPLICIT_COLUMNS.has(column)) continue;
       if (queryTables.some((t) => byTable.get(t)!.has(column))) continue;
       const available = new Set<string>();
       for (const t of queryTables) for (const c of realColumns.get(t) ?? []) available.add(c);
@@ -1488,6 +1522,7 @@ export function firstUnknownColumn(sql: string, catalog: SchemaCatalog, grammar:
     const known = byTable.get(table);
     if (!known) continue; // derived/subquery alias or table not in catalog - fail open
     if (known.has(column)) continue; // real column
+    if (catalog.engine === 'sqlite' && SQLITE_IMPLICIT_COLUMNS.has(column)) continue;
     return { table, column, available: [...known].sort() };
   }
   return null;

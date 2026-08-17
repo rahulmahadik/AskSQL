@@ -66,6 +66,22 @@ jobs:
 
   # Real engines, hostile schemas, no model. A mixed-case Postgres schema once failed every query
   # and shipped that way, because every database test used tables we had written ourselves.
+  room-regression:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -r --filter='./packages/*' build
+      # An Android app's database: Long ids, INTEGER booleans, epoch millis, Room bookkeeping, FTS
+      # shadow tables and a WAL sidecar. Every fixture the suite owned used real types, so none of it
+      # was covered. No model involved, so the result is deterministic.
+      - run: pnpm test:room
+
   schema-regression:
     runs-on: ubuntu-latest
     services:
