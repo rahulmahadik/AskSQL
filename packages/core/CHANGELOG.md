@@ -1,5 +1,14 @@
 # @asksql/core
 
+## 0.8.1
+
+### Patch Changes
+
+- Republished as the anchor for this cut. The npm release is triggered by a `v*` tag whose version must
+  match this package, so publishing the connectors, server, mcp, react and the widget - the last of which
+  bundles the engine and reaches its users only when published - requires this version to move. No source
+  changed since 0.8.0.
+
 ## 0.8.0
 
 ### Minor Changes
