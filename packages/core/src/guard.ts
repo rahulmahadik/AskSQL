@@ -397,6 +397,32 @@ const ORACLE_DENY_PREFIXES = [
  */
 const ORACLE_SEQUENCE_PSEUDO_COLUMNS = new Set(['nextval']);
 
+/**
+ * SQLite's full-text search operator, which the Postgresql grammar has no notion of, so every Room
+ * @Fts4 query was refused as unparseable. Only the operator with a single-quoted literal is rewritten;
+ * a column, parameter or subquery on the right still fails closed.
+ */
+const SQLITE_MATCH_RE = /(\s)match(\s+'(?:[^']|'')*')/giu;
+
+/** Parse-only, and length-preserving, so the validated text and the text that runs share every offset. */
+function rewriteSqliteMatch(sql: string): { rewritten: string; count: number } {
+  let count = 0;
+  const masked = maskCommentsAndStrings(sql);
+  const rewritten = sql.replace(SQLITE_MATCH_RE, (whole, lead: string, right: string, offset: number) => {
+    // Only outside a string or comment: a literal containing the word "match" is not the operator.
+    if (
+      !masked
+        .slice(offset, offset + whole.length)
+        .toLowerCase()
+        .includes('match')
+    )
+      return whole;
+    count++;
+    return `${lead}=    ${right}`;
+  });
+  return { rewritten, count };
+}
+
 /** Every known-dangerous function is denied on every dialect, closing the "dangerous in A, allowed in B" gap. */
 const UNIVERSAL_DENY: readonly string[] = [
   ...PG_DENY_FUNCTIONS,
@@ -944,8 +970,11 @@ export function guardSql(input: GuardInput): GuardVerdict {
   // ---- Parse once (fail-closed): `parse` yields the AST and the table list together. ----
   let ast: unknown;
   let tableList: string[] = [];
+  // MATCH is validated as a comparison. The rewrite is length-preserving and used only for parsing,
+  // so every text position still lines up and the statement that runs keeps MATCH as written.
+  const toParse = dialect.engine === 'sqlite' ? rewriteSqliteMatch(inner).rewritten : inner;
   try {
-    const parsed = parser.parse(inner, { database: dialect.grammar });
+    const parsed = parser.parse(toParse, { database: dialect.grammar });
     ast = parsed.ast;
     tableList = Array.isArray(parsed.tableList) ? parsed.tableList : [];
   } catch {

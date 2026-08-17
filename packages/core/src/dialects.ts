@@ -40,7 +40,10 @@ export const SQLITE_DIALECT: DialectInfo = Object.freeze({
   promptLabel: 'SQLite',
   limitStyle: 'limit',
   promptNotes: Object.freeze([
-    "Use date/datetime/strftime for date math (e.g. date('now','-30 days')).",
+    "Dates: a TEXT column holds ISO text, so compare it with date/datetime/strftime (e.g. date('now','-30 days')). " +
+      'An INTEGER column holds a number - usually epoch seconds, or milliseconds if the values are ~1000x larger - ' +
+      "so build the bound as a number in the SAME units, e.g. (strftime('%s','now') - 30*86400) * 1000 for " +
+      'milliseconds. Never compare an INTEGER column with a text date: nothing matches and no error is raised.',
     'There are no schemas; refer to tables by bare name.',
     "Combine values into one string with group_concat(col, ', ').",
   ]),

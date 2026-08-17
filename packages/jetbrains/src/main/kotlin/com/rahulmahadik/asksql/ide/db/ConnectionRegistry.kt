@@ -4,6 +4,8 @@ import com.intellij.openapi.Disposable
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.project.Project
+import com.rahulmahadik.asksql.ide.errors.AskSqlErrorCode
+import com.rahulmahadik.asksql.ide.errors.AskSqlException
 import com.rahulmahadik.asksql.ide.model.EngineKind
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
@@ -56,8 +58,12 @@ class ConnectionRegistry(private val project: Project, private val scope: Corout
         }
     }
 
+    /** A dropped connection deserves one fresh open; more than that is a loop, not a retry. */
+    private val MAX_STALE_RETRIES = 2
+
     private suspend fun acquire(descriptor: ConnectionDescriptor, password: String?, duckDbDriverJarPath: String?, oracleDriverJarPath: String?): Pair<Slot, Connection> {
         val generation = generations.getOrPut(descriptor.id) { AtomicInteger(0) }.get()
+        var staleRetries = 0
 
         while (true) {
             // compute() runs its remapping function at most once per key, so racers for one not-yet-cached id share a single open.
@@ -74,18 +80,37 @@ class ConnectionRegistry(private val project: Project, private val scope: Corout
                 throw e
             }
             // DuckDB's isValid() runs a real SELECT; take JdbcExecutor's per-connection lock like any statement.
-            val valid = if (descriptor.engine == EngineKind.DUCKDB) {
-                JdbcExecutor.withConnectionLock(connection) { isValid(connection) }
+            val state = if (descriptor.engine == EngineKind.DUCKDB) {
+                JdbcExecutor.withConnectionLock(connection) { health(connection) }
             } else {
-                isValid(connection)
+                health(connection)
             }
-            if (valid) return slot to connection
+            if (state is Health.Ok) return slot to connection
 
             // Removes only this exact stale instance; a replacement another caller already installed is adopted instead.
             if (slots.remove(descriptor.id, slot)) {
                 // The dead connection still holds a file descriptor and a JdbcExecutor lock entry; a lease holder closes it on completion instead.
                 slot.superseded = true
                 if (slot.leases.get() == 0) closeQuietly(connection)
+            }
+
+            if (state is Health.Broken) {
+                throw AskSqlException(
+                    AskSqlErrorCode.DB_UNREACHABLE,
+                    userMessage = "That file opened, but it is not a readable database. A database pulled from a device " +
+                        "needs its -wal and -shm files alongside it, and an encrypted database cannot be read directly.",
+                    detail = state.detail,
+                    retryable = false,
+                )
+            }
+            // One fresh open for a dropped connection; a second failure is not going to be different.
+            if (++staleRetries >= MAX_STALE_RETRIES) {
+                throw AskSqlException(
+                    AskSqlErrorCode.DB_UNREACHABLE,
+                    userMessage = "The database connection could not be established. Check that it is running and reachable.",
+                    detail = "connection did not validate after $MAX_STALE_RETRIES attempts",
+                    retryable = true,
+                )
             }
         }
     }
@@ -98,10 +123,29 @@ class ConnectionRegistry(private val project: Project, private val scope: Corout
         },
     )
 
-    private fun isValid(connection: Connection): Boolean = try {
-        !connection.isClosed && connection.isValid(2)
+    /** Whether a cached connection can still be used, and if not, whether opening again could help. */
+    private sealed interface Health {
+        object Ok : Health
+
+        /** Dropped or timed out: a fresh open is worth one try. */
+        object Stale : Health
+
+        /** The file itself is not a database. Opening again gives the same answer, forever. */
+        data class Broken(val detail: String) : Health
+    }
+
+    /**
+     * SQLite opens lazily: a file that is not a database connects and fails here, by throwing rather
+     * than returning false. Read as "stale, open again" that spun at ~21,000 opens a second until the
+     * caller's timeout. These result codes never recover.
+     */
+    private val TERMINAL_CODES = Regex("SQLITE_(NOTADB|CORRUPT|CANTOPEN|PERM|AUTH|READONLY_DBMOVED)", RegexOption.IGNORE_CASE)
+
+    private fun health(connection: Connection): Health = try {
+        if (!connection.isClosed && connection.isValid(2)) Health.Ok else Health.Stale
     } catch (e: Exception) {
-        false
+        val message = e.message ?: ""
+        if (TERMINAL_CODES.containsMatchIn(message)) Health.Broken(message.take(200)) else Health.Stale
     }
 
     /** Bumps the generation so the next [withConnection] rebuilds it. If still leased, the lease holder closes it on completion instead of closing here. */

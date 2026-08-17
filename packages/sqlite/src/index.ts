@@ -5,6 +5,7 @@
  * cancellation are cooperative: a pre-flight abort check and a row cap, no mid-statement stop.
  */
 
+import { closeSync, openSync, readSync, statSync } from 'node:fs';
 import {
   AskSqlError,
   SQLITE_DIALECT,
@@ -74,6 +75,31 @@ function isSampleableSqliteType(dbType: string): boolean {
   return /char|clob|text/i.test(dbType);
 }
 
+/** How many columns a catalog read will probe for their epoch unit before it stops. */
+const MAX_UNIT_PROBES = 40;
+
+/** An integer column whose name says it holds a moment; the unit is not in the type. */
+const TIMEISH_NAME =
+  /(?:^|_)(?:at|ts|time|date|timestamp|created|updated|modified|deleted|expires?|expiry|last_seen|sent|received|due|start|end|since|until)(?:_|$)|(?:time|date|timestamp)$/i;
+
+/** SQLite integer affinity: the declared type says nothing about seconds versus milliseconds. */
+const INTEGERISH =
+  /^(?:big\s*int|int|integer|int2|int4|int8|smallint|tinyint|mediumint|unsigned\s+big\s+int|numeric)\b/i;
+
+/**
+ * Which epoch unit a magnitude is in. Nothing in a SQLite schema says whether an integer timestamp
+ * counts seconds or milliseconds, and guessing seconds against milliseconds matches every row. Decided
+ * from an aggregate, so only the unit is stated, never a value.
+ */
+function epochUnitOf(max: number): string | null {
+  if (!Number.isFinite(max) || max <= 0) return null;
+  if (max >= 1e17) return 'epoch nanoseconds';
+  if (max >= 1e14) return 'epoch microseconds';
+  if (max >= 1e11) return 'epoch milliseconds';
+  if (max >= 1e8) return 'epoch seconds';
+  return null; // too small to be a modern timestamp; saying nothing beats guessing
+}
+
 export class SqliteConnector implements Connector {
   readonly engine = 'sqlite' as const;
   readonly dialect = SQLITE_DIALECT;
@@ -82,6 +108,8 @@ export class SqliteConnector implements Connector {
   readonly name: string;
   readonly database?: string;
   private db: SqliteDriver | null = null;
+  /** Whether a -wal file held rows when we opened the database; SQLite makes an empty one itself. */
+  private walBeforeOpen = false;
   /** Set once the handle in use has been proven read-only, so the check runs once per handle. */
   private readOnlyAsserted = false;
 
@@ -108,6 +136,14 @@ export class SqliteConnector implements Connector {
         userMessage: 'No SQLite database was configured.',
       });
     }
+    // Before opening: SQLite creates an empty -wal itself, so asking afterwards always finds one.
+    this.walBeforeOpen = ((): boolean => {
+      try {
+        return statSync(`${this.config.file}-wal`).size > 0;
+      } catch {
+        return false;
+      }
+    })();
     // Load the driver and open the file in separate steps, so each failure gets its own message.
     let Ctor: new (f: string, o?: object) => SqliteDriver;
     let openOptions: object = { readonly: true, fileMustExist: true };
@@ -251,6 +287,35 @@ export class SqliteConnector implements Connector {
     return vals.length > 0 ? vals : undefined;
   }
 
+  /**
+   * A WAL database whose -wal file is not beside it opens, reports no tables, and answers "no such
+   * table" - an empty database with nothing to explain it. Header byte 18 is 2 for WAL, 1 for a
+   * rollback journal.
+   */
+  private missingWalWarning(): string | null {
+    const file = this.config.file;
+    if (!file || file === ':memory:') return null;
+    // A -wal that held rows when we opened it is being read; nothing is missing.
+    if (this.walBeforeOpen) return null;
+    try {
+      const fd = openSync(file, 'r');
+      try {
+        const header = Buffer.alloc(20);
+        readSync(fd, header, 0, 20, 0);
+        if (header[18] !== 2) return null;
+      } finally {
+        closeSync(fd);
+      }
+      return (
+        'This database is in WAL mode and no "-wal" file was beside it, so it reads as empty. If it is not ' +
+        'actually empty, the rows are in the "-wal" file that was left behind: copy the "-wal" and "-shm" ' +
+        'files next to the database, or checkpoint the database before copying it.'
+      );
+    } catch {
+      return null; // unreadable header is the connect path's problem, not this one's
+    }
+  }
+
   async introspect(): Promise<SchemaCatalog> {
     const warnings: string[] = [];
     const objs = this.rows(
@@ -259,6 +324,9 @@ export class SqliteConnector implements Connector {
     const tables: TableInfo[] = [];
     const triggers: TriggerInfo[] = [];
     let sampleBudget = MAX_SAMPLED_COLUMNS;
+    // One aggregate per candidate column: 41ms per million rows, so bounded like value sampling is,
+    // in case a schema has dozens of timestamp columns across dozens of tables.
+    let unitBudget = MAX_UNIT_PROBES;
 
     for (const o of objs) {
       const name = String(o['name']);
@@ -296,6 +364,23 @@ export class SqliteConnector implements Connector {
         nullable: Number(c['notnull']) === 0,
         default: c['dflt_value'] == null ? null : String(c['dflt_value']),
       }));
+      // The unit of an integer timestamp, stated as a comment so the model stops guessing seconds for a
+      // milliseconds column. One aggregate per candidate column, name-filtered so a wide table is not
+      // scanned for nothing, and base tables only: an aggregate over a view runs the view's query.
+      if (type !== 'view') {
+        columns = columns.map((col) => {
+          if (unitBudget <= 0 || col.comment || !INTEGERISH.test(col.dbType.trim()) || !TIMEISH_NAME.test(col.name))
+            return col;
+          unitBudget--;
+          try {
+            const rows = this.rows(`SELECT MAX(${quoteIdent(col.name)}) AS m FROM ${quoteIdent(name)}`);
+            const unit = epochUnitOf(Number(rows[0]?.['m']));
+            return unit ? { ...col, comment: unit } : col;
+          } catch {
+            return col; // best-effort: an unreadable column simply goes unannotated
+          }
+        });
+      }
       // Opt-in: observe the distinct codes a short text column holds; base tables only, as sampling a view runs its query.
       if (this.config.sampleColumnValues && type !== 'view') {
         columns = columns.map((col) => {
@@ -347,7 +432,11 @@ export class SqliteConnector implements Connector {
       sequences: [],
       triggers,
       routines: [],
-      warnings,
+      // Only when the database looks empty: with tables present the sidecar is not the story.
+      warnings:
+        tables.length === 0
+          ? [...warnings, ...[this.missingWalWarning()].filter((w): w is string => w !== null)]
+          : warnings,
       fetchedAt: new Date().toISOString(),
     };
   }

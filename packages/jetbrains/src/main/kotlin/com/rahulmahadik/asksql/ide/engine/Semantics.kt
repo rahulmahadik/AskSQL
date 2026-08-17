@@ -164,6 +164,86 @@ object Semantics {
         return null
     }
 
+    /** A comparison whose two sides cannot mean the same thing: a numeric column against a date. */
+    data class EpochMismatch(val column: String, val dbType: String, val comparedTo: String)
+
+    /** Types that hold a number, so a date on the other side cannot mean the same thing. */
+    private val INTEGER_DB_TYPE =
+        Regex("""^(?:big\s*int|int|integer|int2|int4|int8|smallint|tinyint|mediumint|unsigned\s+big\s+int|numeric|number)\b""", RegexOption.IGNORE_CASE)
+
+    /** SQLite's date builders plus the standard keywords; all produce text or a day number. */
+    private val DATE_FUNCTION =
+        Regex("""^(?:date|datetime|time|strftime|julianday|unixepoch|current_date|current_time|current_timestamp|now|getdate|sysdate)$""", RegexOption.IGNORE_CASE)
+
+    /** A literal a person writes for a day or an instant, which is text however it is compared. */
+    private val DATE_LITERAL = Regex("""^\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}(?::\d{2})?)?$""")
+
+    private fun dateSideOf(expression: Expression?): String? = when (expression) {
+        null -> null
+        is net.sf.jsqlparser.expression.Function ->
+            if (DATE_FUNCTION.matches(expression.name ?: "")) "${expression.name}(...)" else null
+        is net.sf.jsqlparser.expression.TimeKeyExpression ->
+            if (DATE_FUNCTION.matches((expression.stringValue ?: "").replace(" ", "_"))) expression.stringValue else null
+        is net.sf.jsqlparser.expression.StringValue ->
+            if (DATE_LITERAL.matches(expression.value.trim())) "'${expression.value}'" else null
+        is net.sf.jsqlparser.expression.CastExpression -> dateSideOf(expression.leftExpression)
+        else -> null
+    }
+
+    /** The catalog type of a column named anywhere in the query, or null when it is not attributable. */
+    private fun dbTypeOf(column: String, catalog: com.rahulmahadik.asksql.ide.model.SchemaCatalog): String? {
+        val types = catalog.tables.flatMap { t -> t.columns.filter { it.name.equals(column, true) }.map { it.dbType } }
+        if (types.isEmpty()) return null
+        // Two tables typing the same name differently is not attributable from the name alone.
+        return types.first().takeIf { first -> types.all { it.equals(first, true) } }
+    }
+
+    /**
+     * A numeric column compared against a date: against text nothing matches, against epoch seconds a
+     * milliseconds column matches every row, and neither errors. Mirrors core's semantics.ts.
+     */
+    fun epochUnitMismatch(sql: String, catalog: com.rahulmahadik.asksql.ide.model.SchemaCatalog): EpochMismatch? {
+        val statement = try {
+            CCJSqlParserUtil.parse(sql)
+        } catch (e: Exception) {
+            return null // the guard already parsed it; never double-block here
+        }
+        val select = statement as? Select ?: return null
+
+        fun checkPair(maybeColumn: Expression?, maybeDate: Expression?): EpochMismatch? {
+            val col = maybeColumn as? net.sf.jsqlparser.schema.Column ?: return null
+            val name = col.columnName ?: return null
+            val dbType = dbTypeOf(name, catalog) ?: return null
+            if (!INTEGER_DB_TYPE.containsMatchIn(dbType.trim())) return null
+            val rendered = dateSideOf(maybeDate) ?: return null
+            return EpochMismatch(name, dbType, rendered)
+        }
+
+        // The file's own reflective walk, rather than a visitor: JSqlParser's visitor is generic here
+        // and every comparison would need its own override.
+        fun scanExpression(expression: Expression?, depth: Int = 0): EpochMismatch? {
+            if (expression == null || depth > MAX_DEPTH) return null
+            when (expression) {
+                is net.sf.jsqlparser.expression.operators.relational.ComparisonOperator ->
+                    checkPair(expression.leftExpression, expression.rightExpression)
+                        ?: checkPair(expression.rightExpression, expression.leftExpression)
+                is net.sf.jsqlparser.expression.operators.relational.Between ->
+                    checkPair(expression.leftExpression, expression.betweenExpressionStart)
+                        ?: checkPair(expression.leftExpression, expression.betweenExpressionEnd)
+                else -> null
+            }?.let { return it }
+            for (child in childrenOf(expression)) scanExpression(child, depth + 1)?.let { return it }
+            return null
+        }
+
+        for (plain in plainSelects(select)) {
+            scanExpression(plain.where)?.let { return it }
+            scanExpression(plain.having)?.let { return it }
+            plain.joins?.forEach { j -> j.onExpressions?.forEach { on -> scanExpression(on)?.let { return it } } }
+        }
+        return null
+    }
+
     fun ungroupedAggregate(sql: String): String? {
         val statement = try {
             CCJSqlParserUtil.parse(sql)

@@ -423,7 +423,7 @@ importers:
         version: 12.11.1
     devDependencies:
       '@asksql/core':
-        specifier: workspace:>=0.6.1
+        specifier: workspace:>=0.8.0
         version: link:../core
 
   packages/vscode:

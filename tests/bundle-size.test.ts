@@ -28,7 +28,10 @@ const BUDGETS: Record<string, number> = {
   // 74->91 step was not growth but a fix, when the walk became recursive and dist/mongo was counted
   // for the first time. 96->97: the catalog checks read the statement with its row-limit tail removed,
   // and a repair now names the table that holds the missing column and the join that reaches it.
-  core: 97,
+  // 97->100: the epoch floor, which catches a numeric column compared against a date, the SQLite date
+  // note that tells the model which units an INTEGER column is in, and the MATCH rewrite that lets a
+  // full-text query be validated at all.
+  core: 100,
   // 20 -> 23: copy controls, streamed-token progress, cell tooltips, export feedback, result-grid copy.
   react: 23,
   // 12 -> 14: the CSRF/Host gate every adapter inherits, client-path confinement for file engines,
@@ -76,6 +79,6 @@ describe('bundle-size budgets (gzipped, own code)', () => {
     if (core === null || react === null) return;
     // Own code only (React is a peer). The same recursion correction as core's accounts for 96->113;
     // the rest is identifier normalisation, the reserved-word lists and the routing work.
-    expect(core + react).toBeLessThan(119);
+    expect(core + react).toBeLessThan(122);
   });
 });

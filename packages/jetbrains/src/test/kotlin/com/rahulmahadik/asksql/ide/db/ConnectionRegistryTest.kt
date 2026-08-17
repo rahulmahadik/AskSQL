@@ -1,6 +1,8 @@
 package com.rahulmahadik.asksql.ide.db
 
 import com.rahulmahadik.asksql.ide.model.EngineKind
+import com.rahulmahadik.asksql.ide.errors.AskSqlErrorCode
+import com.rahulmahadik.asksql.ide.errors.AskSqlException
 import com.rahulmahadik.asksql.ide.test.fakeProject
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -15,6 +17,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertNotNull
 import org.junit.Test
 import java.sql.Connection
 
@@ -31,6 +34,36 @@ class ConnectionRegistryTest {
         scope = ConnectionScope.PROJECT,
         filePath = ":memory:",
     )
+
+    @Test
+    fun `a file that is not a database fails once, instead of being reopened forever`() = runTest {
+        // SQLite opens lazily: an encrypted, truncated or wrong file connects and fails validation, and it
+        // fails by throwing. Read as "stale, open again" this reopened at ~21,000 opens a second until the
+        // caller's timeout, burning a core and then reporting something unrelated. Picking a `.db-wal`
+        // sidecar in the file chooser is enough to reach it.
+        val notADatabase = java.io.File.createTempFile("asksql-notadb", ".db").also {
+            it.writeText("this is not a database at all, just some text")
+            it.deleteOnExit()
+        }
+        val descriptor = sqliteDescriptor("bad-file").copy(filePath = notADatabase.absolutePath)
+        val registry = registry()
+
+        val started = System.nanoTime()
+        var thrown: AskSqlException? = null
+        try {
+            registry.withConnection(descriptor, null) { it }
+        } catch (e: AskSqlException) {
+            thrown = e
+        }
+        val elapsedMs = (System.nanoTime() - started) / 1_000_000
+
+        assertNotNull("expected a classified failure, not a spin", thrown)
+        assertEquals(AskSqlErrorCode.DB_UNREACHABLE, thrown!!.code)
+        assertFalse("a file that is not a database will not become one on retry", thrown.retryable)
+        assertTrue("gave up in ${elapsedMs}ms, which is not a fast failure", elapsedMs < 5_000)
+        // The message has to say something a person can act on.
+        assertTrue(thrown.userMessage, thrown.userMessage.contains("-wal"))
+    }
 
     @Test
     fun `withConnection reuses the same connection across calls`() = runTest {

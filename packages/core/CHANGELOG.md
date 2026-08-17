@@ -1,5 +1,36 @@
 # @asksql/core
 
+## 0.8.0
+
+### Minor Changes
+
+- Catch a date comparison that answered confidently and wrongly, and let full-text search run.
+
+  SQLite has no date type, so a timestamp is a bare number: Room writes epoch milliseconds into an
+  INTEGER column. The SQLite guidance told the model to use `date('now','-30 days')`, which is right for
+  a TEXT column and wrong for that one - and SQLite compares by storage class, so nothing matches, no
+  error is raised, and "how many users signed up in the last 7 days" answers zero. Guessing epoch
+  seconds instead is worse: a milliseconds column is a thousand times larger, so every row matches and
+  the answer is the whole table. Measured against a Room-shaped database: a 7B model answered 0 where
+  the truth was 2, and a 30B model answered 5.
+
+  The guidance now says which units an INTEGER column is in and how to build a bound in the same units,
+  and a semantic floor catches a numeric column compared against a date and sends it back to be
+  corrected. Both models now answer 2. The floor is held to a sweep of every column type, date
+  expression, operator, query shape and dialect, because firing on a TEXT column would refuse SQL that
+  is correct.
+
+  Full-text search works. SQLite parses under the Postgresql grammar, which has no `MATCH`, so every
+  `WHERE messages_fts MATCH 'term'` was refused as unparseable - valid read-only SQL that a Room `@Fts4`
+  entity is queried with. `MATCH` is now validated as a comparison and the statement that runs keeps it
+  verbatim; a right side that is a column, a parameter or a subquery is still refused, as are writes,
+  stacked statements and denied functions. Verified on FTS4 and FTS5, including `rank` ordering.
+
+  `rowid` is no longer reported as an invented column. SQLite gives every table `rowid`, `oid` and
+  `_rowid_` without listing them in `PRAGMA table_info`, and FTS tables answer to `docid` and `rank`, so
+  `SELECT rowid FROM users` was refused after every correction attempt. On a `WITHOUT ROWID` table the
+  database rejects the name, which the correction loop can act on.
+
 ## 0.7.0
 
 ### Minor Changes

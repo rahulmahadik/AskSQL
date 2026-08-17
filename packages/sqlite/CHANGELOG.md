@@ -1,5 +1,23 @@
 # @asksql/sqlite
 
+## 0.5.0
+
+### Minor Changes
+
+- Say what an integer timestamp counts, and say when a database is missing its `-wal`.
+
+  Nothing in a SQLite schema records whether an integer timestamp holds seconds or milliseconds, so a
+  model guesses - and guessing seconds against a milliseconds column matches every row, reporting a whole
+  table as "this week". The unit is now stated in the schema the model reads, decided from an aggregate:
+  only the classification is recorded, never a value, so no cell value reaches the model. Bounded to 40
+  columns per catalog read and measured at 41ms per million rows.
+
+  Room defaults to WAL, so an Android database on disk is three files. Copying only `app.db` - what an
+  `adb pull` of the database gives you - left SQLite reporting no tables at all, and every question
+  answered "no such table" against what looked like an empty database. It now says the `-wal` file is
+  missing and what to do about it. The check reads the file header and the sidecar's size before opening,
+  because SQLite creates an empty `-wal` itself as soon as the file is opened.
+
 ## 0.4.0
 
 ### Minor Changes

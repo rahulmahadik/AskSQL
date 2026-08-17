@@ -1,5 +1,6 @@
 package com.rahulmahadik.asksql.ide.engine
 
+import com.rahulmahadik.asksql.ide.model.EngineKind
 import com.rahulmahadik.asksql.ide.model.SchemaCatalog
 import net.sf.jsqlparser.expression.ExpressionVisitorAdapter
 import net.sf.jsqlparser.parser.CCJSqlParserUtil
@@ -140,6 +141,12 @@ object HallucinationChecks {
         return null
     }
 
+    /**
+     * Columns SQLite gives every table without listing them, so `PRAGMA table_info` never reports them.
+     * On a WITHOUT ROWID table the database rejects the name, which the repair loop can act on.
+     */
+    private val SQLITE_IMPLICIT_COLUMNS = setOf("rowid", "oid", "_rowid_", "docid", "rank")
+
     fun firstUnknownColumn(sql: String, catalog: SchemaCatalog): UnknownColumn? {
         val statement = try {
             CCJSqlParserUtil.parse(sql)
@@ -201,6 +208,7 @@ object HallucinationChecks {
 
             if (table == null) {
                 if (!attributable || aliases.contains(column) || queryTables.isEmpty()) continue
+                if (catalog.engine == EngineKind.SQLITE && column.lowercase() in SQLITE_IMPLICIT_COLUMNS) continue
                 if (queryTables.any { byTable[it]?.contains(column) == true }) continue
                 val available = queryTables.flatMap { byTable[it].orEmpty() }.toSortedSet()
                 return UnknownColumn(queryTables.first(), column, available.toList())
@@ -212,6 +220,7 @@ object HallucinationChecks {
             if (cteNames.contains(resolvedTable) || SYSTEM_SCHEMAS.contains(resolvedTable)) continue
             val known = byTable[resolvedTable] ?: continue // derived/subquery alias or unknown table; fail open
             if (known.contains(column)) continue
+            if (catalog.engine == EngineKind.SQLITE && column.lowercase() in SQLITE_IMPLICIT_COLUMNS) continue
             return UnknownColumn(resolvedTable, column, known.toSortedSet().toList())
         }
         return null
