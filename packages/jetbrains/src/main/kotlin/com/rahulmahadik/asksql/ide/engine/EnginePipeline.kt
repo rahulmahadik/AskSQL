@@ -685,6 +685,24 @@ class EnginePipeline(
                 continue
             }
 
+            // Epoch floor, mirroring packages/core/src/engine.ts: SQLite has no date type, so Room writes
+            // epoch milliseconds into an INTEGER. Compared with a text date nothing matches and the answer
+            // is reported as zero; compared with epoch seconds every row matches. Neither errors.
+            val epoch = Semantics.epochUnitMismatch(verdict.sql, fullCatalog)
+            if (epoch != null && attempt < MAX_REPAIRS) {
+                userPrompt = Prompts.buildRepairUser(
+                    question = q, failedSql = verdict.sql,
+                    failure = "\"${epoch.column}\" is ${epoch.dbType}, so it holds a number, not a date, and comparing it " +
+                        "with ${epoch.comparedTo} does not select the rows intended: against text nothing matches, and " +
+                        "against epoch seconds a column of milliseconds matches everything. Compare it in its own units - " +
+                        "build the bound as a number, for example (strftime('%s','now') - 7*86400) * 1000 for " +
+                        "milliseconds - or convert the column with the matching divisor before comparing.",
+                    schemaText = schemaText, dialect = dialect,
+                )
+                attempt++
+                continue
+            }
+
             val unknownColumn = HallucinationChecks.firstUnknownColumn(verdict.sql, fullCatalog)
             if (unknownColumn != null) {
                 if (attempt >= MAX_REPAIRS) {

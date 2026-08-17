@@ -3,6 +3,32 @@
 All notable changes to the AskSQL JetBrains plugin are documented here.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.5.4] - 2026-08-18
+
+Android Studio is where this plugin is mostly installed, and an Android app's database is SQLite via
+Room. Every fixture the test suite owned used real types, so none of this was covered until a
+Room-shaped database was tried.
+
+### Fixed
+- A query over a table with a `ByteArray` column returned nothing at all. SQLite's driver reports those
+  cells as BLOB and implements none of the streaming interface, so reading them threw and the whole
+  result set was lost, reported as "the database didn't accept that query".
+- `SELECT rowid FROM users` was refused as an invented column. SQLite gives every table `rowid`, `oid`
+  and `_rowid_` without listing them, and FTS tables answer to `docid` and `rank`.
+- Opening a file that is not a readable database - encrypted, truncated, or the `-wal` sidecar picked by
+  mistake - reopened it about 21,000 times a second until the operation timed out, pegging a core and
+  then reporting something unrelated. It now fails once, saying that a database pulled from a device
+  needs its `-wal` and `-shm` files alongside it.
+- A date comparison against an integer timestamp answered confidently and wrongly: Room stores epoch
+  milliseconds, and comparing that with a text date matches nothing while comparing it with epoch
+  seconds matches everything. Neither raised an error. The guidance now states the units, and a check
+  catches the comparison and sends it back to be corrected.
+- Full-text search ran at all. A Room `@Fts4` entity is queried with `MATCH`, which the SQL parser has
+  no notion of, so every full-text query was refused as unparseable. Writes, stacked statements and
+  denied functions are still refused.
+- A relationship question about two collections is answered in prose on MongoDB, as it already was on
+  the SQL engines, rather than returning documents.
+
 ## [0.5.3] - 2026-08-15
 
 ### Security

@@ -210,8 +210,21 @@ object JdbcExecutor {
                 if (rs.wasNull() || bytes == null) CellValue.Null else binaryPreview(bytes)
             }
             Types.BLOB -> {
-                val blob = rs.getBlob(index)
-                if (rs.wasNull() || blob == null) {
+                // SQLite's driver reports BLOB but implements none of java.sql.Blob, so getBlob throws and
+                // the whole result set is lost. getBytes reads the same column, and only a preview is kept.
+                val blob = try {
+                    rs.getBlob(index)
+                } catch (e: java.sql.SQLFeatureNotSupportedException) {
+                    null
+                }
+                if (blob == null) {
+                    val bytes = rs.getBytes(index)
+                    if (rs.wasNull() || bytes == null) {
+                        CellValue.Null
+                    } else {
+                        CellValue.Binary(BinaryPreview(bytes.size.toLong(), toHex(bytes.take(HEX_PREVIEW_BYTES).toByteArray())))
+                    }
+                } else if (rs.wasNull()) {
                     CellValue.Null
                 } else {
                     val length = blob.length()

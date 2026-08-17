@@ -126,8 +126,12 @@ object SqlGuard {
         }
 
         // ---- Parse once, fail-closed ----
+        // MATCH is not in JSqlParser's grammar, so every Room @Fts4 query was refused as unparseable.
+        // Validated as a comparison; the rewrite is parse-only and length-preserving, so the statement
+        // that runs keeps MATCH verbatim. Mirrors core's guard.ts.
+        val toParse = if (dialect.engine == EngineKind.SQLITE) rewriteSqliteMatch(inner) else inner
         val statement: Statement = try {
-            CCJSqlParserUtil.parse(inner)
+            CCJSqlParserUtil.parse(toParse)
         } catch (e: JSQLParserException) {
             return blocked(original, "parse_failed", "The statement could not be verified as safe SQL for this database, so it was blocked.")
         } catch (e: StackOverflowError) {
@@ -255,6 +259,22 @@ object SqlGuard {
             loweredLimit = loweredLimit,
             tables = tables,
         )
+    }
+
+    /**
+     * `match` becomes `=` and four spaces, so every offset is preserved. Only the operator with a
+     * single-quoted literal is rewritten; anything else still fails closed.
+     */
+    private val SQLITE_MATCH_RE = Regex("""(\s)match(\s+'(?:[^']|'')*')""", RegexOption.IGNORE_CASE)
+
+    private fun rewriteSqliteMatch(sql: String): String {
+        val masked = SqlLexer.stripCommentsAndStrings(sql)
+        return SQLITE_MATCH_RE.replace(sql) { m ->
+            // Only outside a string or comment: a literal containing the word "match" is not the operator.
+            val span = masked.substring(m.range.first, minOf(m.range.last + 1, masked.length))
+            if (!span.contains("match", ignoreCase = true)) m.value
+            else "${m.groupValues[1]}=    ${m.groupValues[2]}"
+        }
     }
 
     private fun blocked(sql: String, ruleId: String, reason: String) =
