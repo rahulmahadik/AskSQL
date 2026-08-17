@@ -2,7 +2,7 @@
   "name": "asksql-browser-extension",
   "private": true,
   "type": "module",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "AskSQL for Chromium browsers (Edge + Chrome): zero-backend DuckDB-WASM file chat and @asksql/server sidecar mode in a Manifest V3 side panel.",
   "scripts": {
     "fetch-duckdb-extensions": "node scripts/fetch-duckdb-extensions.mjs",

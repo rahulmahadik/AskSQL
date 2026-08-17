@@ -4,6 +4,16 @@ All notable changes to the browser extension are documented here. Versions match
 `manifest.json`. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.2] - 2026-08-18
+
+Carries an engine fix the extension bundles. Nothing in the extension's own code changed.
+
+### Fixed
+- A question about dates against a column that stores a timestamp as a number answered confidently and
+  wrongly, without raising an error: compared with a date it matched nothing and answered zero, and
+  compared with the wrong units it matched every row and answered with the whole table. The comparison
+  is now caught before it runs.
+
 ## [0.3.1] - 2026-08-14
 
 ### Fixed
