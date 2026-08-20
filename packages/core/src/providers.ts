@@ -11,7 +11,7 @@ export type ProviderName =
 
 export interface ProviderConfig {
   readonly provider: ProviderName;
-  /** Model identifier, e.g. "llama-3.3-70b-versatile". Required. */
+  /** Model identifier, exactly as the provider lists it at /models. Required. */
   readonly model: string;
   readonly apiKey?: string;
   /** Base URL for ollama / openai-compatible (LM Studio, vLLM, OpenRouter...). */
@@ -152,6 +152,37 @@ async function importProvider(promise: Promise<unknown>, pkgName: string): Promi
 }
 
 /** Resolve a provider config into an AI SDK LanguageModel instance. */
+/** Providers that run on someone else's machine, so a loopback override cannot be one of them. */
+const HOSTED_PROVIDERS: ReadonlySet<ProviderName> = new Set(['openai', 'anthropic', 'google', 'groq', 'nvidia']);
+
+/**
+ * A hosted provider pointed at this machine. `assertBaseUrl` exempts loopback from the plaintext
+ * refusal, on the reasoning that a local endpoint is not on the wire, so `{provider:'groq', apiKey,
+ * baseURL:'http://127.0.0.1:11434/v1'}` validated and sent the real key in cleartext to whatever was
+ * listening. Switching from a local provider leaves exactly that base URL behind.
+ *
+ * `openai-compatible` and `azure` are absent on purpose: those are whatever the user points them at,
+ * and a self-hosted gateway on loopback is their normal shape.
+ */
+function assertHostedNotLoopback(config: ProviderConfig): void {
+  if (!config.baseURL || !HOSTED_PROVIDERS.has(config.provider)) return;
+  let hostname: string;
+  try {
+    hostname = new URL(config.baseURL).hostname;
+  } catch {
+    return; // assertBaseUrl already rejected an unparseable URL
+  }
+  if (!isLoopback(hostname)) return;
+  throw new AskSqlError('CONFIG_ERROR', {
+    // The URL itself is never echoed, here or in the detail: a gateway URL can embed credentials.
+    detail: `hosted provider ${config.provider} with a loopback baseURL`,
+    userMessage:
+      `${config.provider} is a hosted service, but the configured base URL points at this machine. ` +
+      `Clear it to reach ${config.provider}, or choose a local provider such as Ollama if you meant ` +
+      `the server running here.`,
+  });
+}
+
 export async function resolveModel(config: ProviderConfig): Promise<ModelLike> {
   if (!config.model || config.model.trim().length === 0) {
     throw new AskSqlError('CONFIG_ERROR', {
@@ -166,6 +197,7 @@ export async function resolveModel(config: ProviderConfig): Promise<ModelLike> {
     });
   }
   if (config.baseURL) assertBaseUrl(config.baseURL, Boolean(config.apiKey));
+  assertHostedNotLoopback(config);
 
   switch (config.provider) {
     case 'openai': {

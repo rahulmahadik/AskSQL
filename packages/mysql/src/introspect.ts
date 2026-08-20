@@ -7,6 +7,16 @@
 
 import {
   VALUE_SAMPLE_MAX_DISTINCT,
+  epochUnitOf,
+  HINT_VALUE_CAP,
+  isMomentColumn,
+  isJsonCandidateColumn,
+  jsonHint,
+  jsonShapeOf,
+  jsonArrayElementOf,
+  JSON_SAMPLE_ROWS,
+  MAX_HINT_PROBES,
+  MAX_HINT_PROBES_PER_TABLE,
   type ColumnInfo,
   type ForeignKeyInfo,
   type IndexInfo,
@@ -78,6 +88,76 @@ function sampleKey(table: string, column: string): string {
  * Distinct values of one short text column, or undefined when it is not categorical
  * (too many distinct values, or any value is long). Bounded by LIMIT + MAX_EXECUTION_TIME.
  */
+/**
+ * States what a MySQL column's type leaves out: the unit of a BIGINT timestamp, and the keys inside a
+ * JSON column. Measured before this existed, on a real 65-table schema: every one of four questions came
+ * back wrong or abstained, with no error - epoch millis compared against UNIX_TIMESTAMP matched every
+ * row, and a JSON field the model could not name was guessed at.
+ *
+ * Structure only - a unit from an aggregate, key names that recur. No cell value is stated.
+ */
+async function withMyColumnHints(
+  db: MysqlQueryable,
+  database: string,
+  tables: TableInfo[],
+  nameKeys: boolean,
+): Promise<TableInfo[]> {
+  let total = MAX_HINT_PROBES;
+  const out: TableInfo[] = [];
+  for (const table of tables) {
+    if (table.kind !== 'table' || total <= 0) {
+      out.push(table);
+      continue;
+    }
+    const rel = `${backtick(database)}.${backtick(table.name)}`;
+    // Per table, so filler tables early in the catalog cannot spend every probe.
+    let budget = Math.min(MAX_HINT_PROBES_PER_TABLE, total);
+    const columns: ColumnInfo[] = [];
+    for (const col of table.columns) {
+      const moment = isMomentColumn(col.name, col.dbType);
+      const isJson = isJsonCandidateColumn(col.dbType);
+      if (budget <= 0 || col.comment || (!moment && !isJson)) {
+        columns.push(col); // never overwrite a COLUMN_COMMENT the DBA wrote
+        continue;
+      }
+      budget--;
+      total--;
+      try {
+        if (moment) {
+          const rows = await db.query(
+            `SELECT /*+ MAX_EXECUTION_TIME(${SAMPLE_QUERY_TIMEOUT_MS}) */ MIN(${backtick(col.name)}) AS lo, ` +
+              `MAX(${backtick(col.name)}) AS hi FROM ${rel}`,
+          );
+          const unit = epochUnitOf(Number(rows[0]?.['lo']), Number(rows[0]?.['hi']));
+          columns.push(unit ? { ...col, comment: unit } : col);
+        } else {
+          const rows = await db.query(
+            `SELECT /*+ MAX_EXECUTION_TIME(${SAMPLE_QUERY_TIMEOUT_MS}) */ LEFT(CAST(${backtick(col.name)} AS CHAR), ${HINT_VALUE_CAP}) AS v ` +
+              `FROM ${rel} WHERE ${backtick(col.name)} IS NOT NULL LIMIT ${JSON_SAMPLE_ROWS}`,
+          );
+          const vals = rows.map((r) => r['v']);
+          const shape = rows.length > 0 ? jsonShapeOf(vals) : null;
+          const el = shape ? null : rows.length > 0 ? jsonArrayElementOf(vals) : null;
+          columns.push(
+            shape
+              ? { ...col, comment: jsonHint(`${backtick(col.name)}->>'$.key'`, shape.keys, nameKeys) }
+              : el
+                ? {
+                    ...col,
+                    comment: `JSON array of ${el}s; test membership with JSON_CONTAINS(${backtick(col.name)}, '${el === 'number' ? '1' : '"a"'}')`,
+                  }
+                : col,
+          );
+        }
+      } catch {
+        columns.push(col); // best-effort: an unreadable column simply goes undescribed
+      }
+    }
+    out.push({ ...table, columns });
+  }
+  return out;
+}
+
 async function sampleColumn(
   db: MysqlQueryable,
   database: string,
@@ -222,7 +302,12 @@ export async function introspectMysql(
 
   const rows: MysqlIntrospectRows = { cols, tablesMeta, views, keyCols, stats, trg, routines };
   const sampledValues = opts.sampleColumnValues ? await sampleMysqlColumns(db, database, rows) : undefined;
-  return buildMysqlCatalog(database, rows, warnings, sampledValues);
+  const catalog = buildMysqlCatalog(database, rows, warnings, sampledValues);
+  try {
+    return { ...catalog, tables: await withMyColumnHints(db, database, [...catalog.tables], opts.sampleColumnValues) };
+  } catch {
+    return catalog; // hints are best-effort; a catalog read never fails over them
+  }
 }
 
 /** Row sets fetched from information_schema, as introspectMysql queries them. */

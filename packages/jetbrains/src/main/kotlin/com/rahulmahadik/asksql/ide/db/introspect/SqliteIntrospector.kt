@@ -1,15 +1,21 @@
 package com.rahulmahadik.asksql.ide.db.introspect
 
+import com.rahulmahadik.asksql.ide.model.ColumnInfo
 import com.rahulmahadik.asksql.ide.model.EngineKind
 import com.rahulmahadik.asksql.ide.model.ForeignKeyInfo
 import com.rahulmahadik.asksql.ide.model.SchemaCatalog
 import com.rahulmahadik.asksql.ide.model.TableInfo
+import com.rahulmahadik.asksql.ide.model.TableKind
 import java.sql.Connection
 
-/** SQLite exposes no comment or row-estimate metadata; only foreign keys need SQLite's own `PRAGMA` (see [loadForeignKeys]). */
+/**
+ * SQLite exposes no comment or row-estimate metadata; only foreign keys need SQLite's own `PRAGMA`
+ * (see [loadForeignKeys]). What a column MEANS is not in its type either, and [ColumnHints] states that
+ * for every engine; HintParityTest holds it to the same vectors as packages/sqlite/src/index.ts.
+ */
 object SqliteIntrospector : Introspector {
 
-    override fun introspect(connection: Connection): SchemaCatalog {
+    override fun introspect(connection: Connection, nameKeys: Boolean): SchemaCatalog {
         val raw = CommonIntrospection.listTables(connection, catalog = null, schemaPattern = null)
             .filterNot { it.name.startsWith("sqlite_") }
 
@@ -25,7 +31,8 @@ object SqliteIntrospector : Introspector {
                 indexes = t.indexes,
             )
         }
-        return SchemaCatalog(engine = EngineKind.SQLITE, tables = tables)
+        // The hints themselves are shared with every other engine; see ColumnHints.
+        return SchemaCatalog(engine = EngineKind.SQLITE, tables = ColumnHints.annotate(connection, EngineKind.SQLITE, tables, nameKeys))
     }
 
     /** SQLite's `getImportedKeys()` reports blank FK names and scrambles multi-column FK rows; `PRAGMA foreign_key_list` groups them by an explicit `id` column. */

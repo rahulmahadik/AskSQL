@@ -12,6 +12,10 @@ export const POSTGRES_DIALECT: DialectInfo = Object.freeze({
   promptLabel: 'PostgreSQL',
   limitStyle: 'limit',
   promptNotes: Object.freeze([
+    'When a column comment names an epoch unit, build the bound in THAT SAME unit and no other. For ' +
+      "'epoch seconds' compare against a seconds bound unchanged; for 'epoch milliseconds' multiply the " +
+      'seconds bound by 1000. Mixing them raises no error: milliseconds against a seconds bound matches ' +
+      'every row, and seconds against a milliseconds bound matches none.',
     'Quote mixed-case or reserved identifiers with double quotes.',
     'Use ILIKE for case-insensitive text matching.',
     "Combine values into one string with string_agg(col, ', ').",
@@ -26,6 +30,10 @@ export const MYSQL_DIALECT: DialectInfo = Object.freeze({
   promptLabel: 'MySQL',
   limitStyle: 'limit',
   promptNotes: Object.freeze([
+    'When a column comment names an epoch unit, build the bound in THAT SAME unit and no other. For ' +
+      "'epoch seconds' compare against a seconds bound unchanged; for 'epoch milliseconds' multiply the " +
+      'seconds bound by 1000. Mixing them raises no error: milliseconds against a seconds bound matches ' +
+      'every row, and seconds against a milliseconds bound matches none.',
     'Quote identifiers with backticks when needed.',
     'Use DATE_SUB / DATE_ADD / DATE_FORMAT for date math.',
     "Combine values into one string with GROUP_CONCAT(col SEPARATOR ', ').",
@@ -58,6 +66,10 @@ export const ORACLE_DIALECT: DialectInfo = Object.freeze({
   // The connector caps rows via the driver; the model must not write its own row limit.
   limitStyle: 'fetch',
   promptNotes: Object.freeze([
+    'When a column comment names an epoch unit, build the bound in THAT SAME unit and no other. For ' +
+      "'epoch seconds' compare against a seconds bound unchanged; for 'epoch milliseconds' multiply the " +
+      'seconds bound by 1000. Mixing them raises no error: milliseconds against a seconds bound matches ' +
+      'every row, and seconds against a milliseconds bound matches none.',
     'Do not add a row limit clause (no FETCH FIRST, no ROWNUM, no LIMIT). Order the results and the system returns the top rows.',
     'Use TO_DATE / TO_CHAR / SYSDATE and interval arithmetic for date math.',
     'Unquoted identifiers are case-insensitive and stored upper case; double-quote to preserve case.',
@@ -74,6 +86,10 @@ export const DUCKDB_DIALECT: DialectInfo = Object.freeze({
   promptLabel: 'DuckDB',
   limitStyle: 'limit',
   promptNotes: Object.freeze([
+    'When a column comment names an epoch unit, build the bound in THAT SAME unit and no other. For ' +
+      "'epoch seconds' compare against a seconds bound unchanged; for 'epoch milliseconds' multiply the " +
+      'seconds bound by 1000. Mixing them raises no error: milliseconds against a seconds bound matches ' +
+      'every row, and seconds against a milliseconds bound matches none.',
     'DuckDB follows PostgreSQL syntax for queries.',
     "Combine values into one string with string_agg(col, ', '); SEPARATOR is MySQL syntax and is rejected here.",
     'Uploaded files are already registered as tables - query them by table name, never by file path.',

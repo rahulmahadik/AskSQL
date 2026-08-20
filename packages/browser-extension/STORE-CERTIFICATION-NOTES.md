@@ -1,50 +1,89 @@
 # Notes for Certification
 
-Paste the section below into **Submission Options > Notes for Certification** when resubmitting to the
-Microsoft Edge Add-ons store. It answers policy 1.3.1 (Product is Testable), which the 08/13/2026
-review flagged. Product ID: 248cd48a-7dbe-4cfd-8ec0-df1e07231acd
+Paste the block below into **Submission Options > Notes for Certification** every time the extension is
+submitted or resubmitted. This field is **private to the review team** and is not shown on the public
+listing, so a temporary API key can safely go in it.
+
+The 08/13/2026 and 08/18/2026 reviews both flagged policy 1.3.1 (Product is Testable) with identical
+wording. The cause was not the wording of these notes: the field reaching Microsoft did not contain
+them. The release workflow can send them automatically, but its Edge upload step is gated behind
+`EDGE_PUBLISH_ENABLED` and has never run, so every submission so far has been manual. If the field is
+filled in by hand, it must be filled in with this.
+
+## Before submitting
+
+1. Create a **free Groq API key** at <https://console.groq.com> (no card required) and paste it into
+   the block below where it says `PASTE_KEY_HERE`. Groq's free tier is rate limited and costs nothing.
+2. Note the date you created it. **Revoke it once the review completes** - it exists only for the
+   reviewer.
+3. Do not reuse a key that has billing attached, and never commit a real key to this file.
+4. Confirm the model named below still exists: `curl https://api.groq.com/openai/v1/models -H "Authorization: Bearer $KEY"`.
+   Providers retire models without notice - Groq removed every Llama chat model, and the name previously
+   printed here answered 404, which would read to a reviewer as a product that does not work.
 
 ---
 
 Product ID: 248cd48a-7dbe-4cfd-8ec0-df1e07231acd
 
-**Why no test account credentials are provided**
+**Test credentials**
 
-AskSQL has no accounts, no sign-in, and no server of our own. Nothing is hosted by us, so there is no
-credential we could issue. The extension stores its settings locally and talks only to two things the
-user chooses: their own data files, and their own AI model provider.
+AskSQL has no accounts and no sign-in, so there is no account to issue. What it does need is an AI
+provider, which the user supplies. So that the review does not depend on you creating one, here is a
+temporary key we created for this submission and will revoke afterwards:
 
-Because of that, testing needs no credentials from us. It needs a model provider and a data file, and
-both can be supplied at no cost in a few minutes.
+    Provider: Groq
+    API key:  PASTE_KEY_HERE
 
-**Fastest way to test, with no API key and no account (about 5 minutes)**
+Nothing else is needed. There is no database to connect to for this test, no server of ours, and
+nothing to install.
 
-1. Install Ollama from https://ollama.com (free, no account required) and run:
-   `ollama pull qwen2.5-coder:7b`
-2. Start Ollama with `OLLAMA_ORIGINS=* ollama serve` so it serves on http://127.0.0.1:11434.
-   The variable matters: fetching the model list works without it, but asking a question fails with
-   403, because Ollama rejects the extension's origin on POST requests.
-3. Open the extension's Options page, choose provider **Ollama**, click **Fetch models**, pick the
-   model, and click **Test provider**. It should report success.
-4. Add a connection: click **Add connection**, choose **Data files**, and select any CSV or Excel
-   file. Any small spreadsheet works; no database server is needed.
-5. Open the side panel and ask a question about the file, for example "how many rows are there?" or
-   "show me the first 10 records".
+**Test it in about two minutes**
 
-**Alternative, if you prefer a hosted provider**
+1. Save these six lines as `sales.csv` anywhere on the machine:
 
-Any OpenAI, Anthropic or Groq API key works. Enter it in the Options page under the matching provider
-and follow steps 3 to 5 above. We cannot include one of our keys in this submission, because the key
-would be visible to anyone who reads the listing and would be billed to us.
+        id,customer,region,amount
+        1,Ada,EU,1200.50
+        2,Grace,NA,980.00
+        3,Kat,NA,1500.25
+        4,Ada,EU,300.00
+        5,Linus,APAC,75.99
 
-**What the extension sends where**
+2. Click the AskSQL toolbar icon to open the side panel, then open **Settings**.
+3. Under **AI provider**, choose **Groq**, paste the key above, click **Fetch models**, pick
+   `openai/gpt-oss-20b`, and click **Test provider**. It reports success.
+4. Under **Connections**, click **Add connection**, choose **Data files**, and select `sales.csv`.
+   The file is read inside the browser into DuckDB-WASM; nothing is uploaded.
+5. In the side panel, ask: **"What is the total amount per region?"**
+   You should see the SQL it wrote, and a result of three rows: EU 1500.50, NA 2480.25, APAC 75.99.
 
-Questions and database schema go only to the provider the user configures, over a connection they
-control. Data files are read in the browser and never uploaded to us. The extension has no analytics
-and no backend. Generated SQL is read-only and is checked before it runs, so a query cannot modify
-the user's data.
+Asking "delete all rows" is a good second test: the extension refuses it, because the generated SQL is
+checked and only read-only statements are allowed to run.
+
+**If you prefer to use no key at all**
+
+Steps 1, 2 and 4 work with no provider configured and no network access: the file loads, the tables
+and columns are listed, and the UI is fully exercised. Only step 5, which needs a model, requires the
+key. A local model also works: install Ollama from ollama.com, run `ollama pull qwen2.5-coder:7b`, and
+choose provider **Ollama** with base URL `http://localhost:11434/v1` and no key.
+
+**Permissions**
+
+Host permissions are optional and requested per site, only when the tester configures an AI endpoint or
+an AskSQL server at that address. They are never requested up front.
+
+`declarativeNetRequestWithHostAccess` is used for exactly one purpose: removing the `Origin` header
+from requests to the AI endpoint the user configured. Local AI servers such as Ollama and LM Studio
+reject a `chrome-extension://` origin by default, which would otherwise make the extension unusable
+with a local model. The rule removes a header. It never adds, forges, blocks or redirects anything, and
+never applies to any other address. PRIVACY.md in the package documents this.
+
+**Data handling**
+
+No analytics, no telemetry, and no server operated by us. Only the schema - table and column names -
+and the question the user typed are sent to the AI endpoint the user chose. Row data and query results
+are never sent. Data files are read in the browser and never uploaded.
 
 **If anything blocks the review**
 
-Please include the Product ID in any reply and we will respond quickly with whatever else is helpful,
-including a recorded walkthrough if that is easier than running it locally.
+Please include the Product ID in any reply. We will respond quickly with whatever helps, including a
+recorded walkthrough if that is easier than running it.

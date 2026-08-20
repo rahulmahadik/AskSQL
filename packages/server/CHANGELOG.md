@@ -1,5 +1,11 @@
 # @asksql/server
 
+## 0.6.3
+
+### Patch Changes
+
+- Documentation only: the privacy section now describes every path that the cell-value opt-in gates.
+
 ## 0.6.2
 
 ### Patch Changes

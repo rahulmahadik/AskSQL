@@ -5,6 +5,18 @@
  * rather than fatal, so nothing here throws on a locked-down schema.
  */
 
+import {
+  epochUnitOf,
+  HINT_VALUE_CAP,
+  isMomentColumn,
+  isJsonCandidateColumn,
+  jsonHint,
+  jsonShapeOf,
+  jsonArrayElementOf,
+  JSON_SAMPLE_ROWS,
+  MAX_HINT_PROBES,
+  MAX_HINT_PROBES_PER_TABLE,
+} from '@asksql/core';
 import type {
   ColumnInfo,
   EnumTypeInfo,
@@ -74,6 +86,83 @@ async function samplePgColumn(
     vals.push(s);
   }
   return vals.length > 0 ? vals : undefined;
+}
+
+/** `->>` and `@>` exist on json/jsonb only; a text column holding JSON needs the cast or the hint
+ * suggests SQL that cannot run. */
+function jsonRef(col: { name: string; dbType: string }): string {
+  // Quoted like the probe: unquoted, a mixed-case name folds and the expression fails.
+  const ref = quotePg(col.name);
+  return /^jsonb?$/i.test(col.dbType.trim()) ? ref : `(${ref})::jsonb`;
+}
+
+/**
+ * States what a Postgres column's type leaves out: the unit of an integer timestamp, and the keys inside
+ * a json/jsonb column. Measured before this existed: "events finished after 1 August" compared epoch
+ * MILLISECONDS against epoch seconds and matched every row (3 returned, 2 true), with no error; and a
+ * question about a jsonb field the model could not name was abstained on entirely.
+ *
+ * Structure only - a unit from an aggregate, key names that recur. No cell value is stated.
+ */
+async function withPgColumnHints(db: SampleRunner, tables: TableInfo[], nameKeys: boolean): Promise<TableInfo[]> {
+  let total = MAX_HINT_PROBES;
+  const out: TableInfo[] = [];
+  for (const table of tables) {
+    if (table.kind !== 'table' || total <= 0) {
+      out.push(table);
+      continue;
+    }
+    const rel = `${quotePg(table.schema ?? 'public')}.${quotePg(table.name)}`;
+    // Per table, so filler tables early in the catalog cannot spend every probe.
+    let budget = Math.min(MAX_HINT_PROBES_PER_TABLE, total);
+    const columns: ColumnInfo[] = [];
+    for (const col of table.columns) {
+      const moment = isMomentColumn(col.name, col.dbType);
+      const isJson = isJsonCandidateColumn(col.dbType);
+      if (budget <= 0 || col.comment || (!moment && !isJson)) {
+        columns.push(col); // never overwrite a comment the DBA wrote
+        continue;
+      }
+      budget--;
+      total--;
+      try {
+        // Without a savepoint one failed probe aborts the shared transaction and every later one
+        // dies with 25P02, undescribed and swallowed.
+        await db.query('SAVEPOINT asksql_hint').catch(() => {});
+        if (moment) {
+          const res = await db.query(
+            `SELECT MIN(${quotePg(col.name)}) AS lo, MAX(${quotePg(col.name)}) AS hi FROM ${rel}`,
+          );
+          const first = (res.rows as Record<string, unknown>[])[0];
+          const unit = epochUnitOf(Number(first?.['lo']), Number(first?.['hi']));
+          columns.push(unit ? { ...col, comment: unit } : col);
+        } else {
+          const res = await db.query(
+            `SELECT left(${quotePg(col.name)}::text, ${HINT_VALUE_CAP}) AS v FROM ${rel} WHERE ${quotePg(col.name)} IS NOT NULL ` +
+              `LIMIT ${JSON_SAMPLE_ROWS}`,
+          );
+          const vals = (res.rows as Record<string, unknown>[]).map((r) => r['v']);
+          const shape = vals.length > 0 ? jsonShapeOf(vals) : null;
+          const el = shape ? null : vals.length > 0 ? jsonArrayElementOf(vals) : null;
+          columns.push(
+            shape
+              ? { ...col, comment: jsonHint(`${jsonRef(col)}->>'key'`, shape.keys, nameKeys) }
+              : el
+                ? {
+                    ...col,
+                    comment: `JSON array of ${el}s; test membership with ${jsonRef(col)} @> '${el === 'number' ? '1' : '"a"'}'`,
+                  }
+                : col,
+          );
+        }
+      } catch {
+        await db.query('ROLLBACK TO SAVEPOINT asksql_hint').catch(() => {});
+        columns.push(col);
+      }
+    }
+    out.push({ ...table, columns });
+  }
+  return out;
 }
 
 function str(v: unknown): string {
@@ -501,10 +590,28 @@ export async function introspectPostgres(
   const sequences: SequenceInfo[] = seqRows.rows.map((r) => ({ schema: str(r['schema']), name: str(r['name']) }));
   const extensions = extRows.rows.map((r) => str(r['extname']));
 
+  const hintClient = db.connect ? await db.connect().catch(() => null) : null;
+  const hintRunner: SampleRunner = hintClient ?? db;
+  let hintedTables = tables;
+  try {
+    if (hintClient) {
+      await hintClient.query('BEGIN READ ONLY').catch(() => {});
+      await hintClient.query(`SET LOCAL statement_timeout = ${SAMPLE_STATEMENT_TIMEOUT_MS}`).catch(() => {});
+    }
+    hintedTables = await withPgColumnHints(hintRunner, tables, sampleColumnValues);
+  } catch {
+    // Hints are best-effort; a catalog read never fails over them.
+  } finally {
+    if (hintClient) {
+      await hintClient.query('COMMIT').catch(() => {});
+      hintClient.release();
+    }
+  }
+
   return {
     engine: 'postgres',
     schemas: schemas.length > 0 ? schemas : ['public'],
-    tables,
+    tables: hintedTables,
     enums,
     sequences,
     triggers,

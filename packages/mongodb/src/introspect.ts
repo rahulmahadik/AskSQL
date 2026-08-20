@@ -55,7 +55,13 @@ function recordInDoc(
   if (example !== null) entry.examples.add(example);
 }
 
-function walkValue(value: unknown, path: string, depth: number, docPaths: Map<string, DocPath>): void {
+function walkValue(
+  value: unknown,
+  path: string,
+  depth: number,
+  docPaths: Map<string, DocPath>,
+  parentOf: Map<string, string>,
+): void {
   if (value === null || value === undefined) {
     recordInDoc(docPaths, path, null, null, true);
     return;
@@ -63,7 +69,7 @@ function walkValue(value: unknown, path: string, depth: number, docPaths: Map<st
   const type = bsonTypeOf(value);
   if (type === 'object') {
     recordInDoc(docPaths, path, 'object', null, false);
-    if (depth < MAX_DEPTH) walkObject(value as Record<string, unknown>, path, depth + 1, docPaths);
+    if (depth < MAX_DEPTH) walkObject(value as Record<string, unknown>, path, depth + 1, docPaths, parentOf);
     return;
   }
   if (type === 'array') {
@@ -75,7 +81,7 @@ function walkValue(value: unknown, path: string, depth: number, docPaths: Map<st
       for (const el of arr) {
         if (descended >= MAX_ARRAY_DESCENT) break;
         if (el !== null && el !== undefined && bsonTypeOf(el) === 'object') {
-          walkObject(el as Record<string, unknown>, path, depth + 1, docPaths);
+          walkObject(el as Record<string, unknown>, path, depth + 1, docPaths, parentOf);
           descended += 1;
         }
       }
@@ -85,9 +91,21 @@ function walkValue(value: unknown, path: string, depth: number, docPaths: Map<st
   recordInDoc(docPaths, path, type, displayScalar(value), false);
 }
 
-function walkObject(obj: Record<string, unknown>, prefix: string, depth: number, docPaths: Map<string, DocPath>): void {
+function walkObject(
+  obj: Record<string, unknown>,
+  prefix: string,
+  depth: number,
+  docPaths: Map<string, DocPath>,
+  /** Path to its true parent, filled as the walk descends. The empty string means the document root. */
+  parentOf: Map<string, string>,
+): void {
   for (const [key, val] of Object.entries(obj)) {
-    walkValue(val, prefix ? `${prefix}.${key}` : key, depth, docPaths);
+    const path = prefix ? `${prefix}.${key}` : key;
+    // The parent is recorded as the walk descends. Recovering it from the path text cannot work: a key
+    // may itself contain dots, and a prefix colliding with a real field steals the split, leaving only
+    // the tail to be judged - which is how `latency.{"db.internal"}` kept its key as a column name.
+    parentOf.set(path, prefix);
+    walkValue(val, path, depth, docPaths, parentOf);
   }
 }
 
@@ -116,13 +134,88 @@ function mergeDoc(stats: Map<string, PathAccumulator>, docPaths: Map<string, Doc
   }
 }
 
+/** A child field is part of the record's shape once it recurs in this share of the parent's documents. */
+const STABLE_CHILD_RATIO = 0.6;
+
+/** A path segment that reads as a field name; one that does not is a key, which is data. */
+const FIELD_SEGMENT = /^[\p{L}_][\p{L}\p{N}_]{0,39}$/u;
+
+/** Documents per child, averaged, below which the names look like keys rather than a record's fields. */
+const MIN_CHILD_REUSE = 2;
+
+/** Below this many documents holding the parent, reuse says nothing, so only the key's shape decides. */
+const MIN_DOCS_FOR_REUSE = 3;
+
+/** More children than a record plausibly has; past this, saturated names are still a map's keys. */
+const MAX_RECORD_FIELDS = 12;
+
+/** Stands in for the document root, which is a parent with no column of its own. */
+const ROOT = '\u0000root';
+
+/**
+ * Paths whose children are data rather than field names. `{ owed: { "ada@example.com": 120 } }` makes
+ * every address a column NAME, and a name is never stripped by the data opt-in, so those reach the
+ * prompt by default. A record repeats its fields across documents; a map does not.
+ *
+ * Judged per child, so a summary field beside the keys keeps its name. Shape decides first, then
+ * reuse. Known residual: a small fixed key set present on every document still reads as a record.
+ *
+ * Returns each parent's data-bearing child paths.
+ */
+function mapShapedPaths(
+  stats: Map<string, PathAccumulator>,
+  totalDocs: number,
+  parentOf: Map<string, string>,
+): Map<string, string[]> {
+  const childrenOf = new Map<string, string[]>();
+  for (const path of stats.keys()) {
+    const parent = parentOf.get(path) || ROOT;
+    const list = childrenOf.get(parent);
+    if (list) list.push(path);
+    else childrenOf.set(parent, [path]);
+  }
+
+  const collapse = new Map<string, string[]>();
+  for (const [parent, children] of childrenOf) {
+    const acc = parent === ROOT ? { presentDocs: totalDocs } : stats.get(parent);
+    if (!acc) continue;
+    const needed = Math.max(MIN_CHILD_REUSE, acc.presentDocs * STABLE_CHILD_RATIO);
+    // Only children that could be fields count towards saturation; dotted keys beside one real field
+    // otherwise diluted the test and the field was deleted.
+    const nameable = children.filter((c) => FIELD_SEGMENT.test(parent === ROOT ? c : c.slice(parent.length + 1)));
+    const occurrences = nameable.reduce((n, c) => n + (stats.get(c)?.presentDocs ?? 0), 0);
+    // Capped as well as summed: the average alone only asks whether names recur twice each, which any
+    // large map satisfies, and recurrence rises with the sample size.
+    const keysRecur = nameable.length <= MAX_RECORD_FIELDS && occurrences >= nameable.length * MIN_CHILD_REUSE;
+    // At the ROOT shape decides alone: one document per integration is ordinary and its names do not
+    // recur, so judging the root by reuse returned a catalog of just `_id`.
+    const enoughEvidence = parent !== ROOT && acc.presentDocs >= MIN_DOCS_FOR_REUSE;
+    const data = children.filter((child) => {
+      const segment = parent === ROOT ? child : child.slice(parent.length + 1);
+      if (!FIELD_SEGMENT.test(segment)) return true;
+      return enoughEvidence && !keysRecur && (stats.get(child)?.presentDocs ?? 0) < needed;
+    });
+    if (data.length === 0) continue;
+    // A lone field-shaped child is a sparse field, not a map; dropping it would lose a real name.
+    const firstSegment = parent === ROOT ? data[0]! : data[0]!.slice(parent.length + 1);
+    if (data.length < 2 && FIELD_SEGMENT.test(firstSegment)) continue;
+    collapse.set(parent, data);
+  }
+  return collapse;
+}
+
 function buildColumns(
   stats: Map<string, PathAccumulator>,
   totalSampled: number,
   sampleColumnValues: boolean,
+  parentOf: Map<string, string>,
 ): ColumnInfo[] {
   const columns: ColumnInfo[] = [];
+  const collapse = mapShapedPaths(stats, totalSampled, parentOf);
+  const dataKeys = [...collapse.values()].flat();
   for (const [path, acc] of stats) {
+    // A key of a map-shaped path is data, not a field: it must not become a column name.
+    if (dataKeys.some((key) => path === key || path.startsWith(`${key}.`))) continue;
     const types = [...acc.types].sort();
     const dbType = types.length === 0 ? 'unknown' : types.length === 1 ? types[0]! : `mixed(${types.join('|')})`;
     const nullable = acc.hadNull || acc.presentDocs < totalSampled;
@@ -131,7 +224,11 @@ function buildColumns(
       name: path,
       dbType,
       nullable,
-      comment: `present in ${pct}% of ${totalSampled} sampled documents`,
+      comment:
+        path !== ROOT && collapse.has(path)
+          ? `map-shaped: its keys are data, not field names (${collapse.get(path)!.length} distinct keys in ` +
+            `${totalSampled} sampled documents); read with $objectToArray`
+          : `present in ${pct}% of ${totalSampled} sampled documents`,
       ...(sampleColumnValues && !acc.capExceeded && acc.examples.size > 0 ? { sampledValues: [...acc.examples] } : {}),
     };
     columns.push(column);
@@ -147,12 +244,13 @@ function buildColumns(
  */
 export function inferColumns(docs: readonly Record<string, unknown>[], sampleColumnValues: boolean): ColumnInfo[] {
   const stats = new Map<string, PathAccumulator>();
+  const parentOf = new Map<string, string>();
   for (const doc of docs) {
     const docPaths = new Map<string, DocPath>();
-    walkObject(doc, '', 1, docPaths);
+    walkObject(doc, '', 1, docPaths, parentOf);
     mergeDoc(stats, docPaths);
   }
-  return buildColumns(stats, docs.length, sampleColumnValues);
+  return buildColumns(stats, docs.length, sampleColumnValues, parentOf);
 }
 
 async function estimateCount(db: DbLike, name: string): Promise<number | null> {

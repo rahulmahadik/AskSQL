@@ -222,6 +222,10 @@ tasks {
                 excludeCategories("com.rahulmahadik.asksql.ide.test.IntegrationTest")
             }
         }
+        // The parity specs are read from disk at runtime, so Gradle cannot infer them. Without this a
+        // changed vector leaves the task UP-TO-DATE and the parity guard silently never runs.
+        inputs.files(fileTree("tools/parity/vectors") { include("*.json") })
+            .withPropertyName("parityVectors").optional()
         systemProperty("idea.force.use.core.classloader", "true")
         // Painting Swing to a PNG needs real font metrics and a window peer: opt in with -PrenderUi=true.
         if (providers.gradleProperty("renderUi").orNull == "true") {

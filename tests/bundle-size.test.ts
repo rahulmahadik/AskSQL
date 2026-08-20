@@ -30,8 +30,16 @@ const BUDGETS: Record<string, number> = {
   // and a repair now names the table that holds the missing column and the join that reaches it.
   // 97->100: the epoch floor, which catches a numeric column compared against a date, the SQLite date
   // note that tells the model which units an INTEGER column is in, and the MATCH rewrite that lets a
-  // full-text query be validated at all.
-  core: 100,
+  // full-text query be validated at all. 100->101: the coded-value floor, which confirms an integer
+  // code against the database rather than letting a guessed ordinal answer zero. 101->102: reasoning
+  // models narrate before answering, and that monologue was reaching the reader through Explain.
+  // 102->104: the shared column hints (epoch unit, JSON keys, JSON array element) that Postgres, MySQL
+  // and SQLite now share rather than each carrying a copy, plus the per-dialect epoch-unit prompt note.
+  // 105->107: the streaming reasoning filter, the loopback refusal that keeps an API key off localhost,
+  // and the range-based epoch classifier.
+  // 107->108: the measurement-name exclusion, the statement-scope owner resolution, and grouping the
+  // coded probes by column.
+  core: 108,
   // 20 -> 23: copy controls, streamed-token progress, cell tooltips, export feedback, result-grid copy.
   react: 23,
   // 12 -> 14: the CSRF/Host gate every adapter inherits, client-path confinement for file engines,
@@ -41,7 +49,10 @@ const BUDGETS: Record<string, number> = {
   postgres: 14,
   mysql: 14,
   sqlite: 10,
-  duckdb: 12,
+  // 12->13: the shared column hints, which state an epoch unit and JSON keys that a CSV or Parquet
+  // source never declares.
+  // 13->14: the shared hint pass the browser build now runs too, and its probe bound.
+  duckdb: 14,
 };
 
 /** Every emitted .js, at any depth: a subdirectory is shipped code like any other. */
@@ -79,6 +90,6 @@ describe('bundle-size budgets (gzipped, own code)', () => {
     if (core === null || react === null) return;
     // Own code only (React is a peer). The same recursion correction as core's accounts for 96->113;
     // the rest is identifier normalisation, the reserved-word lists and the routing work.
-    expect(core + react).toBeLessThan(122);
+    expect(core + react).toBeLessThan(131);
   });
 });

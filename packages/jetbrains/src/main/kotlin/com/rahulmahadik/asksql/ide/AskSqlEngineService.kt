@@ -42,7 +42,11 @@ class AskSqlEngineService(private val project: Project, private val scope: Corou
     }
 
     // The pipeline is a long-lived singleton; its policy and token budget are re-read from settings on every access.
-    val pipeline: EnginePipeline get() = pipelineInstance.also { it.policy = currentGuardPolicy(); it.maxSchemaTokens = currentSchemaTokenBudget() }
+    val pipeline: EnginePipeline get() = pipelineInstance.also {
+        it.policy = currentGuardPolicy()
+        it.maxSchemaTokens = currentSchemaTokenBudget()
+        it.allowDataInPrompt = AskSqlAppSettings.getInstance().allowDataInPrompt
+    }
     val mongoPipeline: MongoEnginePipeline get() = mongoPipelineInstance.also {
         it.policy = currentMongoGuardPolicy()
         it.maxSchemaTokens = currentSchemaTokenBudget()

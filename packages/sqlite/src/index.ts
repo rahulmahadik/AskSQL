@@ -5,6 +5,18 @@
  * cancellation are cooperative: a pre-flight abort check and a row cap, no mid-statement stop.
  */
 
+import {
+  epochUnitOf,
+  HINT_VALUE_CAP,
+  isJsonCandidateColumn,
+  isMomentColumn,
+  jsonArrayElementOf,
+  jsonHint,
+  jsonShapeOf,
+  JSON_SAMPLE_ROWS,
+  MAX_HINT_PROBES,
+  MAX_HINT_PROBES_PER_TABLE,
+} from '@asksql/core';
 import { closeSync, openSync, readSync, statSync } from 'node:fs';
 import {
   AskSqlError,
@@ -73,31 +85,6 @@ const MAX_SAMPLE_VALUE_LEN = 64;
 /** SQLite TEXT-affinity types (declared type contains CHAR/CLOB/TEXT). */
 function isSampleableSqliteType(dbType: string): boolean {
   return /char|clob|text/i.test(dbType);
-}
-
-/** How many columns a catalog read will probe for their epoch unit before it stops. */
-const MAX_UNIT_PROBES = 40;
-
-/** An integer column whose name says it holds a moment; the unit is not in the type. */
-const TIMEISH_NAME =
-  /(?:^|_)(?:at|ts|time|date|timestamp|created|updated|modified|deleted|expires?|expiry|last_seen|sent|received|due|start|end|since|until)(?:_|$)|(?:time|date|timestamp)$/i;
-
-/** SQLite integer affinity: the declared type says nothing about seconds versus milliseconds. */
-const INTEGERISH =
-  /^(?:big\s*int|int|integer|int2|int4|int8|smallint|tinyint|mediumint|unsigned\s+big\s+int|numeric)\b/i;
-
-/**
- * Which epoch unit a magnitude is in. Nothing in a SQLite schema says whether an integer timestamp
- * counts seconds or milliseconds, and guessing seconds against milliseconds matches every row. Decided
- * from an aggregate, so only the unit is stated, never a value.
- */
-function epochUnitOf(max: number): string | null {
-  if (!Number.isFinite(max) || max <= 0) return null;
-  if (max >= 1e17) return 'epoch nanoseconds';
-  if (max >= 1e14) return 'epoch microseconds';
-  if (max >= 1e11) return 'epoch milliseconds';
-  if (max >= 1e8) return 'epoch seconds';
-  return null; // too small to be a modern timestamp; saying nothing beats guessing
 }
 
 export class SqliteConnector implements Connector {
@@ -326,9 +313,13 @@ export class SqliteConnector implements Connector {
     let sampleBudget = MAX_SAMPLED_COLUMNS;
     // One aggregate per candidate column: 41ms per million rows, so bounded like value sampling is,
     // in case a schema has dozens of timestamp columns across dozens of tables.
-    let unitBudget = MAX_UNIT_PROBES;
+    let hintTotal = MAX_HINT_PROBES;
+    // Key names are cell data; the accessor is not. See jsonHint.
+    const nameKeys = this.config.sampleColumnValues === true;
 
     for (const o of objs) {
+      // Per table, so filler tables early in the catalog cannot spend every probe.
+      let hintBudget = Math.min(MAX_HINT_PROBES_PER_TABLE, hintTotal);
       const name = String(o['name']);
       const type = String(o['type']);
       const ddl = o['sql'] == null ? null : String(o['sql']);
@@ -369,15 +360,59 @@ export class SqliteConnector implements Connector {
       // scanned for nothing, and base tables only: an aggregate over a view runs the view's query.
       if (type !== 'view') {
         columns = columns.map((col) => {
-          if (unitBudget <= 0 || col.comment || !INTEGERISH.test(col.dbType.trim()) || !TIMEISH_NAME.test(col.name))
-            return col;
-          unitBudget--;
+          if (hintBudget <= 0 || col.comment || !isMomentColumn(col.name, col.dbType)) return col;
+          hintBudget--;
+          hintTotal--;
           try {
-            const rows = this.rows(`SELECT MAX(${quoteIdent(col.name)}) AS m FROM ${quoteIdent(name)}`);
-            const unit = epochUnitOf(Number(rows[0]?.['m']));
+            const rows = this.rows(
+              `SELECT MIN(${quoteIdent(col.name)}) AS lo, MAX(${quoteIdent(col.name)}) AS hi FROM ${quoteIdent(name)}`,
+            );
+            const unit = epochUnitOf(Number(rows[0]?.['lo']), Number(rows[0]?.['hi']));
             return unit ? { ...col, comment: unit } : col;
           } catch {
             return col; // best-effort: an unreadable column simply goes unannotated
+          }
+        });
+      }
+      // A TEXT column holding JSON: describe it so the model reaches for json_extract instead of
+      // guessing at a key and matching with LIKE.
+      if (type !== 'view') {
+        columns = columns.map((col) => {
+          if (hintBudget <= 0 || col.comment || !isJsonCandidateColumn(col.dbType)) return col;
+          // Charged before the query, not after: an empty or throwing probe is still a probe, and an
+          // all-NULL column is a full scan. Counting hits let those run unbounded, so the same file
+          // showed hints in one IDE and not the other once 40 columns had been read.
+          hintBudget--;
+          hintTotal--;
+          try {
+            const rows = this.rows(
+              `SELECT substr(${quoteIdent(col.name)}, 1, ${HINT_VALUE_CAP}) AS v FROM ${quoteIdent(name)} ` +
+                `WHERE ${quoteIdent(col.name)} IS NOT NULL LIMIT ${JSON_SAMPLE_ROWS}`,
+            );
+            if (rows.length === 0) return col;
+            const vals = rows.map((r) => r['v']);
+            const shape = jsonShapeOf(vals);
+            // Naming the keys alone left the model matching with LIKE, which a single space after a
+            // colon defeats silently: on three rows that all mean theme=dark, LIKE found two.
+            if (shape) {
+              return {
+                ...col,
+                comment: jsonHint(`json_extract(${quoteIdent(col.name)}, '$.key')`, shape.keys, nameKeys),
+              };
+            }
+            // A list of ids kept in TEXT is the other common Room shape; json_each is how SQLite tests
+            // membership, and without saying so the model reaches for LIKE against the rendered array.
+            const element = jsonArrayElementOf(vals);
+            return element
+              ? {
+                  ...col,
+                  comment:
+                    `JSON array of ${element}s; test membership with ` +
+                    `EXISTS (SELECT 1 FROM json_each(${quoteIdent(col.name)}) WHERE value = ${element === 'number' ? '1' : "'a'"})`,
+                }
+              : col;
+          } catch {
+            return col;
           }
         });
       }

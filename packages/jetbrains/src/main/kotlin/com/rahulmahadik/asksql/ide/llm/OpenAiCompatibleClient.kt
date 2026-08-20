@@ -24,9 +24,6 @@ internal class OpenAiCompatibleClient(
 
     private val baseUrl = LlmClients.effectiveBaseUrl(config).trimEnd('/')
 
-    /** These are listed next to chat models but answer 404 on /chat/completions. */
-    private val nonChatModel = Regex("""embed|rerank|retriever|[-/]parse$|\bocr\b""", RegexOption.IGNORE_CASE)
-
     init {
         BaseUrlGuard.assertBaseUrl(baseUrl, carriesSecret = !config.apiKey.isNullOrEmpty())
     }
@@ -101,7 +98,9 @@ internal class OpenAiCompatibleClient(
         if (textBuilder.isEmpty()) {
             throw AskSqlException(AskSqlErrorCode.LLM_BAD_OUTPUT, detail = "empty streamed response from $baseUrl")
         }
-        return LlmResult(textBuilder.toString(), LlmUsage(promptTokens, completionTokens))
+        // Cleaned here so every caller - Ask, Explain, the schema answers - gets the answer without the
+        // model's monologue. Explain showed it verbatim before, because it never went through Extract.
+        return LlmResult(LlmClients.withoutReasoning(textBuilder.toString()), LlmUsage(promptTokens, completionTokens))
     }
 
     override suspend fun listModels(): List<String> = LlmClients.onIo {
@@ -115,12 +114,29 @@ internal class OpenAiCompatibleClient(
         } catch (e: java.io.IOException) {
             throw AskSqlException(AskSqlErrorCode.LLM_UNAVAILABLE, detail = e.message, cause = e)
         }
-        if (response.statusCode() >= 400) return@onIo emptyList()
+        // An empty list here read as "this provider has no models". Every cause - a missing key, a
+        // revoked key, a rate limit, an outage - looked identical, and the provider's own explanation
+        // ("Invalid API Key") was discarded. Say what it said.
+        if (response.statusCode() >= 400) {
+            val status = response.statusCode()
+            val said = LlmClients.providerMessage(response.body())
+            val code = when {
+                status == 401 || status == 403 -> AskSqlErrorCode.LLM_AUTH
+                status == 429 -> AskSqlErrorCode.LLM_RATE_LIMIT
+                else -> AskSqlErrorCode.LLM_UNAVAILABLE
+            }
+            val reason = if (said.isNullOrBlank()) "HTTP $status" else "$said (HTTP $status)"
+            throw AskSqlException(
+                code,
+                userMessage = "$baseUrl could not list its models: $reason",
+                detail = "GET $baseUrl/models -> $status: ${response.body().take(500)}",
+            )
+        }
 
         val json = JsonParser.parseString(response.body()).asJsonObject
         val data = json.getAsJsonArray("data") ?: return@onIo emptyList()
         data.mapNotNull { it.asJsonObject?.get("id")?.asString }
-            .filterNot { nonChatModel.containsMatchIn(it) }
+            .filterNot { LlmClients.isNonChatModel(it) }
             .sorted()
     }
 }

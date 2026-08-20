@@ -4,6 +4,7 @@
  * Every call has an explicit timeout - never a transport default.
  */
 
+import { createReasoningFilter, withoutReasoning } from './extract.js';
 import { streamText } from 'ai';
 import { AskSqlError } from './errors.js';
 import type { CustomModel, LlmSettings, LlmUsage, ModelLike } from './types.js';
@@ -202,17 +203,24 @@ const sleep = (ms: number, signal?: AbortSignal) =>
   });
 
 async function callOnce(input: LlmCallInput, signal: AbortSignal, omitTemperature: boolean): Promise<LlmCallResult> {
+  // Hides a reasoning model's narration as it streams. The whole-text strip in callModel only cleans
+  // the assembled reply, which left a streaming host forwarding the monologue to viewers live.
+  const hideReasoning = createReasoningFilter();
+  const emit = (text: string): void => {
+    const visible = hideReasoning(text);
+    if (visible) input.onToken?.(visible);
+  };
   if (isCustomModel(input.model)) {
     const out = await input.model({ system: input.system, prompt: input.prompt, signal });
     if (typeof out === 'string') {
-      if (input.onToken) input.onToken(out);
+      emit(out);
       return { text: out, usage: {} };
     }
     let acc = '';
     for await (const chunk of out) {
       if (signal.aborted) throw new AskSqlError('CANCELLED');
       acc += chunk;
-      input.onToken?.(chunk);
+      emit(chunk);
     }
     return { text: acc, usage: {} };
   }
@@ -236,7 +244,7 @@ async function callOnce(input: LlmCallInput, signal: AbortSignal, omitTemperatur
     }
     if (part.type === 'text-delta') {
       acc += part.text;
-      input.onToken?.(part.text);
+      emit(part.text);
     }
   }
   let usage: { inputTokens?: number; outputTokens?: number } | undefined;
@@ -301,7 +309,10 @@ export async function callModel(input: LlmCallInput): Promise<LlmCallResult> {
           else input.signal.addEventListener('abort', abortReject, { once: true });
         }),
       ]);
-      return result;
+      // Stripped at the boundary: every caller wants the answer, none wants a reasoning model's
+      // monologue. Explain and the schema answers never pass through extractSql, so cleaning it there
+      // alone still showed "<think> The user wants..." to the reader.
+      return { ...result, text: withoutReasoning(result.text) };
     } catch (err) {
       if (timedOut && !(input.signal?.aborted ?? false)) {
         throw AskSqlError.is(err) && err.code === 'LLM_TIMEOUT' ? err : new AskSqlError('LLM_TIMEOUT');

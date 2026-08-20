@@ -3,6 +3,27 @@
 All notable changes to the AskSQL JetBrains plugin are documented here.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.6.0] - 2026-08-20
+
+### Added
+- The schema now states what a column's type cannot: the unit of an integer timestamp, and the shape of
+  a JSON column. Comparing epoch milliseconds against epoch seconds matches every row and raises no
+  error, and a guessed JSON key matches none, so both produced confident wrong answers. Supported on
+  SQLite, PostgreSQL, MySQL, DuckDB and Oracle.
+- A filter comparing a column against a value it does not hold is reported, rather than answering zero
+  as though nothing matched the question.
+
+### Fixed
+- Fetch Models reports the provider's own error instead of coming back empty, so a rejected key, a rate
+  limit and an outage are no longer indistinguishable.
+- Models that cannot answer a question are no longer listed.
+- Output from reasoning models no longer appears in answers or explanations.
+- Switching from a local provider to a hosted one no longer leaves the old base URL in place, which sent
+  requests to this machine and reported success without a key. An existing setting is corrected on open.
+- Settings now ask for the API key before the model, so Fetch Models has what it needs; Test Provider is
+  renamed Test Connection and runs after a model is chosen.
+- The "send sample column values" description now covers every path it gates.
+
 ## [0.5.4] - 2026-08-18
 
 Android Studio is where this plugin is mostly installed, and an Android app's database is SQLite via

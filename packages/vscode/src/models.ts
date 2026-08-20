@@ -16,10 +16,14 @@ import { UserFacingError, userMessage } from './errors.js';
 const LISTABLE_HOSTED: ReadonlySet<ProviderName> = new Set(['openai', 'groq', 'nvidia']);
 
 /**
- * Embedding models are listed next to chat models but cannot write SQL; the
- * name is the only signal these APIs give.
+ * Listed beside chat models but rejected by /chat/completions. Groq is why speech, TTS and classifier
+ * models are here: of its 13 entries only 7 can chat, and the list is alphabetical, so a broken one sits
+ * where the user picks. `\bguard\b` and not `guard`, because gpt-oss-safeguard DOES chat.
  */
-const isNotChatModel = (name: string): boolean => /embed|embedding|rerank|retriever|[-/]parse$|\bocr\b/i.test(name);
+const isNotChatModel = (name: string): boolean =>
+  /embed|embedding|rerank|retriever|[-/]parse$|\bocr\b|whisper|\btts\b|speech|transcribe|orpheus|\bguard\b|moderation/i.test(
+    name,
+  );
 
 async function listOllama(baseURL: string, signal: AbortSignal): Promise<string[]> {
   assertBaseUrl(baseURL);

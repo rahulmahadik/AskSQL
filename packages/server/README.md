@@ -64,7 +64,7 @@ const connector = new PostgresConnector({
 
 const model = await resolveModel({
   provider: 'groq',
-  model: 'llama-3.3-70b-versatile',
+  model: 'openai/gpt-oss-20b', // an example: use whatever your provider lists at /models
   apiKey: process.env.GROQ_API_KEY,
 });
 

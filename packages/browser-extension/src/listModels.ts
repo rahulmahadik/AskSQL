@@ -11,7 +11,15 @@ import { ensureProviderOriginAccess } from './providerAccess.js';
 const LISTABLE_HOSTED: ReadonlySet<ProviderName> = new Set(['openai', 'groq', 'nvidia']);
 const MODEL_LOOKUP_TIMEOUT_MS = 10_000;
 
-const isNotChatModel = (name: string): boolean => /embed|embedding|rerank|retriever|[-/]parse$|\bocr\b/i.test(name);
+/**
+ * Listed beside chat models but rejected by /chat/completions. Groq is why speech, TTS and classifier
+ * models are here: of its 13 entries only 7 can chat, and the list is alphabetical, so a broken one sits
+ * where the user picks. `\bguard\b` and not `guard`, because gpt-oss-safeguard DOES chat.
+ */
+const isNotChatModel = (name: string): boolean =>
+  /embed|embedding|rerank|retriever|[-/]parse$|\bocr\b|whisper|\btts\b|speech|transcribe|orpheus|\bguard\b|moderation/i.test(
+    name,
+  );
 
 /** The endpoint we can list models from, if any (anthropic/google/azure have no such listing). */
 export function listableBaseUrl(provider: ProviderName, configuredBaseURL: string | undefined): string | undefined {

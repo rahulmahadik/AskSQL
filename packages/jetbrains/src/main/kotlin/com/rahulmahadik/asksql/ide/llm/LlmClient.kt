@@ -13,6 +13,7 @@ import kotlinx.coroutines.withContext
 import java.io.BufferedReader
 import java.io.IOException
 import java.io.InputStreamReader
+import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
@@ -27,6 +28,57 @@ interface LlmClient {
 }
 
 object LlmClients {
+
+    /**
+     * A reasoning model narrates before it answers. Stripped at the boundary because every consumer
+     * wants the answer and none wants the monologue; Explain and the schema answers never pass through
+     * Extract, so cleaning it there alone still showed it.
+     */
+    private val THINK_BLOCK = Regex("""<(think|thinking|reasoning)>[\s\S]*?</\1>""", RegexOption.IGNORE_CASE)
+    // Anchored to the start, because that is where a reasoning model opens. Unanchored, a tag appearing
+    // inside the answer truncated it: `WHERE body LIKE '%<think>%'` became an unterminated literal.
+    private val THINK_UNCLOSED =
+        Regex("""^\s*<(?:think|thinking|reasoning)>[\s\S]*$""", RegexOption.IGNORE_CASE)
+
+    fun withoutReasoning(text: String): String =
+        THINK_UNCLOSED.replace(THINK_BLOCK.replace(text, " "), " ").trim()
+
+    /**
+     * Listed beside chat models but rejected by /chat/completions. Groq is why speech, TTS and classifier
+     * models are here: of its 13 entries only 7 can chat, and the list is alphabetical, so a broken one
+     * sits at position 2, where the user picks. `\bguard\b` rather than `guard`, because
+     * gpt-oss-safeguard DOES chat.
+     * Mirrors isNotChatModel in packages/browser-extension/src/listModels.ts and packages/vscode/src/models.ts.
+     */
+    private val NON_CHAT_MODEL = Regex(
+        """embed|rerank|retriever|[-/]parse$|\bocr\b|whisper|\btts\b|speech|transcribe|orpheus|\bguard\b|moderation""",
+        RegexOption.IGNORE_CASE,
+    )
+
+    fun isNonChatModel(name: String): Boolean = NON_CHAT_MODEL.containsMatchIn(name)
+
+    /**
+     * What the provider itself said, from the OpenAI-shaped `{"error":{"message":...}}` body most of them
+     * return. Its own wording ("Invalid API Key", "model_not_found") tells the user far more than a status
+     * code does, so it is never discarded.
+     */
+    fun providerMessage(body: String?): String? {
+        if (body.isNullOrBlank()) return null
+        return try {
+            val root = com.google.gson.JsonParser.parseString(body)
+            if (!root.isJsonObject) return null
+            val obj = root.asJsonObject
+            val error = obj.get("error")
+            val message = when {
+                error != null && error.isJsonObject -> error.asJsonObject.get("message")
+                error != null && error.isJsonPrimitive -> error
+                else -> obj.get("message")
+            }
+            message?.takeIf { !it.isJsonNull }?.asString?.trim()?.takeIf { it.isNotEmpty() }
+        } catch (e: Exception) {
+            null // a non-JSON body simply has nothing quotable in it
+        }
+    }
 
     /** Greedy decoding for every provider, matching core's `buildLlmRequestOptions`. */
     const val TEMPERATURE = 0.0
@@ -95,7 +147,34 @@ object LlmClients {
     }
 
     /** Effective base URL after applying each provider's documented default. */
-    fun effectiveBaseUrl(config: ProviderConfig): String = config.baseUrl ?: when (config.provider) {
+    /**
+     * Providers that run on someone else's machine: a loopback override cannot be one, and each needs
+     * credentials. Ollama, LM Studio and an openai-compatible gateway are absent on purpose.
+     */
+    val HOSTED = setOf(
+        ProviderKind.OPENAI, ProviderKind.GROQ, ProviderKind.NVIDIA, ProviderKind.ANTHROPIC, ProviderKind.GOOGLE,
+    )
+
+    fun effectiveBaseUrl(config: ProviderConfig): String {
+        // A base URL left behind by a local provider sent hosted traffic to localhost, with no key,
+        // and reported success.
+        val override = config.baseUrl
+        if (override != null && config.provider in HOSTED) {
+            val host = runCatching { URI.create(override).host }.getOrNull()
+            if (host != null && BaseUrlGuard.isLoopbackHost(host)) {
+                throw AskSqlException(
+                    AskSqlErrorCode.CONFIG_ERROR,
+                    // Never echo the URL: a gateway URL can embed credentials.
+                    userMessage = "${config.provider.wireName} is a hosted service, but the Base URL override in " +
+                        "AskSQL settings points at this machine. Clear it to reach ${config.provider.wireName}, " +
+                        "or pick Ollama or LM Studio if you meant the local server.",
+                )
+            }
+        }
+        return override ?: defaultBaseUrl(config.provider)
+    }
+
+    private fun defaultBaseUrl(provider: ProviderKind): String = when (provider) {
         ProviderKind.OPENAI -> DefaultEndpoints.OPENAI_BASE_URL
         ProviderKind.GROQ -> DefaultEndpoints.GROQ_BASE_URL
         ProviderKind.OLLAMA -> DefaultEndpoints.OLLAMA_BASE_URL
@@ -151,10 +230,12 @@ object LlmClients {
             if (response.statusCode() >= 400) {
                 val body = response.body().bufferedReader(StandardCharsets.UTF_8).use { it.readText() }
                 if (response.statusCode() == 404) {
+                    val said = providerMessage(body)
                     throw AskSqlException(
                         AskSqlErrorCode.CONFIG_ERROR,
-                        userMessage = "The AI provider has no chat model with that name. It may be an embedding or reranking model, " +
-                            "or one your API key has no access to - pick a different model in Settings " +
+                        userMessage = (if (said.isNullOrBlank()) "The AI provider has no chat model with that name." else said) +
+                            " It may be a retired model, a non-chat model, or one your API key has no access to - " +
+                            "click Fetch Models in Settings and pick from the list " +
                             "(for Ollama, pull it first with `ollama pull <model>`).",
                         detail = "HTTP 404: ${body.take(500)}",
                     )
@@ -166,7 +247,16 @@ object LlmClients {
                     status == 429 -> AskSqlErrorCode.LLM_RATE_LIMIT
                     else -> AskSqlErrorCode.LLM_UNAVAILABLE
                 }
-                throw AskSqlException(code, detail = "HTTP ${response.statusCode()}: ${body.take(500)}")
+                val said = providerMessage(body)
+                throw AskSqlException(
+                    code,
+                    userMessage = if (said.isNullOrBlank()) {
+                        AskSqlException.defaultUserMessage(code)
+                    } else {
+                        "${AskSqlException.defaultUserMessage(code)} The provider said: $said"
+                    },
+                    detail = "HTTP ${response.statusCode()}: ${body.take(500)}",
+                )
             }
             val stream = response.body()
             callerJob.invokeOnCompletion { cause ->

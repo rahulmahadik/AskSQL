@@ -5,6 +5,7 @@
  */
 
 import pkg from 'node-sql-parser';
+import { isMomentColumn } from './column-hints.js';
 import { withoutFetchTail } from './strip.js';
 
 const { Parser } = pkg as unknown as {
@@ -277,6 +278,138 @@ interface TypedCatalog {
     readonly name: string;
     readonly columns: readonly { readonly name: string; readonly dbType?: string }[];
   }[];
+}
+
+/** Enough of a catalog to tell a coded column from an identifier. */
+interface CodedCatalog {
+  readonly tables: readonly {
+    readonly name: string;
+    readonly schema?: string;
+    readonly kind?: string;
+    readonly primaryKey?: readonly string[];
+    readonly foreignKeys?: readonly { readonly columns?: readonly string[] }[];
+    readonly columns: readonly { readonly name: string; readonly dbType?: string }[];
+  }[];
+}
+
+export interface CodeLiteral {
+  /** Carried so the probe can qualify the relation; without it the check was inert off search_path. */
+  readonly schema?: string;
+  readonly table: string;
+  readonly column: string;
+  readonly literal: number;
+}
+
+/**
+ * A measurement, not a code. An absent age or salary is a true zero, and a small range does not make a
+ * number a code: thirty distinct ages sit well under the distinct-value cap.
+ */
+const MEASURE_NAME =
+  /(?:^|_)(?:age|salary|wage|pay|price|amount|cost|fee|total|sum|qty|quantity|count|score|rating|rank|year|month|day|week|hour|minute|second|size|weight|height|width|length|depth|duration|percent|percentage|rate|balance|stock|level)s?$/i;
+
+/** An identifier, not a code: an absent id is an ordinary empty result and must not be second-guessed. */
+const ID_NAME = /(?:^|_)(?:id|ids|key|uuid|guid|hash)$/i;
+
+/** The named table, if it has the column. */
+function ownerNamed(table: string, catalog: CodedCatalog, column: string): CodedCatalog['tables'][number] | null {
+  const found = catalog.tables.find((t) => t.name.toLowerCase() === table.toLowerCase());
+  return found && found.columns.some((c) => c.name.toLowerCase() === column.toLowerCase()) ? found : null;
+}
+
+/**
+ * Which table a bare column belongs to, among the tables this statement names. Judged against the whole
+ * catalog, any schema with two `status` columns made every such reference ambiguous. A name two tables
+ * in the same query share is still skipped.
+ */
+function ownerOf(
+  column: string,
+  catalog: CodedCatalog,
+  inScope?: Map<string, string>,
+): CodedCatalog['tables'][number] | null {
+  const named = inScope && inScope.size > 0 ? new Set([...inScope.values()].map((t) => t.toLowerCase())) : null;
+  const pool = named ? catalog.tables.filter((t) => named.has(t.name.toLowerCase())) : catalog.tables;
+  const owners = pool.filter((t) => t.columns.some((c) => c.name.toLowerCase() === column.toLowerCase()));
+  return owners.length === 1 ? owners[0]! : null;
+}
+
+/**
+ * An integer column compared against a whole-number code: `status = 2`. What 2 means lives in the
+ * application, so a wrong ordinal matches nothing and reads as a true zero. Identifiers and moments are
+ * excluded - an absent id is an ordinary empty result, not a guess.
+ */
+export function codeLiterals(sql: string, grammar: string, catalog: CodedCatalog): CodeLiteral[] {
+  let ast: unknown;
+  try {
+    ast = parser.parse(withoutFetchTail(sql), { database: grammar }).ast;
+  } catch {
+    return [];
+  }
+
+  const found: CodeLiteral[] = [];
+  const seen = new Set<string>();
+
+  const consider = (maybeColumn: unknown, maybeValue: unknown, inScope: Map<string, string>): void => {
+    if (!isNode(maybeColumn) || maybeColumn['type'] !== 'column_ref') return;
+    const column = columnNameOf(maybeColumn);
+    if (!column || ID_NAME.test(column) || MEASURE_NAME.test(column)) return;
+    const dbType = dbTypeOf(column, catalog);
+    if (!dbType || !INTEGER_DB_TYPE.test(dbType.trim())) return;
+    if (isMomentColumn(column, dbType)) return;
+    // Read first: without it, two tables sharing `status` made every such reference ambiguous.
+    const qualifier = typeof maybeColumn['table'] === 'string' ? maybeColumn['table'].toLowerCase() : null;
+    const owner = qualifier
+      ? ownerNamed(inScope.get(qualifier) ?? qualifier, catalog, column)
+      : ownerOf(column, catalog, inScope);
+    if (!owner) return;
+    // Reading a view runs its query.
+    if (owner.kind && owner.kind !== 'table') return;
+    if ((owner.primaryKey ?? []).some((c) => c.toLowerCase() === column.toLowerCase())) return;
+    if ((owner.foreignKeys ?? []).some((f) => (f.columns ?? []).some((c) => c.toLowerCase() === column.toLowerCase())))
+      return;
+    if (!isNode(maybeValue) || maybeValue['type'] !== 'number' || typeof maybeValue['value'] !== 'number') return;
+    if (!Number.isInteger(maybeValue['value'])) return; // a measure, not a code
+    const id = `${owner.name}.${column}=${maybeValue['value']}`.toLowerCase();
+    if (seen.has(id)) return;
+    seen.add(id);
+    found.push({ schema: owner.schema, table: owner.name, column, literal: maybeValue['value'] });
+  };
+
+  /**
+   * Follows AND from WHERE only. Under OR, NOT, CASE or a partial IN the query returns rows, so a
+   * caveat there contradicts the answer beside it. IN is left out entirely: values are confirmed one at
+   * a time, so a list holding one real value would still read as impossible.
+   */
+  const walkConjunction = (node: unknown, depth: number, inScope: Map<string, string>): void => {
+    if (!isNode(node) || depth > 40) return;
+    if (Array.isArray(node)) return;
+    const type = node['type'];
+    if (type === 'unary_expr' || type === 'case') return;
+    if (type === 'binary_expr') {
+      const operator = String(node['operator'] ?? '').toUpperCase();
+      if (operator === 'OR') return;
+      if (operator === 'AND') {
+        walkConjunction(node['left'], depth + 1, inScope);
+        walkConjunction(node['right'], depth + 1, inScope);
+        return;
+      }
+      if (operator === '=') {
+        consider(node['left'], node['right'], inScope);
+        consider(node['right'], node['left'], inScope);
+      }
+      return;
+    }
+  };
+
+  for (const statement of (Array.isArray(ast) ? ast : [ast]) as unknown[]) {
+    if (!isNode(statement) || statement['type'] !== 'select') continue;
+    const inScope = new Map<string, string>();
+    for (const t of fromTables(statement)) {
+      if (t.alias) inScope.set(t.alias.toLowerCase(), t.table);
+      inScope.set(t.table.toLowerCase(), t.table);
+    }
+    walkConjunction(statement['where'], 0, inScope);
+  }
+  return found;
 }
 
 /**

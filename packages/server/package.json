@@ -1,6 +1,6 @@
 {
   "name": "@asksql/server",
-  "version": "0.6.2",
+  "version": "0.6.3",
   "description": "AskSQL server sidecar: credential-holding HTTP handler with auth hook, server-side SQL guard, audit log. Framework-agnostic + Express/Next adapters.",
   "type": "module",
   "main": "./dist/index.js",
@@ -62,13 +62,13 @@
     "text2sql"
   ],
   "devDependencies": {
-    "@asksql/core": "workspace:>=0.7.0",
-    "@asksql/postgres": "workspace:>=0.3.2",
-    "@asksql/mysql": "workspace:>=0.3.1",
-    "@asksql/oracle": "workspace:>=0.3.1",
-    "@asksql/mongodb": "workspace:>=0.2.1",
-    "@asksql/sqlite": "workspace:>=0.4.0",
-    "@asksql/duckdb": "workspace:>=0.3.2"
+    "@asksql/core": "workspace:>=0.9.0",
+    "@asksql/postgres": "workspace:>=0.4.0",
+    "@asksql/mysql": "workspace:>=0.4.0",
+    "@asksql/oracle": "workspace:>=0.4.0",
+    "@asksql/mongodb": "workspace:>=0.3.0",
+    "@asksql/sqlite": "workspace:>=0.6.0",
+    "@asksql/duckdb": "workspace:>=0.4.0"
   },
   "peerDependencies": {
     "@asksql/core": "workspace:>=0.6.0",

@@ -5,6 +5,18 @@
  * user cannot read yields a warning, not a throw; enums and sampled values are always empty.
  */
 
+import {
+  epochUnitOf,
+  HINT_VALUE_CAP,
+  isMomentColumn,
+  isJsonCandidateColumn,
+  jsonArrayElementOf,
+  jsonHint,
+  jsonShapeOf,
+  JSON_SAMPLE_ROWS,
+  MAX_HINT_PROBES,
+  MAX_HINT_PROBES_PER_TABLE,
+} from '@asksql/core';
 import type {
   ColumnInfo,
   ForeignKeyInfo,
@@ -32,10 +44,105 @@ function strOrNull(v: unknown): string | null {
   return v === null || v === undefined ? null : String(v);
 }
 
+/**
+ * States what an Oracle column's type leaves out: the unit of a NUMBER holding a moment, and the keys
+ * inside JSON kept in VARCHAR2/CLOB (or the native JSON type on 21c+). Comparing epoch milliseconds
+ * against epoch seconds matches every row and raises no error, and a JSON key the model has to guess at
+ * matches none. Structure only - a unit from an aggregate, key names that recur; no cell value is stated.
+ */
+/** Seconds a single probe may take; without it each of them inherited the whole-introspect bound. */
+const HINT_PROBE_TIMEOUT_MS = 2000;
+
+async function withOraColumnHints(
+  db: OracleQueryable,
+  outFormatObject: number,
+  tables: TableInfo[],
+  nameKeys: boolean,
+): Promise<TableInfo[]> {
+  // callTimeout is per round trip, so every probe got a fresh 60s. Bounded here and restored after.
+  const conn = db as unknown as { callTimeout?: number };
+  const previousTimeout = conn.callTimeout;
+  try {
+    conn.callTimeout = HINT_PROBE_TIMEOUT_MS;
+  } catch {
+    // A driver without the knob simply keeps its own bound.
+  }
+  try {
+    const ident = (name: string): string => `"${name.split('"').join('""')}"`;
+    let total = MAX_HINT_PROBES;
+    const out: TableInfo[] = [];
+    for (const table of tables) {
+      if (table.kind !== 'table' || total <= 0) {
+        out.push(table);
+        continue;
+      }
+      const rel = table.schema ? `${ident(table.schema)}.${ident(table.name)}` : ident(table.name);
+      // Per table, so filler tables early in the catalog cannot spend every probe.
+      let budget = Math.min(MAX_HINT_PROBES_PER_TABLE, total);
+      const columns: ColumnInfo[] = [];
+      for (const col of table.columns) {
+        const moment = isMomentColumn(col.name, col.dbType);
+        const isJson = isJsonCandidateColumn(col.dbType);
+        if (budget <= 0 || col.comment || (!moment && !isJson)) {
+          columns.push(col); // never overwrite an ALL_COL_COMMENTS entry the DBA wrote
+          continue;
+        }
+        budget--;
+        total--;
+        try {
+          if (moment) {
+            const rows = await db.execute(
+              `SELECT MIN(${ident(col.name)}) AS LO, MAX(${ident(col.name)}) AS HI FROM ${rel}`,
+              {},
+              { outFormat: outFormatObject },
+            );
+            const first = (rows.rows as Record<string, unknown>[] | undefined)?.[0];
+            const unit = epochUnitOf(Number(first?.['LO']), Number(first?.['HI']));
+            columns.push(unit ? { ...col, comment: unit } : col);
+          } else {
+            // FETCH FIRST, never LIMIT: Oracle has no LIMIT and would raise ORA-00933.
+            const rows = await db.execute(
+              `SELECT SUBSTR(TO_CHAR(${ident(col.name)}), 1, ${HINT_VALUE_CAP}) AS V FROM ${rel} WHERE ${ident(col.name)} IS NOT NULL ` +
+                `FETCH FIRST ${JSON_SAMPLE_ROWS} ROWS ONLY`,
+              {},
+              { outFormat: outFormatObject },
+            );
+            const vals = ((rows.rows as Record<string, unknown>[] | undefined) ?? []).map((r) => r['V']);
+            const shape = vals.length > 0 ? jsonShapeOf(vals) : null;
+            const el = shape ? null : vals.length > 0 ? jsonArrayElementOf(vals) : null;
+            columns.push(
+              shape
+                ? { ...col, comment: jsonHint(`JSON_VALUE(${ident(col.name)}, '$.key')`, shape.keys, nameKeys) }
+                : el
+                  ? {
+                      ...col,
+                      comment:
+                        `JSON array of ${el}s; test membership with ` +
+                        `JSON_EXISTS(${col.name}, '$?(@ == ${el === 'number' ? '1' : '"a"'})')`,
+                    }
+                  : col,
+            );
+          }
+        } catch {
+          columns.push(col); // best-effort: an unreadable column simply goes undescribed
+        }
+      }
+      out.push({ ...table, columns });
+    }
+    return out;
+  } finally {
+    try {
+      conn.callTimeout = previousTimeout;
+    } catch {
+      // best-effort restore
+    }
+  }
+}
+
 export async function introspectOracle(
   db: OracleQueryable,
   outFormatObject: number,
-  _opts?: { sampleColumnValues?: boolean; schema?: string },
+  opts?: { sampleColumnValues?: boolean; schema?: string },
 ): Promise<SchemaCatalog> {
   const warnings: string[] = [];
 
@@ -53,7 +160,7 @@ export async function introspectOracle(
   // ---- current schema (introspection scope) ----
   // A configured schema wins: tables reached through a grant live under their owner, not the
   // session's, and unquoted Oracle names are stored upper case.
-  let owner = (_opts?.schema ?? '').trim().toUpperCase();
+  let owner = (opts?.schema ?? '').trim().toUpperCase();
   if (!owner) {
     const rows = await q('current schema', `SELECT SYS_CONTEXT('USERENV','CURRENT_SCHEMA') AS SCHEMA FROM DUAL`, {});
     owner = str(rows[0]?.['SCHEMA']);
@@ -190,7 +297,7 @@ export async function introspectOracle(
     binds,
   );
 
-  return buildOracleCatalog(
+  const catalog = buildOracleCatalog(
     owner,
     {
       tableRows,
@@ -208,6 +315,14 @@ export async function introspectOracle(
     },
     warnings,
   );
+  try {
+    return {
+      ...catalog,
+      tables: await withOraColumnHints(db, outFormatObject, [...catalog.tables], opts?.sampleColumnValues === true),
+    };
+  } catch {
+    return catalog; // hints are best-effort; a catalog read never fails over them
+  }
 }
 
 /** Row sets fetched from the ALL_* dictionary views, as introspectOracle queries them. */

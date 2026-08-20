@@ -14,7 +14,7 @@ import java.sql.Connection
  */
 object OracleIntrospector : Introspector {
 
-    override fun introspect(connection: Connection): SchemaCatalog {
+    override fun introspect(connection: Connection, nameKeys: Boolean): SchemaCatalog {
         val currentSchema = connection.schema ?: connection.metaData.userName
         val raw = CommonIntrospection.listTables(connection, catalog = null, schemaPattern = currentSchema)
 
@@ -41,7 +41,8 @@ object OracleIntrospector : Introspector {
         return SchemaCatalog(
             engine = EngineKind.ORACLE,
             schemas = listOfNotNull(currentSchema),
-            tables = tables,
+            // A column's type says nothing about an epoch unit or a JSON column's keys; see ColumnHints.
+            tables = ColumnHints.annotate(connection, EngineKind.ORACLE, tables, nameKeys),
             routines = routines(connection, currentSchema),
             warnings = if (tables.isEmpty()) readableSchemaHint(connection, currentSchema) else emptyList(),
         )

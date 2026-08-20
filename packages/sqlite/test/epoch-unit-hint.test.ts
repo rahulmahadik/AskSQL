@@ -91,3 +91,23 @@ describe('what it must not annotate', () => {
     expect(catalog.tables[0]?.columns[0]?.comment).toBeFalsy();
   });
 });
+
+describe('a column that only reads like a moment is left alone', () => {
+  // Found in a real 65-table schema: created_by_employee_id matches the name test but holds an id.
+  // Left alone it would be labelled "epoch seconds" once ids passed 1e8, which misleads the model.
+  it('says nothing about an id named like a timestamp', async () => {
+    for (const name of ['created_by_employee_id', 'updated_by_employee_id', 'created_by_id', 'start_key']) {
+      expect(await commentFor(name, 'INTEGER', 1_755_300_000), name).toBeFalsy();
+    }
+  });
+
+  it('says nothing about a code or a document number', async () => {
+    for (const name of ['order_no', 'invoice_number', 'status_code', 'expires_code']) {
+      expect(await commentFor(name, 'INTEGER', 1_755_300_000), name).toBeFalsy();
+    }
+  });
+
+  it('still describes a real moment beside them', async () => {
+    expect(await commentFor('created_at', 'INTEGER', 1_755_300_000)).toBe('epoch seconds');
+  });
+});

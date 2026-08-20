@@ -190,7 +190,7 @@ function ProviderSection({
           id="model"
           type="text"
           value={provider.model}
-          placeholder="e.g. llama-3.3-70b-versatile"
+          placeholder="click Fetch models, or type a model id"
           onChange={(e) => edit({ ...provider, model: e.target.value })}
         />
         {canListModels && (

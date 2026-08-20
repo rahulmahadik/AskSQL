@@ -55,7 +55,7 @@ function truncateAtWordBoundary(text: string, max: number): string {
 
 /** The first line after "IMPOSSIBLE:" is the reason; the sentinel is stripped and stiff phrasing humanized. */
 export function extractImpossible(text: string): string | null {
-  const m = IMPOSSIBLE_SENTINEL.exec(text.trim());
+  const m = IMPOSSIBLE_SENTINEL.exec(withoutReasoning(text).trim());
   if (!m) return null;
   const firstLine = m[1]!.trim().split('\n')[0]!.trim();
   const cleaned = firstLine.replace(SENTINEL_WORD, '').trim();
@@ -64,8 +64,67 @@ export function extractImpossible(text: string): string | null {
   return truncateAtWordBoundary(sentenceCased, REASON_MAX_LENGTH);
 }
 
+/**
+ * A reasoning model narrates before it answers. Groq's qwen3.6 opens with "<think>\nHere's a thinking
+ * process:", and that text was shown to the reader as the query's description. Worse, an answer cut off
+ * mid-reasoning leaves the tag unclosed, so everything after it is narration with no answer in it.
+ */
+const THINK_BLOCK = /<(think|thinking|reasoning)>[\s\S]*?<\/\1>/giu;
+// Anchored: unanchored, a tag inside the answer truncated `WHERE body LIKE '%<think>%'` to an
+// unterminated literal.
+const THINK_UNCLOSED = /^\s*<(?:think|thinking|reasoning)>[\s\S]*$/iu;
+
+/**
+ * Hides a reasoning model's narration as it streams; the whole-text strip only cleans the assembled
+ * reply, so a streaming host forwarded the monologue live. Only a tag that OPENS the reply counts: one
+ * appearing later is content. A tag split across chunks is held back until it can be read.
+ */
+export function createReasoningFilter(): (chunk: string) => string {
+  const OPEN = /<(think|thinking|reasoning)>/i;
+  const CLOSE = /<\/(think|thinking|reasoning)>/i;
+  const LONGEST_TAG = '</reasoning>'.length;
+  let phase: 'leading' | 'narrating' | 'passthrough' = 'leading';
+  let carry = '';
+
+  return (chunk: string): string => {
+    let buffer = carry + chunk;
+    carry = '';
+
+    if (phase === 'leading') {
+      const open = OPEN.exec(buffer);
+      if (open && buffer.slice(0, open.index).trim() === '') {
+        buffer = buffer.slice(open.index + open[0].length);
+        phase = 'narrating';
+      } else if (buffer.trim() === '' || (!open && buffer.trimStart().startsWith('<') && buffer.length < LONGEST_TAG)) {
+        carry = buffer; // could still become an opening tag
+        return '';
+      } else {
+        phase = 'passthrough';
+      }
+    }
+
+    if (phase === 'narrating') {
+      const close = CLOSE.exec(buffer);
+      if (!close) {
+        const cut = buffer.lastIndexOf('<');
+        carry = cut >= 0 && buffer.length - cut <= LONGEST_TAG ? buffer.slice(cut) : '';
+        return '';
+      }
+      buffer = buffer.slice(close.index + close[0].length);
+      phase = 'passthrough';
+    }
+
+    return buffer;
+  };
+}
+
+/** Removes a reasoning model's narration, leaving the answer it was working towards. */
+export function withoutReasoning(text: string): string {
+  return text.replace(THINK_BLOCK, ' ').replace(THINK_UNCLOSED, ' ').trim();
+}
+
 export function extractSql(text: string): Extraction | null {
-  const raw = text ?? '';
+  const raw = withoutReasoning(text ?? '');
 
   // 1) Fenced blocks - first block that looks like a query wins.
   const fences = [...raw.matchAll(FENCE_RE)];

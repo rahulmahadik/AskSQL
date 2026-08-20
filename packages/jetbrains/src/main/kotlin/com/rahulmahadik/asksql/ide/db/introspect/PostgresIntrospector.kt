@@ -11,7 +11,7 @@ import java.sql.Connection
 
 object PostgresIntrospector : Introspector {
 
-    override fun introspect(connection: Connection): SchemaCatalog {
+    override fun introspect(connection: Connection, nameKeys: Boolean): SchemaCatalog {
         val batched = PostgresConstraints.load(connection)
         val raw = CommonIntrospection.listTables(connection, catalog = null, schemaPattern = null, loadConstraints = batched == null)
             .filterNot { it.schema in setOf("pg_catalog", "information_schema") }
@@ -59,7 +59,8 @@ object PostgresIntrospector : Introspector {
         return SchemaCatalog(
             engine = EngineKind.POSTGRES,
             schemas = schemas,
-            tables = tables,
+            // A column's type says nothing about an epoch unit or a JSON column's keys; see ColumnHints.
+            tables = ColumnHints.annotate(connection, EngineKind.POSTGRES, tables, nameKeys),
             enums = enums,
             routines = routines(connection),
         )
