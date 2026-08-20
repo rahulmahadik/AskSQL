@@ -44,12 +44,24 @@ data class DialectInfo(
 // promptNotes are ported verbatim from `@asksql/core`'s `dialects.ts`; PromptParityTest
 // asserts them byte-identical against the published package. Never paraphrase these strings.
 object Dialects {
+    /**
+     * ColumnHints stamps an integer moment column with the unit it holds, which the type never states.
+     * Without this the unit is named and then ignored: milliseconds compared against a seconds bound
+     * match every row. SQLite says the same thing in its own longer note, so it does not repeat this one.
+     */
+    private const val EPOCH_UNIT_NOTE =
+        "When a column comment names an epoch unit, build the bound in THAT SAME unit and no other. " +
+            "For 'epoch seconds' compare against a seconds bound unchanged; for 'epoch milliseconds' " +
+            "multiply the seconds bound by 1000. Mixing them raises no error: milliseconds against a " +
+            "seconds bound matches every row, and seconds against a milliseconds bound matches none."
+
     val POSTGRES = DialectInfo(
         engine = EngineKind.POSTGRES,
         quoteChar = '"',
         promptLabel = "PostgreSQL",
         limitStyle = LimitStyle.LIMIT,
         promptNotes = listOf(
+            EPOCH_UNIT_NOTE,
             "Quote mixed-case or reserved identifiers with double quotes.",
             "Use ILIKE for case-insensitive text matching.",
             "Combine values into one string with string_agg(col, ', ').",
@@ -63,6 +75,7 @@ object Dialects {
         promptLabel = "MySQL",
         limitStyle = LimitStyle.LIMIT,
         promptNotes = listOf(
+            EPOCH_UNIT_NOTE,
             "Quote identifiers with backticks when needed.",
             "Use DATE_SUB / DATE_ADD / DATE_FORMAT for date math.",
             "Combine values into one string with GROUP_CONCAT(col SEPARATOR ', ').",
@@ -91,19 +104,21 @@ object Dialects {
         promptLabel = "DuckDB",
         limitStyle = LimitStyle.LIMIT,
         promptNotes = listOf(
+            EPOCH_UNIT_NOTE,
             "DuckDB follows PostgreSQL syntax for queries.",
             "Combine values into one string with string_agg(col, ', '); SEPARATOR is MySQL syntax and is rejected here.",
             "Uploaded files are already registered as tables - query them by table name, never by file path.",
         ),
     )
 
-    // Oracle has no upstream `@asksql/core` counterpart; PromptParityTest does not cover these notes.
+    // The parity vector is built for PostgreSQL only, so PromptParityTest does not reach these notes.
     val ORACLE = DialectInfo(
         engine = EngineKind.ORACLE,
         quoteChar = '"',
         promptLabel = "Oracle",
         limitStyle = LimitStyle.FETCH,
         promptNotes = listOf(
+            EPOCH_UNIT_NOTE,
             "Use FETCH FIRST n ROWS ONLY for row limits, never LIMIT.",
             "Use TO_DATE / TO_CHAR / SYSDATE and interval arithmetic for date math.",
             "Unquoted identifiers are case-insensitive and stored upper-case; double-quote to preserve case.",
