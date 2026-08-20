@@ -4,6 +4,26 @@ All notable changes to the browser extension are documented here. Versions match
 `manifest.json`. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-08-20
+
+Carries the engine changes the extension bundles, plus its own model picker.
+
+### Added
+- The schema now states what a column's type cannot: the unit of an integer timestamp, and the shape of
+  a JSON column, including whether it holds objects or a list. Comparing epoch milliseconds against
+  epoch seconds matches every row and raises no error, and a guessed JSON key matches none, so both
+  produced confident wrong answers. Supported on SQLite, PostgreSQL, MySQL, DuckDB and Oracle.
+- A filter that compares a column against a value the column does not hold is now reported, rather than
+  answering zero as though nothing matched the question.
+
+### Fixed
+- Model listing reports the provider's own error instead of coming back empty, so a rejected key, a rate
+  limit and an outage are no longer indistinguishable.
+- Models that cannot answer a question are no longer offered in the picker.
+- Output from reasoning models no longer appears in answers, explanations or the live token stream.
+- A hosted provider configured with a local base URL is refused instead of being sent the API key.
+- Uploaded CSV and Parquet files now get the same column descriptions as a database connection.
+
 ## [0.3.2] - 2026-08-18
 
 Carries an engine fix the extension bundles. Nothing in the extension's own code changed.

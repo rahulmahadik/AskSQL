@@ -3,7 +3,7 @@
   "private": true,
   "displayName": "AskSQL",
   "description": "AI database chat: ask in plain language, review the query, get answers. Read-only by design, bring your own model.",
-  "version": "0.7.3",
+  "version": "0.8.0",
   "publisher": "RahulMahadik",
   "license": "Apache-2.0",
   "pricing": "Free",
@@ -303,7 +303,7 @@
           "type": "boolean",
           "default": false,
           "scope": "machine",
-          "markdownDescription": "Read a few real values from short text columns that are not declared enums (for example a `status` column that only holds `active`, `closed`, `pending`) and show them to the model, so it filters on codes that actually exist instead of guessing casing and spelling. **This sends those values to the model** - it is the one setting that lets column data, not just schema, leave for the model, so it is off by default and does nothing with a local model beyond your own machine. Only short, low-cardinality columns are sampled; long or high-cardinality columns are skipped."
+          "markdownDescription": "Lets column data, not just schema, reach the model. With it on the model may be shown: a few real values from short low-cardinality text columns (so it filters on codes that actually exist instead of guessing casing), the keys inside a JSON column, and the distinct values of a coded column when a query filters on a value that column does not hold. With it off the model sees the schema only, including a JSON column's key **count** but not the keys. Off by default; query results are never sent either way, and nothing leaves your machine with a local model."
         },
         "asksql.answerSchemaQuestions": {
           "type": "boolean",

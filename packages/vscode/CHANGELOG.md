@@ -4,6 +4,27 @@ All notable changes to the AskSQL VS Code extension are documented here. The for
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2026-08-20
+
+Carries the engine changes the extension bundles, plus its own model picker and settings text.
+
+### Added
+- The schema now states what a column's type cannot: the unit of an integer timestamp, and the shape of
+  a JSON column, including whether it holds objects or a list. Comparing epoch milliseconds against
+  epoch seconds matches every row and raises no error, and a guessed JSON key matches none, so both
+  produced confident wrong answers. Supported on SQLite, PostgreSQL, MySQL, DuckDB and Oracle.
+- A filter that compares a column against a value the column does not hold is now reported, rather than
+  answering zero as though nothing matched the question.
+
+### Fixed
+- Model listing reports the provider's own error instead of coming back empty, so a rejected key, a rate
+  limit and an outage are no longer indistinguishable.
+- Models that cannot answer a question are no longer offered in the picker.
+- Output from reasoning models no longer appears in answers, explanations or the live token stream.
+- A hosted provider configured with a local base URL is refused instead of being sent the API key.
+- The "sample column values" setting now describes every path it gates; it also allows a JSON column's
+  key names and the distinct values of a coded column, which the previous wording did not mention.
+
 ## [0.7.3] - 2026-08-18
 
 Carries the engine fixes for SQLite databases written by an Android app, which the extension bundles.

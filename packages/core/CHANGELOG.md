@@ -1,5 +1,21 @@
 # @asksql/core
 
+## 0.9.0
+
+### Minor Changes
+
+- Describe what a column's type leaves out, and fix a set of AI provider issues.
+
+  The schema now states two things a column type cannot: the unit of an integer timestamp, and the shape
+  of a JSON column. Comparing epoch milliseconds against epoch seconds matches every row and raises no
+  error, and a guessed JSON key matches none, so both produced confident wrong answers. Every engine emits
+  the hint in its own syntax, from one shared implementation.
+
+  Also fixed: model listing now reports the provider's own error instead of returning an empty list;
+  models that cannot answer a question are no longer offered; a hosted provider configured with a local
+  base URL is refused rather than sent the API key; and reasoning-model output no longer appears in
+  answers, explanations, or the token stream.
+
 ## 0.8.1
 
 ### Patch Changes
