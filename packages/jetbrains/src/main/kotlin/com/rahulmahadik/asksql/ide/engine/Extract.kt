@@ -68,8 +68,11 @@ object Extract {
     }
 
     /** Reads the "IMPOSSIBLE: <reason>" sentinel, taking only its first line as the reason. */
+    /** Delegates to the canonical strip at the client boundary; see LlmClients.withoutReasoning. */
+    fun withoutReasoning(text: String): String = com.rahulmahadik.asksql.ide.llm.LlmClients.withoutReasoning(text)
+
     fun extractImpossible(text: String): String? {
-        val captured = IMPOSSIBLE_SENTINEL.find(text.trim())?.groupValues?.get(1)?.trim() ?: return null
+        val captured = IMPOSSIBLE_SENTINEL.find(withoutReasoning(text).trim())?.groupValues?.get(1)?.trim() ?: return null
         val firstLine = captured.substringBefore('\n').trim()
         val cleaned = SENTINEL_WORD.replace(firstLine, "").trim()
         val humanized = humanizeReason(cleaned).replaceFirstChar { it.uppercase() }
@@ -83,7 +86,8 @@ object Extract {
         return (if (lastSpace > maxLength / 2) cut.take(lastSpace) else cut).trimEnd() + "…"
     }
 
-    fun extractSql(text: String): Extraction? {
+    fun extractSql(rawText: String): Extraction? {
+        val text = withoutReasoning(rawText)
         // 1) Fenced blocks: first block that looks like a query wins.
         for (f in FENCE_RE.findAll(text)) {
             var candidate = f.groupValues[1].trim()

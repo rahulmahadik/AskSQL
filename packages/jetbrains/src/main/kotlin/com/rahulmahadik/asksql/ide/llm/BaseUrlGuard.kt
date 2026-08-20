@@ -34,6 +34,8 @@ object BaseUrlGuard {
         return "${(addr shr 24) and 0xFF}.${(addr shr 16) and 0xFF}.${(addr shr 8) and 0xFF}.${addr and 0xFF}"
     }
 
+    internal fun isLoopbackHost(host: String): Boolean = isLoopback(host)
+
     private fun isLoopback(host: String): Boolean {
         val h = host.removePrefix("[").removeSuffix("]")
         if (h == "localhost" || h == "::1" || h.endsWith(".localhost")) return true

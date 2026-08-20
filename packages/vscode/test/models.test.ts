@@ -264,3 +264,38 @@ describe('selectProvider', () => {
     expect(await selectProvider(secrets as never)).toBe(false);
   });
 });
+
+describe('the Groq catalogue offers only models that can answer', () => {
+  // Verified model by model against the live endpoint: six of these thirteen reject a chat request.
+  // The list is alphabetical, so broken ones sat where a user picks and the query failed after the
+  // model list looked healthy. gpt-oss-safeguard is KEPT: it carries "guard" but it chats.
+  it('drops speech, classifier and TTS models', async () => {
+    setConfig({ provider: 'groq', baseURL: '' });
+    const ids = [
+      'allam-2-7b',
+      'canopylabs/orpheus-arabic-saudi',
+      'canopylabs/orpheus-v1-english',
+      'groq/compound',
+      'groq/compound-mini',
+      'meta-llama/llama-prompt-guard-2-22m',
+      'meta-llama/llama-prompt-guard-2-86m',
+      'openai/gpt-oss-120b',
+      'openai/gpt-oss-20b',
+      'openai/gpt-oss-safeguard-20b',
+      'qwen/qwen3.6-27b',
+      'whisper-large-v3',
+      'whisper-large-v3-turbo',
+    ];
+    vi.stubGlobal('fetch', vi.fn(async () => okJson({ data: ids.map((id) => ({ id })) })));
+    const secrets = createSecretStorage({ [apiKeyKey('groq')]: 'gsk-test' });
+    expect(await providerModels(secrets as never, 1000)).toEqual([
+      'allam-2-7b',
+      'groq/compound',
+      'groq/compound-mini',
+      'openai/gpt-oss-120b',
+      'openai/gpt-oss-20b',
+      'openai/gpt-oss-safeguard-20b',
+      'qwen/qwen3.6-27b',
+    ]);
+  });
+});

@@ -65,6 +65,42 @@ describe('fetchProviderModels', () => {
     expect(await fetchProviderModels('nvidia', undefined, 'nvapi-1')).toEqual(['meta/llama-3.3-70b-instruct']);
   });
 
+  // Groq's real catalogue as of 2026-08-19, verified model by model against /chat/completions: six of
+  // the thirteen reject a chat request ("does not support chat completions", "text classification models
+  // do not support streaming", "requires terms acceptance"). The list is alphabetical, so two broken ones
+  // sat at positions 2 and 3 - where a user picks - and the query failed after the model list looked fine.
+  it('offers only the Groq models that can actually answer a query', async () => {
+    globalThis.fetch = vi.fn(async () =>
+      jsonResponse(200, {
+        data: [
+          { id: 'allam-2-7b' },
+          { id: 'canopylabs/orpheus-arabic-saudi' },
+          { id: 'canopylabs/orpheus-v1-english' },
+          { id: 'groq/compound' },
+          { id: 'groq/compound-mini' },
+          { id: 'meta-llama/llama-prompt-guard-2-22m' },
+          { id: 'meta-llama/llama-prompt-guard-2-86m' },
+          { id: 'openai/gpt-oss-120b' },
+          { id: 'openai/gpt-oss-20b' },
+          { id: 'openai/gpt-oss-safeguard-20b' },
+          { id: 'qwen/qwen3.6-27b' },
+          { id: 'whisper-large-v3' },
+          { id: 'whisper-large-v3-turbo' },
+        ],
+      }),
+    ) as typeof fetch;
+    // gpt-oss-safeguard is kept on purpose: it contains "guard" but chats, so the test is \bguard\b.
+    expect(await fetchProviderModels('groq', undefined, 'gsk-test')).toEqual([
+      'allam-2-7b',
+      'groq/compound',
+      'groq/compound-mini',
+      'openai/gpt-oss-120b',
+      'openai/gpt-oss-20b',
+      'openai/gpt-oss-safeguard-20b',
+      'qwen/qwen3.6-27b',
+    ]);
+  });
+
   it('lists ollama models, filtering out embedding models', async () => {
     globalThis.fetch = vi.fn(async () =>
       jsonResponse(200, { models: [{ name: 'llama3.2' }, { name: 'nomic-embed-text' }] }),

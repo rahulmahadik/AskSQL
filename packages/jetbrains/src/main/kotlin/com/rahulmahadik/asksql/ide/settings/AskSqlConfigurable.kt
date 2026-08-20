@@ -55,6 +55,14 @@ class AskSqlConfigurable : Configurable {
     override fun createComponent(): JComponent {
         val hint = pendingLocalModelHint
         pendingLocalModelHint = false
+        // Migration for installs saved before this was caught: switching Ollama -> a hosted provider left
+        // the old base URL behind, so "Groq" requests went to localhost and Test Provider reported success
+        // with no key. That combination was never valid, so the stale override is dropped on open.
+        providerField?.let { p ->
+            if (p in LlmClients.HOSTED && baseUrlField.isNotBlank() && isLoopbackUrl(baseUrlField)) {
+                baseUrlField = ""
+            }
+        }
         if (hint && providerField == null) {
             providerField = ProviderKind.OLLAMA
             baseUrlField = DefaultEndpoints.OLLAMA_BASE_URL
@@ -86,22 +94,16 @@ class AskSqlConfigurable : Configurable {
                         )
                         .component
                 }
-                row("Model:") {
-                    modelComboBox = comboBox(if (modelField.isNotBlank()) listOf(modelField) else emptyList())
-                        .bindItem({ modelField.takeIf { it.isNotBlank() } }, { modelField = it.orEmpty() })
-                        .applyToComponent { isEditable = true } // model discovery is best-effort; typing a name always works
-                        .component
-                    button("Test Provider") {
-                        testProvider(providerComboBox, baseUrlTextField, modelComboBox)
-                    }
-                    button("Fetch Models") {
-                        fetchModelsInto(providerComboBox, baseUrlTextField, modelComboBox)
-                    }.comment(
-                        "Type a model name directly (e.g. gpt-4o-mini, claude-sonnet-5, gemini-2.5-flash, " +
-                            "qwen2.5-coder:7b), or click Fetch Models to list what the configured " +
-                            "provider/endpoint currently offers.",
-                    )
-                }
+                // A key is needed before models can be listed, and a model before a connection can be
+                // tested. Asking for the key three rows BELOW the Fetch button meant the natural
+                // top-to-bottom pass fetched with no credentials and got an empty list back.
+                row("API key:") {
+                    cell(apiKeyComponent)
+                }.comment(
+                    "Stored only in the OS keychain via PasswordSafe - never written to disk in plain text " +
+                        "or synced with IDE settings. Leave blank to keep the current key; not needed for " +
+                        "Ollama/LM Studio.",
+                )
                 row("Base URL (optional override):") {
                     baseUrlTextField = textField().bindText({ baseUrlField }, { baseUrlField = it })
                         .comment(
@@ -111,13 +113,22 @@ class AskSqlConfigurable : Configurable {
                         )
                         .component
                 }
-                row("API key:") {
-                    cell(apiKeyComponent)
-                }.comment(
-                    "Stored only in the OS keychain via PasswordSafe - never written to disk in plain text " +
-                        "or synced with IDE settings. Leave blank to keep the current key; not needed for " +
-                        "Ollama/LM Studio.",
-                )
+                row("Model:") {
+                    modelComboBox = comboBox(if (modelField.isNotBlank()) listOf(modelField) else emptyList())
+                        .bindItem({ modelField.takeIf { it.isNotBlank() } }, { modelField = it.orEmpty() })
+                        .applyToComponent { isEditable = true } // model discovery is best-effort; typing a name always works
+                        .component
+                    button("Fetch Models") {
+                        fetchModelsInto(providerComboBox, baseUrlTextField, modelComboBox)
+                    }
+                    button("Test Connection") {
+                        testProvider(providerComboBox, baseUrlTextField, modelComboBox)
+                    }.comment(
+                        "Fetch Models lists what this provider currently offers - only models that can answer a " +
+                            "question are shown, so speech and classifier models are left out. Pick one, then " +
+                            "Test Connection to confirm it replies.",
+                    )
+                }
             }
             group("Engine defaults") {
                 row("Max rows per query:") {
@@ -139,7 +150,14 @@ class AskSqlConfigurable : Configurable {
                 row {
                     checkBox("Send sample column values to the model")
                         .bindSelected({ allowDataInPromptField }, { allowDataInPromptField = it })
-                        .comment("Off by default. On the SQL engines the model only ever sees declared values, such as a column's ENUM labels from the DDL. MongoDB has no DDL to declare them, so its introspector records a few distinct field values while sampling; this setting decides whether those reach a prompt. Query results are never sent on any engine.")
+                        .comment(
+                            "Off by default, and the only setting that lets column data reach the model. " +
+                                "With it on, the model may also be shown: the keys inside a JSON column, the " +
+                                "distinct values of a small low-cardinality column when a query filters on a " +
+                                "value that column does not hold, and MongoDB's sampled field values. With it " +
+                                "off the model sees the schema only, including a JSON column's key COUNT but " +
+                                "not the keys. Query results are never sent either way.",
+                        )
                 }
                 row {
                     checkBox("Answer schema questions in plain language")
@@ -248,6 +266,21 @@ class AskSqlConfigurable : Configurable {
             Messages.showWarningDialog("Choose a provider first.", "AskSQL")
             return
         }
+        // Only what is typed here can be read outside a coroutine; a key already in the keychain is
+        // resolved inside the fetch below, so an empty field alone is not proof there is no key.
+        val typedKey = String(apiKeyComponent.password)
+        val storedKey = runBlockingWithProgress(null, "Checking credentials") { AskSqlSecrets.getApiKey(provider.wireName) }
+        val key = typedKey.ifEmpty { storedKey }
+        // Only the genuinely hosted services need credentials: Ollama and LM Studio are local, and an
+        // openai-compatible gateway is whatever the user points it at, which often takes no key at all.
+        if (key.isNullOrEmpty() && provider in LlmClients.HOSTED) {
+            Messages.showWarningDialog(
+                "${provider.wireName} needs an API key before it can list its models. Enter it in the API key " +
+                    "field above, then click Fetch Models again.",
+                "AskSQL",
+            )
+            return
+        }
         val models = try {
             runBlockingWithProgress(null, "Fetching models") {
                 val config = ProviderConfig(
@@ -263,7 +296,11 @@ class AskSqlConfigurable : Configurable {
             return
         }
         if (models.isEmpty()) {
-            Messages.showWarningDialog("The provider returned no models. Check the base URL and API key.", "AskSQL")
+            Messages.showWarningDialog(
+                "${provider.wireName} answered, but offered no model that can hold a conversation. Speech, " +
+                    "embedding and classifier models are left out because they reject a question.",
+                "AskSQL",
+            )
             return
         }
         modelComboBox.removeAllItems()
@@ -274,6 +311,15 @@ class AskSqlConfigurable : Configurable {
     // Adds two cases the DSL binding graph can't see: forcePersistOnNextApply, and the unbound API key field.
     override fun isModified(): Boolean =
         forcePersistOnNextApply || (dialogPanel?.isModified() ?: false) || apiKeyComponent.password.isNotEmpty()
+
+    /** A base URL that resolves to this machine; see LlmClients.HOSTED for why that combination is refused. */
+    private fun isLoopbackUrl(url: String): Boolean = try {
+        java.net.URI.create(url.trim()).host?.let {
+            com.rahulmahadik.asksql.ide.llm.BaseUrlGuard.isLoopbackHost(it)
+        } == true
+    } catch (e: Exception) {
+        false // an unparseable URL is rejected by assertBaseUrl instead
+    }
 
     override fun reset() {
         dialogPanel?.reset()
@@ -286,6 +332,13 @@ class AskSqlConfigurable : Configurable {
             throw ConfigurationException("Choose a provider before saving an API key.")
         }
         baseUrlField.trim().takeIf { it.isNotEmpty() }?.let { url ->
+            if (providerField in LlmClients.HOSTED && isLoopbackUrl(url)) {
+                throw ConfigurationException(
+                    // The URL itself is never echoed: a gateway URL can embed credentials.
+                    "${providerField?.wireName} is a hosted service, but the Base URL points at this machine. " +
+                        "Clear it, or choose Ollama or LM Studio for a local server.",
+                )
+            }
             try {
                 com.rahulmahadik.asksql.ide.llm.BaseUrlGuard.assertBaseUrl(url, carriesSecret = apiKey.isNotEmpty())
             } catch (e: com.rahulmahadik.asksql.ide.errors.AskSqlException) {

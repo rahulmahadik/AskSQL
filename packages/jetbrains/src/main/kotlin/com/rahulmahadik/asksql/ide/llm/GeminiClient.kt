@@ -99,7 +99,8 @@ internal class GeminiClient(
         if (textBuilder.isEmpty()) {
             throw AskSqlException(AskSqlErrorCode.LLM_BAD_OUTPUT, detail = "empty streamed response from Gemini")
         }
-        return LlmResult(textBuilder.toString(), LlmUsage(inputTokens, outputTokens))
+        // Same strip as the OpenAI-compatible client: a reasoning model's monologue is never the answer.
+        return LlmResult(LlmClients.withoutReasoning(textBuilder.toString()), LlmUsage(inputTokens, outputTokens))
     }
 
     override suspend fun listModels(): List<String> = LlmClients.onIo {

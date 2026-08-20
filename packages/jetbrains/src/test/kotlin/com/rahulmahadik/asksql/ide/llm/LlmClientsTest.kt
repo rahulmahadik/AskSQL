@@ -24,6 +24,91 @@ class LlmClientsTest {
         assertEquals(DefaultEndpoints.GOOGLE_BASE_URL, LlmClients.effectiveBaseUrl(config(ProviderKind.GOOGLE)))
     }
 
+    /**
+     * Groq's real catalogue as of 2026-08-19. Six of
+     * the thirteen reject a chat request, and the list is alphabetical, so two broken ones sat at
+     * positions 2 and 3 - where a user picks. Models listed fine; the query then failed.
+     */
+    @Test fun `only the Groq models that can answer a query are offered`() {
+        val listed = listOf(
+            "allam-2-7b",
+            "canopylabs/orpheus-arabic-saudi",
+            "canopylabs/orpheus-v1-english",
+            "groq/compound",
+            "groq/compound-mini",
+            "meta-llama/llama-prompt-guard-2-22m",
+            "meta-llama/llama-prompt-guard-2-86m",
+            "openai/gpt-oss-120b",
+            "openai/gpt-oss-20b",
+            "openai/gpt-oss-safeguard-20b",
+            "qwen/qwen3.6-27b",
+            "whisper-large-v3",
+            "whisper-large-v3-turbo",
+        )
+        assertEquals(
+            listOf(
+                "allam-2-7b",
+                "groq/compound",
+                "groq/compound-mini",
+                "openai/gpt-oss-120b",
+                "openai/gpt-oss-20b",
+                "openai/gpt-oss-safeguard-20b",
+                "qwen/qwen3.6-27b",
+            ),
+            listed.filterNot { LlmClients.isNonChatModel(it) },
+        )
+    }
+
+    @Test fun `a chatting model is not filtered just for carrying the word safeguard`() {
+        assertFalse(LlmClients.isNonChatModel("openai/gpt-oss-safeguard-20b"))
+        assertTrue(LlmClients.isNonChatModel("meta-llama/llama-prompt-guard-2-22m"))
+    }
+
+    @Test fun `the provider's own words are lifted out of an error body`() {
+        assertEquals("Invalid API Key", LlmClients.providerMessage("""{"error":{"message":"Invalid API Key","code":"invalid_api_key"}}"""))
+        assertEquals("plain", LlmClients.providerMessage("""{"message":"plain"}"""))
+        assertEquals(null, LlmClients.providerMessage("not json at all"))
+        assertEquals(null, LlmClients.providerMessage(""))
+    }
+
+    /**
+     * Reported from a real install: the user had been on Ollama, switched the provider to Groq, entered no
+     * key, and Test Provider reported success. The stale base URL meant the request never left the machine.
+     */
+    @Test fun `a hosted provider refuses a base URL pointing at this machine`() {
+        for (url in listOf("http://localhost:11434/v1", "http://127.0.0.1:1234/v1", "http://[::1]:8080/v1")) {
+            val e = assertThrows(AskSqlException::class.java) {
+                LlmClients.effectiveBaseUrl(ProviderConfig(ProviderKind.GROQ, "m", apiKey = null, baseUrl = url))
+            }
+            assertTrue(e.userMessage, e.userMessage.contains("this machine"))
+        }
+    }
+
+    @Test fun `a local provider still accepts its own loopback endpoint`() {
+        assertEquals(
+            "http://localhost:11434/v1",
+            LlmClients.effectiveBaseUrl(ProviderConfig(ProviderKind.OLLAMA, "m", baseUrl = "http://localhost:11434/v1")),
+        )
+    }
+
+    @Test fun `a hosted provider still accepts a real remote gateway`() {
+        assertEquals(
+            "https://gateway.example.com/v1",
+            LlmClients.effectiveBaseUrl(ProviderConfig(ProviderKind.GROQ, "m", baseUrl = "https://gateway.example.com/v1")),
+        )
+    }
+
+    @Test fun `only the hosted services are treated as needing a key`() {
+        // Ollama and LM Studio are local; an openai-compatible gateway is whatever the user points it at,
+        // and a self-hosted vLLM or LiteLLM commonly takes no key. Demanding one there blocks a valid setup.
+        for (local in listOf(ProviderKind.OLLAMA, ProviderKind.LM_STUDIO, ProviderKind.OPENAI_COMPATIBLE)) {
+            assertFalse(local.name, local in LlmClients.HOSTED)
+        }
+        for (hosted in listOf(ProviderKind.OPENAI, ProviderKind.GROQ, ProviderKind.NVIDIA, ProviderKind.ANTHROPIC, ProviderKind.GOOGLE)) {
+            assertTrue(hosted.name, hosted in LlmClients.HOSTED)
+        }
+    }
+
     @Test fun `NVIDIA default base URL is the NIM OpenAI-compatible endpoint`() {
         assertEquals("https://integrate.api.nvidia.com/v1", DefaultEndpoints.NVIDIA_BASE_URL)
     }
