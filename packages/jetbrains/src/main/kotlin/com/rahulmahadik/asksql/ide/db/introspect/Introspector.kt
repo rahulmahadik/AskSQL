@@ -4,8 +4,13 @@ import com.rahulmahadik.asksql.ide.model.EngineKind
 import com.rahulmahadik.asksql.ide.model.SchemaCatalog
 import java.sql.Connection
 
-fun interface Introspector {
-    fun introspect(connection: Connection): SchemaCatalog
+interface Introspector {
+    /**
+     * [nameKeys] carries the host's cell-value opt-in. A JSON column's key NAMES are data - a map with a
+     * stable key set is structurally identical to a record - so the default states how many recur, not
+     * which. See ColumnHints.jsonHint.
+     */
+    fun introspect(connection: Connection, nameKeys: Boolean = false): SchemaCatalog
 }
 
 object Introspectors {

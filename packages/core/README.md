@@ -24,7 +24,7 @@ import { PostgresConnector } from '@asksql/postgres';
 
 const model = await resolveModel({
   provider: 'groq',                       // openai | anthropic | google | azure | groq | nvidia | ollama | openai-compatible
-  model: 'llama-3.3-70b-versatile',
+  model: 'openai/gpt-oss-20b', // an example: use whatever your provider lists at /models
   apiKey: process.env.GROQ_API_KEY,
 });
 
@@ -113,10 +113,14 @@ Beyond ask -> approve -> run, all optional:
 - **Schema pruning + token budget** - large catalogs are pruned to the most relevant tables
   under a token budget (`config.pruner`) before prompting.
 - **Privacy by default** - only the schema is ever sent. `allowDataInPrompt` (default off) is the
-  opt-in for sampled cell values; with it off they are stripped at the single exit from the catalog,
-  so a connector that samples cannot leak them into any prompt - the first prompt, a repair,
-  `explain`, or `explainSchema`. The MongoDB engine takes the same option, gating the values its
-  document sampling infers. Declared enum labels come from the schema and are kept either way.
+  opt-in for cell values, and it now gates three channels, not one: sampled column values, stripped
+  from the catalog so a connector that samples cannot leak them into any prompt (the first prompt, a
+  repair, `explain`, or `explainSchema`); the key NAMES inside a JSON column, where the default states
+  how many recur but not which, because a map with a stable key set is structurally identical to a
+  record; and the distinct values named in a coded-column repair, where the default attaches a caveat
+  for the reader instead. The MongoDB engine takes the same option for the values its document
+  sampling infers. Declared enum labels come from the schema and are kept either way. Query results
+  are never sent on any path.
 
 Prompts, model sampling, guard policy, and grounding (glossary, few-shots) are configurable
 without forking; see

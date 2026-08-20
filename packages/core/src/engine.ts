@@ -20,7 +20,8 @@ import { withoutFetchTail } from './strip.js';
 import { AskSqlError } from './errors.js';
 import { extractImpossible, extractSql } from './extract.js';
 import { guardSql, resolveGuardPolicy } from './guard.js';
-import { epochUnitMismatch, fanOutAggregate, nestedAggregate, ungroupedAggregate } from './semantics.js';
+import { sanitizeValue } from './catalog.js';
+import { codeLiterals, epochUnitMismatch, fanOutAggregate, nestedAggregate, ungroupedAggregate } from './semantics.js';
 import { historyId, MemoryHistoryStore } from './history.js';
 import { callModel } from './llm.js';
 import {
@@ -375,6 +376,42 @@ export function createAskSql(config: AskSqlConfig): AskSqlEngine {
     }
     return pending;
   };
+
+  /** Distinct values past this many mean a measurement, not a code, and the query is left alone. */
+  const CODE_MAX_DISTINCT = 25;
+  /** At most this many columns are confirmed per question, and none may hold the answer up for long. */
+  const CODE_MAX_PROBES = 2;
+  const CODE_PROBE_TIMEOUT_MS = 1200;
+
+  /** The distinct values a coded column holds, kept local. Null when not certain: a wrong caveat is worse than none. */
+  async function codeValuesOf(
+    conn: Connector,
+    schema: string | undefined,
+    table: string,
+    column: string,
+    signal: AbortSignal | undefined,
+  ): Promise<string[] | null> {
+    const q = conn.dialect.quoteChar;
+    const id = (name: string) => `${q}${name.split(q).join(q + q)}${q}`;
+    // Qualified when the catalog knows a schema: an unqualified name resolves only inside search_path,
+    // so the probe errored, the catch returned null, and the check went quiet for every other schema.
+    const relation = schema ? `${id(schema)}.${id(table)}` : id(table);
+    const select = `SELECT DISTINCT ${id(column)} AS v FROM ${relation}`;
+    const cap = CODE_MAX_DISTINCT + 1;
+    const capped =
+      conn.dialect.limitStyle === 'fetch' ? `${select} FETCH FIRST ${cap} ROWS ONLY` : `${select} LIMIT ${cap}`;
+    try {
+      const probe = await conn.execute(capped, {
+        signal,
+        timeoutMs: CODE_PROBE_TIMEOUT_MS,
+        maxRows: cap,
+      });
+      if (probe.rows.length === 0 || probe.rows.length > CODE_MAX_DISTINCT) return null;
+      return probe.rows.map((r) => String(r[0] ?? '')).filter((v) => v !== '');
+    } catch {
+      return null; // a probe that cannot answer says nothing
+    }
+  }
 
   /** Enforces `allowDataInPrompt`: drops sampled cell values, keeps declared enum labels. */
   function stripSampledValues(catalog: SchemaCatalog, allowed: boolean): SchemaCatalog {
@@ -1006,6 +1043,50 @@ export function createAskSql(config: AskSqlConfig): AskSqlEngine {
           dialect: conn.dialect,
         });
         continue;
+      }
+
+      // Coded-value floor: `status = 2` where no row has 2 returns a zero indistinguishable from a true
+      // one. Naming the real values to the model is row data, which only `allowDataInPrompt` permits.
+      // Grouped by column before slicing: sliced by literal, `status IN (0,1) AND total_cents = 9`
+      // spent both probes re-reading `status` and never looked at the column that was actually absent.
+      const byColumn = new Map<string, ReturnType<typeof codeLiterals>>();
+      for (const candidate of codeLiterals(verdict.sql, conn.dialect.grammar, fullCatalog)) {
+        const key = `${candidate.schema ?? ''}.${candidate.table}.${candidate.column}`.toLowerCase();
+        const group = byColumn.get(key);
+        if (group) group.push(candidate);
+        else byColumn.set(key, [candidate]);
+      }
+      const codes = [...byColumn.values()].slice(0, CODE_MAX_PROBES).map((group) => group[0]!);
+      let impossible: { column: string; literal: number; values: string[] } | null = null;
+      for (const candidate of codes) {
+        const values = await codeValuesOf(conn, candidate.schema, candidate.table, candidate.column, opts.signal);
+        // Numerically, not textually: NUMERIC(5,2) renders 18 as "18.00", and comparing the strings
+        // reported a value as absent while the query it came from was returning rows.
+        if (!values || values.some((v) => v === String(candidate.literal) || Number(v) === candidate.literal)) continue;
+        impossible = { column: `${candidate.table}.${candidate.column}`, literal: candidate.literal, values };
+        break;
+      }
+      if (impossible && attempt < MAX_REPAIRS && config.allowDataInPrompt === true) {
+        userPrompt = buildRepairUser({
+          question: q,
+          failedSql: verdict.sql,
+          allowImpossible: true,
+          failure:
+            `No row has ${impossible.column} = ${impossible.literal}. The values it actually holds are: ` +
+            `${impossible.values.map(sanitizeValue).join(', ')}. Pick from those, and if none of them answers the question, ` +
+            'say so rather than choosing one.',
+          schemaText,
+          dialect: conn.dialect,
+        });
+        continue;
+      }
+      if (impossible) {
+        // No data opt-in: the values stay out of the prompt, so the caveat goes to the reader.
+        semanticNotes.push(
+          `No row has ${impossible.column} = ${impossible.literal}, so this returns nothing for that ` +
+            'reason rather than because nothing matched the question. If it is a status or type code, ' +
+            'what each value means is defined in the application, not the database.',
+        );
       }
 
       // Non-blocking: the query still runs. A pronoun with no antecedent means the model chose a

@@ -1,0 +1,472 @@
+{
+  "_comment": [
+    "One specification for the derived column hints, asserted by BOTH implementations:",
+    "  TypeScript  packages/sqlite/test/hint-parity.test.ts",
+    "  Kotlin      packages/jetbrains/.../db/HintParityTest.kt",
+    "These are hand-written expectations, not generated output, so a change on either side fails on that",
+    "side rather than silently becoming the new truth. A user must see the same schema in Android Studio",
+    "as in VS Code; a divergence here is the bug class this file exists to prevent.",
+    "Each vector builds `CREATE TABLE t (id INTEGER PRIMARY KEY, <column> <dbType>)`, inserts one row per",
+    "entry in `rows`, introspects, and compares the column's comment to `expect` (null = no comment).",
+    "Key NAMES are gated behind the host's cell-value opt-in, so these default-path vectors state the count. A stable map (per-user scores) has perfect recurrence and is structurally identical to a record, so no threshold separates them; see jsonHint in packages/core/src/column-hints.ts.",
+    "Identifiers in a hint are quoted the way the probe quotes them: unquoted, a mixed-case name folds and the suggested expression fails with \"column ... does not exist\"."
+  ],
+  "vectors": [
+    {
+      "name": "a record whose keys recur is named",
+      "column": "prefs",
+      "dbType": "TEXT",
+      "rows": [
+        "{\"theme\":\"dark\",\"notify\":true}",
+        "{\"theme\":\"light\",\"notify\":false}",
+        "{\"theme\":\"dark\"}"
+      ],
+      "expect": "JSON object, read with json_extract(\"prefs\", '$.key') (2 recurring keys)"
+    },
+    {
+      "name": "keys that never recur are usernames, not fields",
+      "column": "perms",
+      "dbType": "TEXT",
+      "rows": [
+        "{\"ZZALICE\":3}",
+        "{\"ZZBOB\":7}",
+        "{\"ZZCAROL\":1}"
+      ],
+      "expect": "JSON object, read with json_extract(\"perms\", '$.key')"
+    },
+    {
+      "name": "a single recurring key is a one-tenant map, not a record",
+      "column": "by_tenant",
+      "dbType": "TEXT",
+      "rows": [
+        "{\"ZZACME\":1}",
+        "{\"ZZACME\":2}",
+        "{\"ZZACME\":3}"
+      ],
+      "expect": "JSON object, read with json_extract(\"by_tenant\", '$.key')"
+    },
+    {
+      "name": "two repeat keys among many one-off ones are still a map",
+      "column": "ledger",
+      "dbType": "TEXT",
+      "rows": [
+        "{\"ZZALICE\":1}",
+        "{\"ZZALICE\":2}",
+        "{\"ZZBOB\":3}",
+        "{\"ZZBOB\":4}",
+        "{\"ZZONEOFF0\":0}",
+        "{\"ZZONEOFF1\":1}",
+        "{\"ZZONEOFF2\":2}",
+        "{\"ZZONEOFF3\":3}",
+        "{\"ZZONEOFF4\":4}",
+        "{\"ZZONEOFF5\":5}",
+        "{\"ZZONEOFF6\":6}",
+        "{\"ZZONEOFF7\":7}",
+        "{\"ZZONEOFF8\":8}",
+        "{\"ZZONEOFF9\":9}",
+        "{\"ZZONEOFF10\":10}",
+        "{\"ZZONEOFF11\":11}",
+        "{\"ZZONEOFF12\":12}",
+        "{\"ZZONEOFF13\":13}",
+        "{\"ZZONEOFF14\":14}",
+        "{\"ZZONEOFF15\":15}"
+      ],
+      "expect": "JSON object, read with json_extract(\"ledger\", '$.key')"
+    },
+    {
+      "name": "a key that is not identifier-shaped rejects the column outright",
+      "column": "owed",
+      "dbType": "TEXT",
+      "rows": [
+        "{\"ada@example.com\":1}",
+        "{\"ada@example.com\":2}",
+        "{\"ada@example.com\":3}"
+      ],
+      "expect": null
+    },
+    {
+      "name": "under three rows there is no evidence of reuse",
+      "column": "prefs",
+      "dbType": "TEXT",
+      "rows": [
+        "{\"theme\":\"dark\",\"notify\":true}",
+        "{\"theme\":\"light\",\"notify\":false}"
+      ],
+      "expect": "JSON object, read with json_extract(\"prefs\", '$.key')"
+    },
+    {
+      "name": "only top-level keys are named",
+      "column": "doc",
+      "dbType": "TEXT",
+      "rows": [
+        "{\"a\":{\"b\":1},\"c\":[1,2],\"d\":\"x:y{\"}",
+        "{\"a\":{\"b\":2},\"c\":[3],\"d\":\"p:q}\"}",
+        "{\"a\":{\"b\":3},\"c\":[],\"d\":\"z\"}"
+      ],
+      "expect": "JSON object, read with json_extract(\"doc\", '$.key') (3 recurring keys)"
+    },
+    {
+      "name": "an escaped quote inside a value does not end the string",
+      "column": "doc",
+      "dbType": "TEXT",
+      "rows": [
+        "{\"note\":\"he said \\\"hi\\\"\",\"kind\":\"a\"}",
+        "{\"note\":\"she said \\\"bye\\\"\",\"kind\":\"b\"}",
+        "{\"note\":\"plain\",\"kind\":\"c\"}"
+      ],
+      "expect": "JSON object, read with json_extract(\"doc\", '$.key') (2 recurring keys)"
+    },
+    {
+      "name": "an object with no keys still gets the accessor",
+      "column": "doc",
+      "dbType": "TEXT",
+      "rows": [
+        "{}",
+        "{}",
+        "{}"
+      ],
+      "expect": "JSON object, read with json_extract(\"doc\", '$.key')"
+    },
+    {
+      "name": "ordinary text is not JSON",
+      "column": "title",
+      "dbType": "TEXT",
+      "rows": [
+        "Let It Be",
+        "Abbey Road",
+        "Revolver"
+      ],
+      "expect": null
+    },
+    {
+      "name": "malformed JSON is not JSON",
+      "column": "broken",
+      "dbType": "TEXT",
+      "rows": [
+        "{not json",
+        "{also not",
+        "{nope"
+      ],
+      "expect": null
+    },
+    {
+      "name": "a JSON array is described by its element type, not by keys",
+      "column": "ids",
+      "dbType": "TEXT",
+      "rows": [
+        "[1,2,3]",
+        "[4]",
+        "[]"
+      ],
+      "expect": "JSON array of numbers; test membership with EXISTS (SELECT 1 FROM json_each(\"ids\") WHERE value = 1)"
+    },
+    {
+      "name": "a column that is JSON in only some rows is not described",
+      "column": "v",
+      "dbType": "TEXT",
+      "rows": [
+        "{\"a\":1,\"b\":2}",
+        "{\"a\":3,\"b\":4}",
+        "plain text"
+      ],
+      "expect": null
+    },
+    {
+      "name": "an integer timestamp in milliseconds states its unit",
+      "column": "created_at",
+      "dbType": "INTEGER",
+      "rows": [
+        1755300000000,
+        1755300000001,
+        1755300000002
+      ],
+      "expect": "epoch milliseconds"
+    },
+    {
+      "name": "an integer timestamp in seconds states its unit",
+      "column": "created_at",
+      "dbType": "INTEGER",
+      "rows": [
+        1755300000,
+        1755300001,
+        1755300002
+      ],
+      "expect": "epoch seconds"
+    },
+    {
+      "name": "an id named like a moment is not a timestamp",
+      "column": "created_by_employee_id",
+      "dbType": "INTEGER",
+      "rows": [
+        1755300000,
+        1755300001,
+        1755300002
+      ],
+      "expect": null
+    },
+    {
+      "name": "a document number named like a moment is not a timestamp",
+      "column": "start_no",
+      "dbType": "INTEGER",
+      "rows": [
+        1755300000,
+        1755300001,
+        1755300002
+      ],
+      "expect": null
+    },
+    {
+      "name": "an integer that is not a moment is left alone",
+      "column": "qty",
+      "dbType": "INTEGER",
+      "rows": [
+        3,
+        4,
+        5
+      ],
+      "expect": null
+    },
+    {
+      "name": "a magnitude too small to be a modern timestamp says nothing",
+      "column": "created_at",
+      "dbType": "INTEGER",
+      "rows": [
+        1000,
+        2000,
+        3000
+      ],
+      "expect": null
+    },
+    {
+      "name": "a unicode-escaped key is not a field name",
+      "column": "prefs",
+      "dbType": "TEXT",
+      "rows": [
+        "{\"caf\\u00e9\":1,\"na\\u00efve\":2}",
+        "{\"caf\\u00e9\":1,\"na\\u00efve\":2}",
+        "{\"caf\\u00e9\":1,\"na\\u00efve\":2}"
+      ],
+      "expect": null
+    },
+    {
+      "name": "an escaped delimiter inside a key is not a field name",
+      "column": "prefs",
+      "dbType": "TEXT",
+      "rows": [
+        "{\"a\\u003db\":1,\"c\\u003dd\":2}",
+        "{\"a\\u003db\":1,\"c\\u003dd\":2}",
+        "{\"a\\u003db\":1,\"c\\u003dd\":2}"
+      ],
+      "expect": null
+    },
+    {
+      "name": "escapes inside a value do not disturb the keys",
+      "column": "doc",
+      "dbType": "TEXT",
+      "rows": [
+        "{\"note\":\"line1\\nline2\",\"theme\":\"da\\u003drk\"}",
+        "{\"note\":\"line1\\nline2\",\"theme\":\"da\\u003drk\"}",
+        "{\"note\":\"line1\\nline2\",\"theme\":\"da\\u003drk\"}"
+      ],
+      "expect": "JSON object, read with json_extract(\"doc\", '$.key') (2 recurring keys)"
+    },
+    {
+      "name": "a JSON array of numbers names its element type",
+      "column": "ids",
+      "dbType": "TEXT",
+      "rows": [
+        "[1,2]",
+        "[3]",
+        "[]"
+      ],
+      "expect": "JSON array of numbers; test membership with EXISTS (SELECT 1 FROM json_each(\"ids\") WHERE value = 1)"
+    },
+    {
+      "name": "a JSON array of strings names its element type",
+      "column": "tags",
+      "dbType": "TEXT",
+      "rows": [
+        "[\"a\",\"b\"]",
+        "[\"c\"]",
+        "[\"d\"]"
+      ],
+      "expect": "JSON array of strings; test membership with EXISTS (SELECT 1 FROM json_each(\"tags\") WHERE value = 'a')"
+    },
+    {
+      "name": "an array of mixed types is not described",
+      "column": "mixed",
+      "dbType": "TEXT",
+      "rows": [
+        "[1,\"a\"]",
+        "[2]",
+        "[3]"
+      ],
+      "expect": null
+    },
+    {
+      "name": "an array of objects is not a simple membership test",
+      "column": "docs",
+      "dbType": "TEXT",
+      "rows": [
+        "[{\"a\":1}]",
+        "[{\"a\":2}]",
+        "[{\"a\":3}]"
+      ],
+      "expect": null
+    },
+    {
+      "name": "relaxed JSON5 with unquoted keys is not a JSON object",
+      "column": "cfg",
+      "dbType": "TEXT",
+      "rows": [
+        "{env: \"prod\", tier: \"gold\"}",
+        "{env: \"prod\", tier: \"gold\"}",
+        "{env: \"prod\", tier: \"gold\"}"
+      ],
+      "expect": null
+    },
+    {
+      "name": "a Java Map.toString is not a JSON object",
+      "column": "cfg",
+      "dbType": "TEXT",
+      "rows": [
+        "{name=Ada, city=Pune}",
+        "{name=Ada, city=Pune}",
+        "{name=Ada, city=Pune}"
+      ],
+      "expect": null
+    },
+    {
+      "name": "single-quoted keys are not JSON",
+      "column": "cfg",
+      "dbType": "TEXT",
+      "rows": [
+        "{'a': 1, 'b': 2}",
+        "{'a': 1, 'b': 2}",
+        "{'a': 1, 'b': 2}"
+      ],
+      "expect": null
+    },
+    {
+      "name": "content after the object means the text is not one object",
+      "column": "cfg",
+      "dbType": "TEXT",
+      "rows": [
+        "{\"a\":1,\"b\":2} extra",
+        "{\"a\":1,\"b\":2} extra",
+        "{\"a\":1,\"b\":2} extra"
+      ],
+      "expect": null
+    },
+    {
+      "name": "two objects concatenated are not one object",
+      "column": "cfg",
+      "dbType": "TEXT",
+      "rows": [
+        "{\"a\":1}{\"b\":2}",
+        "{\"a\":1}{\"b\":2}",
+        "{\"a\":1}{\"b\":2}"
+      ],
+      "expect": null
+    },
+    {
+      "name": "prose wrapped in braces is not a JSON object",
+      "column": "note",
+      "dbType": "TEXT",
+      "rows": [
+        "{user} said hi",
+        "{user} said hi",
+        "{user} said hi"
+      ],
+      "expect": null
+    },
+    {
+      "name": "a comma inside a string does not split the array",
+      "column": "names",
+      "dbType": "TEXT",
+      "rows": [
+        "[\"Smith, John\"]",
+        "[\"Doe, Jane\"]",
+        "[\"Roe, Rick\"]"
+      ],
+      "expect": "JSON array of strings; test membership with EXISTS (SELECT 1 FROM json_each(\"names\") WHERE value = 'a')"
+    },
+    {
+      "name": "a brace inside a string does not make the array nested",
+      "column": "tags",
+      "dbType": "TEXT",
+      "rows": [
+        "[\"a{b\"]",
+        "[\"c}d\"]",
+        "[\"e[f\"]"
+      ],
+      "expect": "JSON array of strings; test membership with EXISTS (SELECT 1 FROM json_each(\"tags\") WHERE value = 'a')"
+    },
+    {
+      "name": "leading zeros are not JSON numbers",
+      "column": "codes",
+      "dbType": "TEXT",
+      "rows": [
+        "[08,09]",
+        "[08,09]",
+        "[08,09]"
+      ],
+      "expect": null
+    },
+    {
+      "name": "Infinity is not a JSON number",
+      "column": "vals",
+      "dbType": "TEXT",
+      "rows": [
+        "[Infinity]",
+        "[Infinity]",
+        "[Infinity]"
+      ],
+      "expect": null
+    },
+    {
+      "name": "a numeric literal with a suffix is not JSON",
+      "column": "vals",
+      "dbType": "TEXT",
+      "rows": [
+        "[1d]",
+        "[1d]",
+        "[1d]"
+      ],
+      "expect": null
+    },
+    {
+      "name": "a key repeated inside one document counts once",
+      "column": "cfg",
+      "dbType": "TEXT",
+      "rows": [
+        "{\"a\":1,\"a\":2,\"b\":3}",
+        "{\"a\":1,\"a\":2,\"b\":3}",
+        "{\"a\":1,\"a\":2,\"b\":3}"
+      ],
+      "expect": "JSON object, read with json_extract(\"cfg\", '$.key') (2 recurring keys)"
+    },
+    {
+      "name": "a never-expires sentinel does not decide the unit",
+      "column": "expires_at",
+      "dbType": "INTEGER",
+      "rows": [
+        1755300000000,
+        1755300000001,
+        9223372036854775807
+      ],
+      "expect": "epoch milliseconds"
+    },
+    {
+      "name": "a column mixing seconds and milliseconds gets no unit",
+      "column": "created_at",
+      "dbType": "INTEGER",
+      "rows": [
+        1755300000,
+        1755300001,
+        1755300000000
+      ],
+      "expect": null
+    }
+  ]
+}

@@ -6,6 +6,18 @@
  */
 
 import {
+  epochUnitOf,
+  isJsonCandidateColumn,
+  isMomentColumn,
+  jsonArrayElementOf,
+  jsonHint,
+  jsonShapeOf,
+  JSON_SAMPLE_ROWS,
+  MAX_HINT_PROBES,
+  MAX_HINT_PROBES_PER_TABLE,
+} from '@asksql/core';
+import type { ColumnInfo, TableInfo } from '@asksql/core';
+import {
   AskSqlError,
   DUCKDB_DIALECT,
   VALUE_SAMPLE_MAX_DISTINCT,
@@ -18,6 +30,7 @@ import { readFile } from 'node:fs/promises';
 import {
   assertSafeFilePath,
   buildDuckCatalog,
+  withDuckColumnHints,
   buildResultColumns,
   DUCK_CAPABILITIES,
   INTROSPECT_COLUMNS_SQL,
@@ -303,7 +316,13 @@ export class DuckDbConnector implements Connector {
       /* views are optional */
     }
     const catalog = buildDuckCatalog(columnRows, viewNames, this.registered, warnings);
-    return this.config.sampleColumnValues ? this.attachSampledValues(catalog) : catalog;
+    const withValues = this.config.sampleColumnValues ? await this.attachSampledValues(catalog) : catalog;
+    // The hint pass is shared with the browser build; see withDuckColumnHints.
+    return withDuckColumnHints(
+      withValues,
+      async (sql: string, maxRows: number) => (await this.connection().runAndReadUntil(sql, maxRows)).getRowObjects(),
+      this.config.sampleColumnValues === true,
+    );
   }
 
   /** Opt-in: enrich short non-enum text columns with the distinct codes they hold, rebuilding the catalog immutably. */

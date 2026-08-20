@@ -60,3 +60,16 @@ export {
 // The remaining routing predicates, exported for the JetBrains parity exporter.
 export { danglingReference, isCapabilityQuestion, isPromptInjection } from './scope.js';
 // MongoDB (non-SQL) engine path: import from '@asksql/core/mongo'.
+export {
+  isMomentColumn,
+  isJsonCandidateColumn,
+  epochUnitOf,
+  jsonShapeOf,
+  jsonArrayElementOf,
+  jsonHint,
+  MAX_HINT_PROBES,
+  MAX_HINT_PROBES_PER_TABLE,
+  JSON_SAMPLE_ROWS,
+  HINT_VALUE_CAP,
+} from './column-hints.js';
+export { createReasoningFilter, withoutReasoning } from './extract.js';

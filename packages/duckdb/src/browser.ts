@@ -16,6 +16,7 @@ import {
 } from '@asksql/core/runtime';
 import {
   buildDuckCatalog,
+  withDuckColumnHints,
   buildResultColumns,
   DUCK_CAPABILITIES,
   INTROSPECT_COLUMNS_SQL,
@@ -327,7 +328,15 @@ export class DuckDbWasmConnector implements Connector {
     } catch {
       /* optional */
     }
-    return buildDuckCatalog(columnRows, viewNames, this.registered, warnings);
+    const catalog = buildDuckCatalog(columnRows, viewNames, this.registered, warnings);
+    // The same hint pass the Node build runs. This build loads uploaded CSV and Parquet, where the
+    // column types are inferred and say least, which is exactly what the hints exist for.
+    return withDuckColumnHints(
+      catalog,
+      async (sql) => arrowRows(await conn.query(sql)),
+      // This build has no cell-value opt-in, so a JSON column's key names are never stated here.
+      false,
+    );
   }
 
   async execute(sql: string, opts?: ExecuteOptions): Promise<ResultSet> {

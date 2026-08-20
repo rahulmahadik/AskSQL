@@ -2,6 +2,8 @@ package com.rahulmahadik.asksql.ide.engine
 
 import com.rahulmahadik.asksql.ide.db.ConnectionDescriptor
 import com.rahulmahadik.asksql.ide.db.ConnectionRegistry
+import com.rahulmahadik.asksql.ide.model.LimitStyle
+import com.rahulmahadik.asksql.ide.model.CellValue
 import com.rahulmahadik.asksql.ide.db.JdbcExecutor
 import com.rahulmahadik.asksql.ide.db.introspect.Introspectors
 import com.rahulmahadik.asksql.ide.errors.AskSqlErrorCode
@@ -34,9 +36,16 @@ class EnginePipeline(
     var policy: GuardPolicy = GuardPolicy.DEFAULT,
     /** Schema token budget, refreshed from settings on every access like [policy]. */
     var maxSchemaTokens: Int = CatalogPruner.PrunerSettings().maxSchemaTokens,
+    /** Send example cell values to the model. Off by default: only the schema leaves the machine. */
+    var allowDataInPrompt: Boolean = false,
 ) {
     companion object {
         private const val MAX_REPAIRS = 2
+
+        /** Distinct values past this many mean a measurement, not a code. */
+        private const val CODE_MAX_DISTINCT = 25
+        private const val CODE_MAX_PROBES = 2
+        private const val CODE_PROBE_TIMEOUT_MS = 1200L
         private val CATALOG_TTL = 300.seconds
 
         /** At most one staleness-driven re-read per connection in this window. */
@@ -299,7 +308,7 @@ class EnginePipeline(
             // Blocking JDBC: the fetch carries its own hard timeout.
             val fresh = withHardTimeout(60_000) {
                 connectionRegistry.withConnection(descriptor, password) { connection ->
-                    Introspectors.forEngine(descriptor.engine).introspect(connection)
+                    Introspectors.forEngine(descriptor.engine).introspect(connection, allowDataInPrompt)
                 }
             }
             // An empty catalog WITH warnings is a permission or network failure, not an empty
@@ -324,6 +333,49 @@ class EnginePipeline(
     }
 
     // ask(): question -> catalog -> prune -> prompt -> LLM -> extract -> guard -> hallucination floors -> repair loop
+
+    /** The distinct values a coded column holds, kept local. Null when not certain: a wrong caveat is worse than none. */
+    private suspend fun codeValuesOf(
+        descriptor: ConnectionDescriptor,
+        password: String?,
+        schema: String?,
+        table: String,
+        column: String,
+    ): List<String>? = try {
+        val dialect = Dialects.of(descriptor.engine)
+        val q = dialect.quoteChar
+        fun id(name: String) = "$q${name.replace(q.toString(), "$q$q")}$q"
+        // Qualified when the catalog knows a schema: unqualified, the probe errored outside the
+        // search path, the catch returned null, and the check went quiet.
+        val relation = if (schema.isNullOrBlank()) id(table) else "${id(schema)}.${id(table)}"
+        val select = "SELECT DISTINCT ${id(column)} AS v FROM $relation"
+        val cap = CODE_MAX_DISTINCT + 1
+        val sql = if (dialect.limitStyle == LimitStyle.FETCH) "$select FETCH FIRST $cap ROWS ONLY" else "$select LIMIT $cap"
+        val result = connectionRegistry.withConnection(descriptor, password) { connection ->
+            JdbcExecutor.execute(connection, sql, cap, CODE_PROBE_TIMEOUT_MS, descriptor.engine)
+        }
+        if (result.rows.isEmpty() || result.rows.size > CODE_MAX_DISTINCT) {
+            null
+        } else {
+            // An all-NULL column returns one NULL row, which is not zero rows: without this the
+            // pick-from list came out empty and the repair asked the model to choose from nothing.
+            result.rows.mapNotNull { row -> row.firstOrNull()?.let { codeText(it) } }.ifEmpty { null }
+        }
+    } catch (e: Exception) {
+        null // a probe that cannot answer says nothing
+    }
+
+    /** A cell as the literal a query would compare against: a whole Number must not read as "2.0". */
+    private fun codeText(cell: CellValue): String? = when (cell) {
+        is CellValue.ExactNumeric -> cell.value
+        is CellValue.Text -> cell.value
+        is CellValue.Number -> if (cell.value == Math.floor(cell.value) && !cell.value.isInfinite()) {
+            cell.value.toLong().toString()
+        } else {
+            cell.value.toString()
+        }
+        else -> null
+    }
 
     suspend fun ask(
         question: String,
@@ -726,17 +778,50 @@ class EnginePipeline(
                 continue
             }
 
+            // Coded-value floor, mirroring packages/core/src/engine.ts: `status = 2` where no row has 2
+            // returns a zero indistinguishable from a true one. Naming the real values to the model is
+            // row data, which only allowDataInPrompt permits.
+            var impossible: Triple<String, Long, List<String>>? = null
+            // Grouped by column before taking: taken by literal, `status IN (0,1) AND total_cents = 9`
+            // spent both probes re-reading `status` and never looked at the column that was absent.
+            val byColumn = Semantics.codeLiterals(verdict.sql, fullCatalog)
+                .groupBy { "${it.schema.orEmpty()}.${it.table}.${it.column}".lowercase() }
+                .values.mapNotNull { it.firstOrNull() }
+            for (candidate in byColumn.take(CODE_MAX_PROBES)) {
+                val values = codeValuesOf(descriptor, password, candidate.schema, candidate.table, candidate.column) ?: continue
+                // Numerically, not textually: NUMERIC(5,2) renders 18 as "18.00", and comparing the
+                // strings reported a value as absent while the query it came from was returning rows.
+                if (values.any { it == candidate.literal.toString() || it.toDoubleOrNull() == candidate.literal.toDouble() }) continue
+                impossible = Triple("${candidate.table}.${candidate.column}", candidate.literal, values)
+                break
+            }
+            if (impossible != null && attempt < MAX_REPAIRS && allowDataInPrompt) {
+                userPrompt = Prompts.buildRepairUser(
+                    question = q, failedSql = verdict.sql, allowImpossible = true,
+                    failure = "No row has ${impossible.first} = ${impossible.second}. The values it actually holds are: " +
+                        "${impossible.third.joinToString(", ")}. Pick from those, and if none of them answers the " +
+                        "question, say so rather than choosing one.",
+                    schemaText = schemaText, dialect = dialect,
+                )
+                attempt++
+                continue
+            }
+            val codeNote = impossible?.let {
+                "No row has ${it.first} = ${it.second}, so this returns nothing for that reason rather than " +
+                    "because nothing matched the question. If it is a status or type code, what each value " +
+                    "means is defined in the application, not the database."
+            }
+
             // Non-blocking: the query still runs. A pronoun with no antecedent means the model chose a
             // subject on its own, which is worth saying rather than refusing over.
             val dangling = Scope.danglingReference(q, context.any { it.sql.isNotBlank() })
-            val notes = if (dangling != null) {
-                listOf(
-                    "\"$dangling\" does not refer to anything earlier in this conversation, so the query below " +
-                        "picked a subject on its own. Name who you mean and ask again if that is wrong.",
-                )
-            } else {
-                emptyList()
-            }
+            val notes = listOfNotNull(
+                codeNote,
+                dangling?.let {
+                    "\"$it\" does not refer to anything earlier in this conversation, so the query below " +
+                        "picked a subject on its own. Name who you mean and ask again if that is wrong."
+                },
+            )
             for (note in notes) onEvent?.onEvent(EngineEvent.Warning(note))
 
             onEvent?.onEvent(EngineEvent.StageEvent(Stage.DONE))

@@ -12,7 +12,7 @@ object MySqlIntrospector : Introspector {
 
     private val ENUM_COLUMN_TYPE = Regex("""^enum\((.*)\)$""", RegexOption.IGNORE_CASE)
 
-    override fun introspect(connection: Connection): SchemaCatalog {
+    override fun introspect(connection: Connection, nameKeys: Boolean): SchemaCatalog {
         val currentSchema = connection.catalog
         val raw = CommonIntrospection.listTables(connection, catalog = currentSchema, schemaPattern = null)
 
@@ -74,7 +74,8 @@ object MySqlIntrospector : Introspector {
         return SchemaCatalog(
             engine = EngineKind.MYSQL,
             schemas = listOfNotNull(currentSchema),
-            tables = tables,
+            // A column's type says nothing about an epoch unit or a JSON column's keys; see ColumnHints.
+            tables = ColumnHints.annotate(connection, EngineKind.MYSQL, tables, nameKeys),
             routines = routines(connection, currentSchema),
         )
     }

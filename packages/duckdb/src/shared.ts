@@ -1,3 +1,14 @@
+import {
+  epochUnitOf,
+  isJsonCandidateColumn,
+  isMomentColumn,
+  jsonArrayElementOf,
+  jsonHint,
+  jsonShapeOf,
+  JSON_SAMPLE_ROWS,
+  MAX_HINT_PROBES,
+  MAX_HINT_PROBES_PER_TABLE,
+} from '@asksql/core';
 /**
  * Driver-agnostic DuckDB logic shared by the Node (`@duckdb/node-api`) and
  * browser (`@duckdb/duckdb-wasm`) connectors: file-format resolution,
@@ -515,4 +526,82 @@ export function mapFileError(file: FileSource, err: unknown): AskSqlError {
     detail: msg,
     cause: err,
   });
+}
+
+/** Reads a probe's rows; each DuckDB build supplies its own, since their drivers differ. */
+export type DuckProbeReader = (sql: string, maxRows: number) => Promise<Record<string, unknown>[]>;
+
+/**
+ * States what a DuckDB column's type leaves out: the unit of a BIGINT timestamp, and the keys inside a
+ * JSON column. DuckDB is usually pointed at CSV or Parquet, so its types are INFERRED and say even less
+ * than a declared schema does. Shared by both builds: the browser one loads uploaded files, which is
+ * exactly the case this exists for.
+ *
+ * Structure only - a unit from aggregates, key names that recur and only under the opt-in.
+ */
+export async function withDuckColumnHints(
+  catalog: SchemaCatalog,
+  read: DuckProbeReader,
+  nameKeys: boolean,
+): Promise<SchemaCatalog> {
+  const quote = (id: string): string => `"${id.split('"').join('""')}"`;
+  // Every other engine bounds a probe; without one here a MAX() over a large Parquet scan runs to
+  // completion during what should be a catalog read.
+  const bounded = async (sql: string, maxRows: number): Promise<Record<string, unknown>[]> =>
+    read(`SET statement_timeout = '2s'; ${sql}`, maxRows).catch(() => read(sql, maxRows));
+  let total = MAX_HINT_PROBES;
+  const tables: TableInfo[] = [];
+  for (const t of catalog.tables) {
+    if (t.kind === 'view' || total <= 0) {
+      tables.push(t);
+      continue;
+    }
+    const rel = `${quote(t.schema ?? 'main')}.${quote(t.name)}`;
+    // Per table, so filler tables early in the catalog cannot spend every probe.
+    let budget = Math.min(MAX_HINT_PROBES_PER_TABLE, total);
+    const columns: ColumnInfo[] = [];
+    for (const col of t.columns) {
+      const moment = isMomentColumn(col.name, col.dbType);
+      const isJson = isJsonCandidateColumn(col.dbType);
+      if (budget <= 0 || col.comment || (!moment && !isJson)) {
+        columns.push(col);
+        continue;
+      }
+      budget--;
+      total--;
+      try {
+        if (moment) {
+          const rows = await bounded(
+            `SELECT MIN(${quote(col.name)}) AS lo, MAX(${quote(col.name)}) AS hi FROM ${rel}`,
+            1,
+          );
+          const unit = epochUnitOf(Number(rows[0]?.['lo']), Number(rows[0]?.['hi']));
+          columns.push(unit ? { ...col, comment: unit } : col);
+        } else {
+          const rows = await bounded(
+            `SELECT CAST(${quote(col.name)} AS VARCHAR) AS v FROM ${rel} ` +
+              `WHERE ${quote(col.name)} IS NOT NULL LIMIT ${JSON_SAMPLE_ROWS}`,
+            JSON_SAMPLE_ROWS,
+          );
+          const vals = rows.map((r) => r['v']);
+          const shape = vals.length > 0 ? jsonShapeOf(vals) : null;
+          const el = shape ? null : vals.length > 0 ? jsonArrayElementOf(vals) : null;
+          columns.push(
+            shape
+              ? { ...col, comment: jsonHint(`${quote(col.name)}->>'$.key'`, shape.keys, nameKeys) }
+              : el
+                ? {
+                    ...col,
+                    comment: `JSON array of ${el}s; test membership with json_contains(${quote(col.name)}, '${el === 'number' ? '1' : '"a"'}')`,
+                  }
+                : col,
+          );
+        }
+      } catch {
+        columns.push(col); // best-effort: an unreadable column simply goes undescribed
+      }
+    }
+    tables.push({ ...t, columns });
+  }
+  return { ...catalog, tables };
 }

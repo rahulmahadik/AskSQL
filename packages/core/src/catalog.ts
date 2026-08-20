@@ -21,7 +21,7 @@ const FK_CLOSURE_HOPS = 2;
 const VALUE_SAMPLE_CAP = 80;
 
 /** A sampled/enum value rendered into the schema: `|` is replaced, whitespace flattened, length capped. */
-function sanitizeValue(v: string): string {
+export function sanitizeValue(v: string): string {
   const flat = v.replace(/\s+/gu, ' ').trim().replace(/\|/gu, '/');
   return flat.length > VALUE_SAMPLE_CAP ? flat.slice(0, VALUE_SAMPLE_CAP) : flat;
 }

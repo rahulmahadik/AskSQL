@@ -1,5 +1,6 @@
 package com.rahulmahadik.asksql.ide.engine
 
+import com.rahulmahadik.asksql.ide.db.introspect.ColumnHints
 import net.sf.jsqlparser.expression.AnalyticExpression
 import net.sf.jsqlparser.expression.AnalyticType
 import net.sf.jsqlparser.expression.Expression
@@ -242,6 +243,116 @@ object Semantics {
             plain.joins?.forEach { j -> j.onExpressions?.forEach { on -> scanExpression(on)?.let { return it } } }
         }
         return null
+    }
+
+/** [schema] is carried so the probe can qualify the relation; unqualified it was inert off search_path. */
+    data class CodeLiteral(val schema: String?, val table: String, val column: String, val literal: Long)
+
+    /**
+     * A measurement, not a code. An absent age or salary is a true zero, and telling the reader it
+     * "returned nothing for that reason" says a correct answer is an artifact.
+     */
+    private val MEASURE_NAME = Regex(
+        "(?:^|_)(?:age|salary|wage|pay|price|amount|cost|fee|total|sum|qty|quantity|count|score|rating|rank|year|month|day|week|hour|minute|second|size|weight|height|width|length|depth|duration|percent|percentage|rate|balance|stock|level)s?$",
+        RegexOption.IGNORE_CASE,
+    )
+
+    /** An identifier, not a code: an absent id is an ordinary empty result. */
+    private val ID_NAME = Regex("""(?:^|_)(?:id|ids|key|uuid|guid|hash)$""", RegexOption.IGNORE_CASE)
+
+    private val MOMENT_NAME = Regex(
+        """(?:^|_)(?:at|ts|time|date|timestamp|created|updated|modified|deleted|expires?|expiry|sent|received|due|since|until)(?:_|$)|(?:time|date|timestamp)$""",
+        RegexOption.IGNORE_CASE,
+    )
+
+    /**
+     * Which table a bare column belongs to. Only the tables this statement names are considered: judged
+     * against the whole catalog, any schema with two `status` columns made every such reference
+     * ambiguous and the check went silent. A name two tables in the query share is still skipped.
+     */
+    private fun ownerOf(
+        column: String,
+        catalog: com.rahulmahadik.asksql.ide.model.SchemaCatalog,
+        inScope: Map<String, String> = emptyMap(),
+    ) = catalog.tables
+        .filter { t -> inScope.isEmpty() || inScope.values.any { it.equals(t.name, true) } }
+        .filter { t -> t.columns.any { it.name.equals(column, true) } }
+        .singleOrNull()
+
+    /**
+     * An integer column compared against a whole-number code: `status = 2`. What 2 means lives in the
+     * application, so a wrong ordinal matches nothing and reads as a true zero. Mirrors core's semantics.ts.
+     */
+    fun codeLiterals(sql: String, catalog: com.rahulmahadik.asksql.ide.model.SchemaCatalog): List<CodeLiteral> {
+        val statement = try {
+            CCJSqlParserUtil.parse(sql)
+        } catch (e: Exception) {
+            return emptyList()
+        }
+        val select = statement as? Select ?: return emptyList()
+        val found = LinkedHashMap<String, CodeLiteral>()
+
+        fun consider(maybeColumn: Expression?, maybeValue: Expression?, inScope: Map<String, String>) {
+            val col = maybeColumn as? net.sf.jsqlparser.schema.Column ?: return
+            val name = col.columnName ?: return
+            if (ID_NAME.containsMatchIn(name) || MEASURE_NAME.containsMatchIn(name)) return
+            val dbType = dbTypeOf(name, catalog) ?: return
+            if (!INTEGER_DB_TYPE.containsMatchIn(dbType.trim())) return
+            if (ColumnHints.isMoment(name, dbType)) return
+            // Read first: without it, two tables sharing `status` made every such reference ambiguous.
+            val qualifier = col.table?.name?.lowercase()
+            val owner = if (qualifier != null) {
+                val target = inScope[qualifier] ?: qualifier
+                catalog.tables.firstOrNull { it.name.equals(target, true) && it.columns.any { c -> c.name.equals(name, true) } }
+            } else {
+                ownerOf(name, catalog, inScope)
+            } ?: return
+            // Reading a view runs its query.
+            if (owner.kind != com.rahulmahadik.asksql.ide.model.TableKind.TABLE) return
+            if (owner.primaryKey.any { it.equals(name, true) }) return
+            if (owner.foreignKeys.any { fk -> fk.columns.any { it.equals(name, true) } }) return
+            // SignedExpression, not LongValue; -1 is the conventional unset sentinel in Room schemas.
+            val literal = when (maybeValue) {
+                is net.sf.jsqlparser.expression.LongValue -> maybeValue.value
+                is net.sf.jsqlparser.expression.SignedExpression -> {
+                    val inner = (maybeValue.expression as? net.sf.jsqlparser.expression.LongValue)?.value ?: return
+                    if (maybeValue.sign == '-') -inner else inner
+                }
+                else -> return
+            }
+            val key = "${owner.name}.$name=$literal".lowercase()
+            found.putIfAbsent(key, CodeLiteral(owner.schema, owner.name, name, literal))
+        }
+
+        /**
+         * Follows AND from WHERE only: under OR, NOT, CASE or a partial IN the query returns rows and a
+         * caveat there contradicts the answer. Mirrors packages/core/src/semantics.ts.
+         */
+        fun walkConjunction(expression: Expression?, depth: Int, inScope: Map<String, String>) {
+            if (expression == null || depth > MAX_DEPTH) return
+            when (expression) {
+                is net.sf.jsqlparser.expression.operators.conditional.AndExpression -> {
+                    walkConjunction(expression.leftExpression, depth + 1, inScope)
+                    walkConjunction(expression.rightExpression, depth + 1, inScope)
+                }
+                is net.sf.jsqlparser.expression.operators.relational.EqualsTo -> {
+                    consider(expression.leftExpression, expression.rightExpression, inScope)
+                    consider(expression.rightExpression, expression.leftExpression, inScope)
+                }
+                is net.sf.jsqlparser.expression.Parenthesis -> walkConjunction(expression.expression, depth + 1, inScope)
+                else -> Unit // OR, NOT, CASE and everything else leave the result undecided
+            }
+        }
+
+        for (plain in plainSelects(select)) {
+            val inScope = mutableMapOf<String, String>()
+            for ((table, alias) in fromTables(plain)) {
+                alias?.let { inScope[it.lowercase()] = table }
+                inScope[table.lowercase()] = table
+            }
+            walkConjunction(plain.where, 0, inScope)
+        }
+        return found.values.toList()
     }
 
     fun ungroupedAggregate(sql: String): String? {

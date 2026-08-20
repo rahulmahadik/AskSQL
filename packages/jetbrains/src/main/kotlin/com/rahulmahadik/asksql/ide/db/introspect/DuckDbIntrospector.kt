@@ -9,7 +9,7 @@ import java.sql.Connection
 
 object DuckDbIntrospector : Introspector {
 
-    override fun introspect(connection: Connection): SchemaCatalog {
+    override fun introspect(connection: Connection, nameKeys: Boolean): SchemaCatalog {
         val raw = CommonIntrospection.listTables(connection, catalog = null, schemaPattern = null)
             .filterNot { it.schema in setOf("information_schema", "pg_catalog") }
             .filterNot { it.name == DuckDbFileLoader.UPLOAD_MARKER_TABLE }
@@ -52,7 +52,13 @@ object DuckDbIntrospector : Introspector {
             )
         }
         val schemas = raw.mapNotNull { it.schema }.distinct()
-        return SchemaCatalog(engine = EngineKind.DUCKDB, schemas = schemas, tables = tables)
+        // A column's type says nothing about an epoch unit or a JSON column's keys; see ColumnHints.
+        // DuckDB is usually pointed at CSV or Parquet, so its types are inferred and say even less.
+        return SchemaCatalog(
+            engine = EngineKind.DUCKDB,
+            schemas = schemas,
+            tables = ColumnHints.annotate(connection, EngineKind.DUCKDB, tables, nameKeys),
+        )
     }
 
     /** [DuckDbFileLoader] records every table/view it loads from a user file in its own marker table. */
