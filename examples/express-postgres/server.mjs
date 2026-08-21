@@ -16,7 +16,7 @@ const PG_URL = process.env.ASKSQL_PG_URL ?? 'postgres://postgres:root@localhost:
 const PORT = Number(process.env.PORT ?? 4000);
 
 const model = process.env.GROQ_API_KEY
-  ? await resolveModel({ provider: 'groq', model: 'llama-3.3-70b-versatile', apiKey: process.env.GROQ_API_KEY })
+  ? await resolveModel({ provider: 'groq', model: 'openai/gpt-oss-20b', apiKey: process.env.GROQ_API_KEY })
   : await resolveModel({
       provider: 'ollama',
       model: process.env.OLLAMA_MODEL ?? 'qwen2.5-coder:7b',

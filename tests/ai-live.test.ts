@@ -180,7 +180,7 @@ for (const p of CLOUD_PROVIDERS) {
 // ---------------------------------------------------------------------------
 const GROQ_KEY = process.env['GROQ_API_KEY'];
 const GROQ_MODELS = (
-  process.env['ASKSQL_GROQ_MODELS'] ?? 'llama-3.3-70b-versatile,llama-3.1-8b-instant,qwen/qwen3-32b,openai/gpt-oss-120b'
+  process.env['ASKSQL_GROQ_MODELS'] ?? 'openai/gpt-oss-20b,llama-3.1-8b-instant,qwen/qwen3-32b,openai/gpt-oss-120b'
 )
   .split(',')
   .map((s) => s.trim())

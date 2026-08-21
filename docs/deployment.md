@@ -65,7 +65,7 @@ const app = express();
 app.use(express.json());
 app.use('/asksql', asksqlMiddleware({
   connectors: [new PostgresConnector({ id: 'shop', name: 'Shop', connectionString: process.env.DATABASE_URL })],
-  engine: { model: await resolveModel({ provider: 'groq', model: 'llama-3.3-70b-versatile', apiKey: process.env.GROQ_API_KEY }) },
+  engine: { model: await resolveModel({ provider: 'groq', model: 'openai/gpt-oss-20b', apiKey: process.env.GROQ_API_KEY }) },
   auth: (req) => ({ userId: lookUpSession(req), allowedConnectionIds: ['shop'] }), // your auth
 }));
 ```

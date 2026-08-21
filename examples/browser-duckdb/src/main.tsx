@@ -53,7 +53,7 @@ function App() {
       });
       await connector.connect();
       const model =
-        window.__asksqlModel ?? (await resolveModel({ provider: 'groq', model: 'llama-3.3-70b-versatile', apiKey }));
+        window.__asksqlModel ?? (await resolveModel({ provider: 'groq', model: 'openai/gpt-oss-20b', apiKey }));
       const engine = createAskSql({ connectors: [connector], model, policy: { maxRows: 200 } });
       setTransport(new LocalTransport(engine));
       setStatus(`Ready - ask about "${table}". Nothing left your browser.`);

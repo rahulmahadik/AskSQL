@@ -18,8 +18,8 @@ const dir = dirname(fileURLToPath(import.meta.url));
 
 async function pickModel() {
   if (process.env.GROQ_API_KEY) {
-    console.log('· model: Groq llama-3.3-70b-versatile');
-    return resolveModel({ provider: 'groq', model: 'llama-3.3-70b-versatile', apiKey: process.env.GROQ_API_KEY });
+    console.log('· model: Groq openai/gpt-oss-20b');
+    return resolveModel({ provider: 'groq', model: 'openai/gpt-oss-20b', apiKey: process.env.GROQ_API_KEY });
   }
   console.log('· model: local Ollama qwen2.5-coder:7b');
   return resolveModel({

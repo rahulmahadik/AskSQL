@@ -59,8 +59,8 @@ describe('provider settings', () => {
   });
 
   it('round-trips a saved value', async () => {
-    await setProviderSettings({ provider: 'groq', model: 'llama-3.3-70b-versatile', apiKey: 'sk-1' });
-    expect(await getProviderSettings()).toEqual({ provider: 'groq', model: 'llama-3.3-70b-versatile', apiKey: 'sk-1' });
+    await setProviderSettings({ provider: 'groq', model: 'openai/gpt-oss-20b', apiKey: 'sk-1' });
+    expect(await getProviderSettings()).toEqual({ provider: 'groq', model: 'openai/gpt-oss-20b', apiKey: 'sk-1' });
   });
 
   it('merges partial stored data over the defaults', async () => {
