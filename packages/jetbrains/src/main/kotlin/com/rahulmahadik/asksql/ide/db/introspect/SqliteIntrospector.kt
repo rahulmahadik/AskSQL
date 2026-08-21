@@ -16,8 +16,12 @@ import java.sql.Connection
 object SqliteIntrospector : Introspector {
 
     override fun introspect(connection: Connection, nameKeys: Boolean): SchemaCatalog {
-        val raw = CommonIntrospection.listTables(connection, catalog = null, schemaPattern = null)
-            .filterNot { it.name.startsWith("sqlite_") }
+        val raw = CommonIntrospection.listTables(
+            connection,
+            catalog = null,
+            schemaPattern = null,
+            columnsOf = { table -> loadColumns(connection, table.name) },
+        ).filterNot { it.name.startsWith("sqlite_") }
 
         val tables = raw.map { t ->
             TableInfo(
@@ -33,6 +37,29 @@ object SqliteIntrospector : Introspector {
         }
         // The hints themselves are shared with every other engine; see ColumnHints.
         return SchemaCatalog(engine = EngineKind.SQLITE, tables = ColumnHints.annotate(connection, EngineKind.SQLITE, tables, nameKeys))
+    }
+
+    /**
+     * Columns come from `PRAGMA table_info`, one table at a time. sqlite-jdbc answers a whole-schema
+     * `getColumns()` by unioning one SELECT per column, and SQLite rejects a compound SELECT past 500
+     * terms; an ordinary Android schema carries more columns than that. Mirrors `packages/sqlite`.
+     */
+    private fun loadColumns(connection: Connection, table: String): List<ColumnInfo> {
+        val quoted = "\"${table.replace("\"", "\"\"")}\""
+        val columns = mutableListOf<ColumnInfo>()
+        connection.createStatement().use { st ->
+            st.executeQuery("PRAGMA table_info($quoted)").use { rs ->
+                while (rs.next()) {
+                    columns += ColumnInfo(
+                        name = rs.getString("name"),
+                        dbType = rs.getString("type")?.takeIf { it.isNotBlank() } ?: "TEXT",
+                        nullable = rs.getInt("notnull") == 0,
+                        default = rs.getString("dflt_value"),
+                    )
+                }
+            }
+        }
+        return columns
     }
 
     /** SQLite's `getImportedKeys()` reports blank FK names and scrambles multi-column FK rows; `PRAGMA foreign_key_list` groups them by an explicit `id` column. */

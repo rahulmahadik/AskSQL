@@ -98,6 +98,10 @@ internal fun mongoShellSnippet(collection: String, pipelineJson: String): String
 }
 
 /** Selectable one-line text that reads as a label; a [JBLabel]'s content cannot be copied out. */
+/** Null when there is nothing to warn about, so a caller adds it only when non-null. */
+internal fun warningsLabel(warnings: List<String>): JBLabel? =
+    if (warnings.isEmpty()) null else JBLabel(warnings.joinToString(" · ")).apply { foreground = com.intellij.ui.JBColor.ORANGE }
+
 internal fun selectableText(text: String): JTextField =
     object : JTextField(text) {
         // Otherwise the column hands this field any leftover vertical space.
@@ -428,9 +432,7 @@ class TurnPanel(private val project: Project, question: String) {
             explainButton.addActionListener { onExplain() }
             toolbar.add(explainButton)
         }
-        if (resultSet.warnings.isNotEmpty()) {
-            toolbar.add(JBLabel(resultSet.warnings.joinToString(" · ")).apply { foreground = com.intellij.ui.JBColor.ORANGE })
-        }
+        warningsLabel(resultSet.warnings)?.let { toolbar.add(it) }
 
         wrapper.add(toolbar, BorderLayout.SOUTH)
 

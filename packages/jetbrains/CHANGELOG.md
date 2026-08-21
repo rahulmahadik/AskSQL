@@ -3,6 +3,25 @@
 All notable changes to the AskSQL JetBrains plugin are documented here.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.7.0] - 2026-08-21
+
+### Fixed
+- A SQLite database with roughly 500 or more columns across all its tables - ordinary for a real
+  Android app - could fail to import at all, reporting the file as unreadable. It imports normally
+  now, at any size.
+- Approving and running a generated query no longer loses the note that its row limit was capped;
+  the warning now appears with the results, the same as it does before you approve.
+- A query whose row limit was lowered rather than newly added is now correctly flagged as returning a
+  partial result.
+- Oracle connections: schema hints and generated queries now agree on how row limits are written,
+  instead of contradicting each other. Introspecting a wide Oracle or MySQL schema is also
+  substantially faster, since primary keys, foreign keys and indexes are now read for the whole
+  schema in a few queries instead of several per table.
+- A very wide schema no longer leaves later tables with no column hints at all; the hint budget is
+  now shared evenly instead of spent on whichever tables are introspected first.
+- The schema sent to the model states when a list of triggers, procedures, sequences, enum values,
+  functions or join paths has been trimmed, instead of presenting a cut-down list as the whole one.
+
 ## [0.6.0] - 2026-08-20
 
 ### Added

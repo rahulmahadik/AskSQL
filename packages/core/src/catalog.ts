@@ -66,6 +66,18 @@ function qualifiedName(t: TableInfo, multiSchema: boolean, quote: string, engine
 /** Bounds so a large catalog cannot crowd out the tables themselves. */
 const MAX_INDEXES_PER_TABLE = 8;
 const MAX_OBJECTS = 30;
+/** Max join paths rendered; a wide schema has far more edges than the model can use. */
+const MAX_EDGES = 200;
+/** Max callable functions rendered. */
+const MAX_FUNCTIONS = 40;
+
+/**
+ * Marks a list the renderer cut short. A silent cut reads as the complete set, so the model treats a
+ * name it was never shown as one that does not exist.
+ */
+function andMore(total: number, shown: number): string {
+  return total > shown ? ` (and ${total - shown} more not shown)` : '';
+}
 
 export function formatCatalogForPrompt(catalog: SchemaCatalog): string {
   const multiSchema = catalog.schemas.length > 1;
@@ -121,7 +133,7 @@ export function formatCatalogForPrompt(catalog: SchemaCatalog): string {
   }
 
   if (catalog.triggers.length > 0) {
-    lines.push('TRIGGERS:');
+    lines.push(`TRIGGERS:${andMore(catalog.triggers.length, MAX_OBJECTS)}`);
     for (const tr of catalog.triggers.slice(0, MAX_OBJECTS)) {
       const on = tr.schema ? `${tr.schema}.${tr.table}` : tr.table;
       lines.push(` ${tr.name} ${tr.timing} ${tr.events.join('/')} ON ${on}${tr.enabled ? '' : ' [disabled]'}`);
@@ -131,7 +143,9 @@ export function formatCatalogForPrompt(catalog: SchemaCatalog): string {
   const procedures = catalog.routines.filter((r) => r.kind === 'procedure');
   if (procedures.length > 0) {
     // Listed so "what procedures exist" can be answered; never offered as something to call.
-    lines.push('STORED PROCEDURES (reference only - NEVER call these; a read-only query cannot invoke them):');
+    lines.push(
+      `STORED PROCEDURES (reference only - NEVER call these; a read-only query cannot invoke them):${andMore(procedures.length, MAX_OBJECTS)}`,
+    );
     for (const r of procedures.slice(0, MAX_OBJECTS)) {
       lines.push(` ${multiSchema && r.schema ? `${r.schema}.${r.name}` : r.name}(${r.args})`);
     }
@@ -141,12 +155,12 @@ export function formatCatalogForPrompt(catalog: SchemaCatalog): string {
     const names = catalog.sequences
       .slice(0, MAX_OBJECTS)
       .map((q) => (multiSchema && q.schema ? `${q.schema}.${q.name}` : q.name));
-    lines.push(`SEQUENCES: ${names.join(', ')}`);
+    lines.push(`SEQUENCES: ${names.join(', ')}${andMore(catalog.sequences.length, MAX_OBJECTS)}`);
   }
 
   if (catalog.enums.length > 0) {
-    lines.push('ENUM TYPES:');
-    for (const e of catalog.enums) {
+    lines.push(`ENUM TYPES:${andMore(catalog.enums.length, MAX_OBJECTS)}`);
+    for (const e of catalog.enums.slice(0, MAX_OBJECTS)) {
       lines.push(` ${e.name}: ${e.values.slice(0, 32).map(sanitizeValue).join('|')}`);
     }
   }
@@ -155,8 +169,10 @@ export function formatCatalogForPrompt(catalog: SchemaCatalog): string {
     (r) => r.kind === 'function' && (r.volatility === 'immutable' || r.volatility === 'stable'),
   );
   if (callable.length > 0) {
-    lines.push('CALLABLE READ-ONLY FUNCTIONS (safe to use in SELECT; call by the exact name shown):');
-    for (const r of callable.slice(0, 40)) {
+    lines.push(
+      `CALLABLE READ-ONLY FUNCTIONS (safe to use in SELECT; call by the exact name shown):${andMore(callable.length, MAX_FUNCTIONS)}`,
+    );
+    for (const r of callable.slice(0, MAX_FUNCTIONS)) {
       const fnName = multiSchema && r.schema ? `${r.schema}.${r.name}` : r.name;
       lines.push(` ${fnName}(${r.args})${r.returns ? ` -> ${r.returns}` : ''}`);
     }
@@ -164,8 +180,8 @@ export function formatCatalogForPrompt(catalog: SchemaCatalog): string {
 
   const edges = joinGraph(catalog);
   if (edges.length > 0) {
-    lines.push('RELATIONSHIPS (join paths):');
-    for (const e of edges.slice(0, 200)) lines.push(` ${e}`);
+    lines.push(`RELATIONSHIPS (join paths):${andMore(edges.length, MAX_EDGES)}`);
+    for (const e of edges.slice(0, MAX_EDGES)) lines.push(` ${e}`);
   }
 
   return lines.join('\n');
@@ -418,7 +434,8 @@ function trimColumns(
 const fullRenderCache = new WeakMap<SchemaCatalog, string>();
 
 export function pruneCatalog(catalog: SchemaCatalog, question: string, settings?: PrunerSettings): PruneResult {
-  const maxTables = settings?.maxTables ?? 40;
+  // Guards the full render below from a pathological schema; the token budget decides what is sent.
+  const maxTables = settings?.maxTables ?? 200;
   const maxSchemaTokens = settings?.maxSchemaTokens ?? 6000;
   const all = catalog.tables.filter((t) => !t.partitionOf);
 
@@ -489,7 +506,14 @@ export function pruneCatalog(catalog: SchemaCatalog, question: string, settings?
   for (const t of candidate) {
     if (kept.length >= maxTables) break;
     const cost = estimateTableTokens(t);
-    if (kept.length >= 1 && used + cost > perTableBudget) break;
+    if (kept.length === 0) {
+      // The best-scoring table is always kept, charged at most half the budget so siblings still fit.
+      kept.push(t);
+      used += Math.min(cost, Math.floor(perTableBudget / 2));
+      continue;
+    }
+    // Skip what does not fit rather than stopping: smaller tables behind it may still have room.
+    if (used + cost > perTableBudget) continue;
     kept.push(t);
     used += cost;
   }

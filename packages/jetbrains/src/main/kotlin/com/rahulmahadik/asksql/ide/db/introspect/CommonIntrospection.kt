@@ -37,6 +37,14 @@ object CommonIntrospection {
         schemaPattern: String?,
         /** False when the caller loads keys and indexes itself in one pass instead of three per table. */
         loadConstraints: Boolean = true,
+        /** Supplied by an engine whose driver cannot answer [DatabaseMetaData.getColumns] for a whole schema at once. */
+        columnsOf: ((RawTable) -> List<ColumnInfo>)? = null,
+        /**
+         * One whole-schema query for PK+FK+index, replacing three JDBC calls per table -
+         * `getPrimaryKeys`/`getImportedKeys`/`getIndexInfo` take an exact table name, not a pattern.
+         * A table absent from the returned map has no constraints; it is not a signal to fall back.
+         */
+        constraintsOf: (() -> Map<Pair<String?, String>, Constraints>)? = null,
     ): List<RawTable> {
         val meta = connection.metaData
         val result = mutableListOf<RawTable>()
@@ -59,22 +67,55 @@ object CommonIntrospection {
             }
         }
         // One getColumns() call for the whole schema: its tableNamePattern is a portable JDBC wildcard, unlike the `table` parameter of the per-table calls below.
-        val columnsByTable = loadAllColumns(meta, catalog, escapedSchemaPattern)
+        val columnsByTable = if (columnsOf != null) emptyMap() else loadAllColumns(meta, catalog, escapedSchemaPattern, result)
+        val constraintsByTable = constraintsOf?.invoke()
         for (table in result) {
-            table.columns.addAll(columnsByTable[table.schema to table.name].orEmpty())
+            table.columns.addAll(columnsOf?.invoke(table) ?: columnsByTable[table.schema to table.name].orEmpty())
             if (loadConstraints) {
-                table.primaryKey = loadPrimaryKey(meta, catalog, table.schema, table.name)
-                table.foreignKeys = loadForeignKeys(meta, catalog, table.schema, table.name)
-                table.indexes = loadIndexes(meta, catalog, table.schema, table.name)
+                if (constraintsByTable != null) {
+                    val c = constraintsByTable[table.schema to table.name]
+                    table.primaryKey = c?.primaryKey ?: emptyList()
+                    table.foreignKeys = c?.foreignKeys ?: emptyList()
+                    table.indexes = c?.indexes ?: emptyList()
+                } else {
+                    table.primaryKey = loadPrimaryKey(meta, catalog, table.schema, table.name)
+                    table.foreignKeys = loadForeignKeys(meta, catalog, table.schema, table.name)
+                    table.indexes = loadIndexes(meta, catalog, table.schema, table.name)
+                }
             }
         }
         return result
     }
 
-    /** Keyed by the EXACT (schema, table) pair from each result row, not by pattern matching. */
-    private fun loadAllColumns(meta: DatabaseMetaData, catalog: String?, schemaPattern: String?): Map<Pair<String?, String>, List<ColumnInfo>> {
+    /** One table's batched constraint result; see [listTables]'s `constraintsOf`. */
+    data class Constraints(
+        val primaryKey: List<String> = emptyList(),
+        val foreignKeys: List<ForeignKeyInfo> = emptyList(),
+        val indexes: List<IndexInfo> = emptyList(),
+    )
+
+    /**
+     * Keyed by the EXACT (schema, table) pair from each result row, not by pattern matching. A driver may
+     * generate a term per column and breach an engine limit, so a failure is retried one table at a time.
+     */
+    private fun loadAllColumns(
+        meta: DatabaseMetaData,
+        catalog: String?,
+        schemaPattern: String?,
+        tables: List<RawTable>,
+    ): Map<Pair<String?, String>, List<ColumnInfo>> = try {
+        readColumns(meta, catalog, schemaPattern, "%")
+    } catch (e: Exception) {
+        buildMap {
+            for (table in tables) {
+                putAll(readColumns(meta, catalog, table.schema?.let { meta.escapePattern(it) }, meta.escapePattern(table.name)))
+            }
+        }
+    }
+
+    private fun readColumns(meta: DatabaseMetaData, catalog: String?, schemaPattern: String?, tablePattern: String): Map<Pair<String?, String>, List<ColumnInfo>> {
         val byTable = linkedMapOf<Pair<String?, String>, MutableList<ColumnInfo>>()
-        meta.getColumns(catalog, schemaPattern, "%", "%").use { rs ->
+        meta.getColumns(catalog, schemaPattern, tablePattern, "%").use { rs ->
             while (rs.next()) {
                 val key = rs.getString("TABLE_SCHEM") to rs.getString("TABLE_NAME")
                 byTable.getOrPut(key) { mutableListOf() } += ColumnInfo(

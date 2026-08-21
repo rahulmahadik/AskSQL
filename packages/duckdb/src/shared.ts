@@ -8,6 +8,7 @@ import {
   JSON_SAMPLE_ROWS,
   MAX_HINT_PROBES,
   MAX_HINT_PROBES_PER_TABLE,
+  hintProbesPerTable,
 } from '@asksql/core';
 /**
  * Driver-agnostic DuckDB logic shared by the Node (`@duckdb/node-api`) and
@@ -225,6 +226,23 @@ function blankLiterals(sql: string, keepComments = false): string {
     out += sql[i++];
   }
   return out;
+}
+
+/**
+ * Parsing a .sql dump into DuckDB costs roughly 68 MB of JS heap per 1 MB of input, so an upload past
+ * this cap risks the process's default heap ceiling. Checked on the raw byte count BEFORE the file is
+ * read into a string, since the OOM happens during that read.
+ */
+export const MAX_SQL_DUMP_BYTES = 20 * 1024 * 1024;
+
+export function assertSqlDumpSize(byteLength: number): void {
+  if (byteLength <= MAX_SQL_DUMP_BYTES) return;
+  throw new AskSqlError('FILE_PARSE', {
+    detail: `sql dump is ${byteLength} bytes, over the ${MAX_SQL_DUMP_BYTES} byte limit`,
+    userMessage:
+      `This .sql file is larger than the ${Math.round(MAX_SQL_DUMP_BYTES / (1024 * 1024))} MB this can load safely. ` +
+      'Split it into smaller files, or upload the underlying tables as CSV instead.',
+  });
 }
 
 export function validateSqlDump(content: string): void {
@@ -551,6 +569,7 @@ export async function withDuckColumnHints(
     read(`SET statement_timeout = '2s'; ${sql}`, maxRows).catch(() => read(sql, maxRows));
   let total = MAX_HINT_PROBES;
   const tables: TableInfo[] = [];
+  const perTable = hintProbesPerTable(catalog.tables.length);
   for (const t of catalog.tables) {
     if (t.kind === 'view' || total <= 0) {
       tables.push(t);
@@ -558,7 +577,7 @@ export async function withDuckColumnHints(
     }
     const rel = `${quote(t.schema ?? 'main')}.${quote(t.name)}`;
     // Per table, so filler tables early in the catalog cannot spend every probe.
-    let budget = Math.min(MAX_HINT_PROBES_PER_TABLE, total);
+    let budget = Math.min(perTable, total);
     const columns: ColumnInfo[] = [];
     for (const col of t.columns) {
       const moment = isMomentColumn(col.name, col.dbType);

@@ -82,6 +82,50 @@ describe('large-schema pruning', () => {
     expect(estimateTokens(formatCatalogForPrompt(pruned.catalog))).toBeLessThanOrEqual(6000);
   });
 
+  it('one table too wide to fit does not evict the smaller ones behind it', () => {
+    // Relevance order puts the wide table first, which is when it can do the most damage.
+    const wide: TableInfo = {
+      name: 'invoices_wide',
+      kind: 'table',
+      columns: Array.from({ length: 400 }, (_, i) => ({ name: `col_${i}`, dbType: 'text', nullable: true })),
+      primaryKey: ['col_0'],
+      foreignKeys: [],
+      indexes: [],
+    };
+    const small: TableInfo[] = Array.from({ length: 8 }, (_, i) => ({
+      name: `invoices_part_${i}`,
+      kind: 'table' as const,
+      columns: [{ name: 'id', dbType: 'int', nullable: false }],
+      primaryKey: ['id'],
+      foreignKeys: [],
+      indexes: [],
+    }));
+    const cat: SchemaCatalog = {
+      engine: 'postgres',
+      schemas: ['public'],
+      tables: [wide, ...small],
+      enums: [],
+      sequences: [],
+      triggers: [],
+      routines: [],
+      warnings: [],
+      fetchedAt: 'now',
+    };
+    const pruned = pruneCatalog(cat, 'invoices', { maxTables: 200, maxSchemaTokens: 1200 });
+    const names = pruned.catalog.tables.map((t) => t.name);
+    expect(names.length).toBeGreaterThan(1);
+    expect(names.some((n) => n.startsWith('invoices_part_'))).toBe(true);
+  });
+
+  it('keeps the DEFAULT settings inside the token budget too', () => {
+    // The test above pins maxTables, so only this one covers the default.
+    const cat = bigCatalog(5000);
+    const pruned = pruneCatalog(cat, 'total invoice amount per customer');
+    expect(estimateTokens(formatCatalogForPrompt(pruned.catalog))).toBeLessThanOrEqual(6000);
+    expect(pruned.catalog.tables.length).toBeLessThan(500);
+    expect(pruned.catalog.tables.map((t) => t.name)).toContain('invoices');
+  });
+
   it('pruning completes quickly on 5000 tables', () => {
     const cat = bigCatalog(5000);
     const start = performance.now();

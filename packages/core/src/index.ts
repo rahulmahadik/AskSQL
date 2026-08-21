@@ -69,6 +69,7 @@ export {
   jsonHint,
   MAX_HINT_PROBES,
   MAX_HINT_PROBES_PER_TABLE,
+  hintProbesPerTable,
   JSON_SAMPLE_ROWS,
   HINT_VALUE_CAP,
 } from './column-hints.js';

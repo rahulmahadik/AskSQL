@@ -16,6 +16,7 @@ import {
   JSON_SAMPLE_ROWS,
   MAX_HINT_PROBES,
   MAX_HINT_PROBES_PER_TABLE,
+  hintProbesPerTable,
 } from '@asksql/core';
 import type {
   ColumnInfo,
@@ -107,6 +108,7 @@ function jsonRef(col: { name: string; dbType: string }): string {
 async function withPgColumnHints(db: SampleRunner, tables: TableInfo[], nameKeys: boolean): Promise<TableInfo[]> {
   let total = MAX_HINT_PROBES;
   const out: TableInfo[] = [];
+  const perTable = hintProbesPerTable(tables.length);
   for (const table of tables) {
     if (table.kind !== 'table' || total <= 0) {
       out.push(table);
@@ -114,7 +116,7 @@ async function withPgColumnHints(db: SampleRunner, tables: TableInfo[], nameKeys
     }
     const rel = `${quotePg(table.schema ?? 'public')}.${quotePg(table.name)}`;
     // Per table, so filler tables early in the catalog cannot spend every probe.
-    let budget = Math.min(MAX_HINT_PROBES_PER_TABLE, total);
+    let budget = Math.min(perTable, total);
     const columns: ColumnInfo[] = [];
     for (const col of table.columns) {
       const moment = isMomentColumn(col.name, col.dbType);

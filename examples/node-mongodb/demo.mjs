@@ -16,7 +16,7 @@ import { createMongoAskSql } from '@asksql/core/mongo';
 import { MongodbConnector } from '@asksql/mongodb';
 
 const model = process.env.GROQ_API_KEY
-  ? await resolveModel({ provider: 'groq', model: 'llama-3.3-70b-versatile', apiKey: process.env.GROQ_API_KEY })
+  ? await resolveModel({ provider: 'groq', model: 'openai/gpt-oss-20b', apiKey: process.env.GROQ_API_KEY })
   : await resolveModel({
       provider: 'ollama',
       model: process.env.OLLAMA_MODEL ?? 'qwen2.5-coder:7b',

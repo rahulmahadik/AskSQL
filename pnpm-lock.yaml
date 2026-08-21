@@ -313,7 +313,7 @@ importers:
   packages/duckdb:
     devDependencies:
       '@asksql/core':
-        specifier: workspace:>=0.9.0
+        specifier: workspace:>=0.10.0
         version: link:../core
       '@duckdb/duckdb-wasm':
         specifier: ^1.32.0
@@ -334,7 +334,7 @@ importers:
   packages/mongodb:
     devDependencies:
       '@asksql/core':
-        specifier: workspace:>=0.9.0
+        specifier: workspace:>=0.10.0
         version: link:../core
       mongodb:
         specifier: ^6.10.0
@@ -343,7 +343,7 @@ importers:
   packages/mysql:
     devDependencies:
       '@asksql/core':
-        specifier: workspace:>=0.9.0
+        specifier: workspace:>=0.10.0
         version: link:../core
       mysql2:
         specifier: ^3.22.6
@@ -352,7 +352,7 @@ importers:
   packages/oracle:
     devDependencies:
       '@asksql/core':
-        specifier: workspace:>=0.9.0
+        specifier: workspace:>=0.10.0
         version: link:../core
       oracledb:
         specifier: ^6.5.0
@@ -361,7 +361,7 @@ importers:
   packages/postgres:
     devDependencies:
       '@asksql/core':
-        specifier: workspace:>=0.9.0
+        specifier: workspace:>=0.10.0
         version: link:../core
       '@types/pg':
         specifier: ^8.20.0
@@ -423,7 +423,7 @@ importers:
         version: 12.11.1
     devDependencies:
       '@asksql/core':
-        specifier: workspace:>=0.9.0
+        specifier: workspace:>=0.10.0
         version: link:../core
 
   packages/vscode:
@@ -2230,6 +2230,7 @@ packages:
   eslint@9.39.5:
     resolution: {integrity: sha512-DgZS62aPLXKlnxILS/AYCoRvHaZeXceIzlXPkkGGzJWSow1aEk0lbTlxUSlyjC8jcaKxAdOnTDz+o1JFSBsyjw==}
     engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
+    deprecated: This version is no longer supported. Please see https://eslint.org/version-support for other options.
     hasBin: true
     peerDependencies:
       jiti: '*'

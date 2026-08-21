@@ -30,8 +30,9 @@ afterAll(async () => {
 });
 
 const maybe = (name: string, fn: () => Promise<void>) =>
-  it(name, async () => {
-    if (!available) return;
+  it(name, async (ctx) => {
+    // An early return reports a PASS, so an unreachable/misconfigured DuckDB looked like a green run.
+    if (!available) ctx.skip();
     await fn();
   });
 
@@ -58,6 +59,34 @@ describe('portable .sql dump', () => {
 
     const res = await conn.execute("SELECT count(*) AS n FROM customers WHERE tier = 'gold'");
     expect(Number(res.rows[0]![0])).toBe(2);
+  });
+});
+
+describe('SCALE: an oversized dump is rejected before it is loaded into memory', () => {
+  // The check must run on the file's byte size, before readFile; see MAX_SQL_DUMP_BYTES.
+  maybe('a file over the byte cap is rejected quickly, without reading its content', async () => {
+    const big = 'x'.repeat(21 * 1024 * 1024); // just over the 20 MB cap
+    const p = await sqlFile('huge.sql', big);
+    const started = Date.now();
+    let caught: unknown;
+    try {
+      await conn.registerFile({ table: 'h', path: p });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(Error);
+    expect((caught as { userMessage?: string }).userMessage).toMatch(/20 MB|larger than/i);
+    // A rejection that had to read and scan the whole file first would not be this fast.
+    expect(Date.now() - started).toBeLessThan(2000);
+  });
+
+  maybe('a file at the cap still loads normally', async () => {
+    const stmt = 'CREATE TABLE cap_ok (id integer);\n';
+    const padding = '-- ' + 'x'.repeat(1024 * 1024) + '\n'; // a comment, not executable content
+    const p = await sqlFile('at-cap.sql', stmt + padding);
+    await conn.registerFile({ table: 'cap_ok', path: p });
+    const res = await conn.execute('SELECT count(*) AS n FROM cap_ok');
+    expect(Number(res.rows[0]![0])).toBe(0);
   });
 });
 

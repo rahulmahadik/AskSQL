@@ -16,6 +16,7 @@ import {
   JSON_SAMPLE_ROWS,
   MAX_HINT_PROBES,
   MAX_HINT_PROBES_PER_TABLE,
+  hintProbesPerTable,
 } from '@asksql/core';
 import type {
   ColumnInfo,
@@ -71,6 +72,7 @@ async function withOraColumnHints(
     const ident = (name: string): string => `"${name.split('"').join('""')}"`;
     let total = MAX_HINT_PROBES;
     const out: TableInfo[] = [];
+    const perTable = hintProbesPerTable(tables.length);
     for (const table of tables) {
       if (table.kind !== 'table' || total <= 0) {
         out.push(table);
@@ -78,7 +80,7 @@ async function withOraColumnHints(
       }
       const rel = table.schema ? `${ident(table.schema)}.${ident(table.name)}` : ident(table.name);
       // Per table, so filler tables early in the catalog cannot spend every probe.
-      let budget = Math.min(MAX_HINT_PROBES_PER_TABLE, total);
+      let budget = Math.min(perTable, total);
       const columns: ColumnInfo[] = [];
       for (const col of table.columns) {
         const moment = isMomentColumn(col.name, col.dbType);
@@ -118,7 +120,7 @@ async function withOraColumnHints(
                       ...col,
                       comment:
                         `JSON array of ${el}s; test membership with ` +
-                        `JSON_EXISTS(${col.name}, '$?(@ == ${el === 'number' ? '1' : '"a"'})')`,
+                        `JSON_EXISTS(${ident(col.name)}, '$?(@ == ${el === 'number' ? '1' : '"a"'})')`,
                     }
                   : col,
             );

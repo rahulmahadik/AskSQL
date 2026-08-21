@@ -111,7 +111,12 @@ object Dialects {
         ),
     )
 
-    // The parity vector is built for PostgreSQL only, so PromptParityTest does not reach these notes.
+    /**
+     * Ported verbatim from `@asksql/core`'s ORACLE_DIALECT, order included. These notes had told the
+     * model to write `FETCH FIRST` while core told it to write no row limit at all; the guard caps rows
+     * either way, so only the instruction differed. PromptParityTest now covers every engine, not just
+     * PostgreSQL, which is what let this drift.
+     */
     val ORACLE = DialectInfo(
         engine = EngineKind.ORACLE,
         quoteChar = '"',
@@ -119,12 +124,12 @@ object Dialects {
         limitStyle = LimitStyle.FETCH,
         promptNotes = listOf(
             EPOCH_UNIT_NOTE,
-            "Use FETCH FIRST n ROWS ONLY for row limits, never LIMIT.",
+            "Do not add a row limit clause (no FETCH FIRST, no ROWNUM, no LIMIT). Order the results and the system returns the top rows.",
             "Use TO_DATE / TO_CHAR / SYSDATE and interval arithmetic for date math.",
-            "Unquoted identifiers are case-insensitive and stored upper-case; double-quote to preserve case.",
+            "Unquoted identifiers are case-insensitive and stored upper case; double-quote to preserve case.",
+            "Select a literal from the DUAL table (e.g. SELECT 1 FROM DUAL), not a bare SELECT 1.",
+            "There is no boolean type; a comparison is not a directly selectable value.",
             "The safety validator cannot read LISTAGG ... WITHIN GROUP, so return the rows themselves rather than combining them into one string.",
-            "Select a literal value from the DUAL table (e.g. SELECT 1 FROM DUAL), not bare SELECT 1.",
-            "There is no boolean type; comparisons return no directly selectable boolean.",
         ),
     )
 

@@ -308,7 +308,20 @@ class EnginePipeline(
             // Blocking JDBC: the fetch carries its own hard timeout.
             val fresh = withHardTimeout(60_000) {
                 connectionRegistry.withConnection(descriptor, password) { connection ->
-                    Introspectors.forEngine(descriptor.engine).introspect(connection, allowDataInPrompt)
+                    try {
+                        Introspectors.forEngine(descriptor.engine).introspect(connection, allowDataInPrompt)
+                    } catch (e: AskSqlException) {
+                        throw e
+                    } catch (e: Exception) {
+                        // A driver failure would otherwise reach the user verbatim; the cause goes to the log.
+                        throw AskSqlException(
+                            AskSqlErrorCode.DB_QUERY_ERROR,
+                            userMessage = "Could not read this database's schema.",
+                            detail = e.message?.take(500),
+                            cause = e,
+                            retryable = true,
+                        )
+                    }
                 }
             }
             // An empty catalog WITH warnings is a permission or network failure, not an empty
@@ -479,7 +492,14 @@ class EnginePipeline(
         var pruned = CatalogPruner.pruneCatalog(fullCatalog, q, initialPrunerSettings)
         var schemaText = pruned.schemaText
         if (pruned.dropped > 0) {
-            onEvent?.onEvent(EngineEvent.Warning("Schema narrowed to ${pruned.catalog.tables.size} relevant tables."))
+            // The count that matters is the one the model never saw, not the one that survived.
+            onEvent?.onEvent(
+                EngineEvent.Warning(
+                    "Schema narrowed to the ${pruned.catalog.tables.size} tables most relevant to this question; " +
+                        "${pruned.dropped} of ${pruned.catalog.tables.size + pruned.dropped} were not sent to the model. " +
+                        "If the answer missed a table, name it in the question or raise the schema token budget in Settings.",
+                ),
+            )
         }
 
         val system = Prompts.buildSqlSystem(dialect, policy.maxRows, customInstructions)
@@ -844,6 +864,12 @@ class EnginePipeline(
         question: String? = null,
         maxRows: Int? = null,
         timeoutMs: Long = DEFAULT_QUERY_TIMEOUT_MS,
+        /**
+         * The ask-time verdict for this same SQL. Re-guarding text that already carries the injected
+         * LIMIT reports no cap, so without this the row cap becomes invisible: the reader is shown the
+         * first [GuardPolicy.maxRows] rows of a much larger answer with nothing saying so.
+         */
+        priorVerdict: GuardVerdict? = null,
     ): AskSqlResultSet {
         val dialect = Dialects.of(descriptor.engine)
         val verdict = SqlGuard.guard(sql, dialect, policy)
@@ -868,10 +894,13 @@ class EnginePipeline(
             // Notes attached at ask time (a dangling pronoun) ride the verdict. The Warning event
             // goes to a transient status label the next update overwrites, so carry them here too.
             warnings += verdict.warnings
-            if (verdict.autoLimited) warnings += "A row limit of ${policy.maxRows} was added automatically - export to get everything."
-            if (verdict.loweredLimit) warnings += "The row limit was lowered to ${policy.maxRows}."
-            // The injected LIMIT equals maxRows, so an auto-limited result that fills the cap counts as truncated.
-            val truncated = result.truncated || (verdict.autoLimited && result.rowCount >= cappedMax)
+            val autoLimited = verdict.autoLimited || priorVerdict?.autoLimited == true
+            val loweredLimit = verdict.loweredLimit || priorVerdict?.loweredLimit == true
+            if (autoLimited) warnings += "A row limit of ${policy.maxRows} was added automatically - export to get everything."
+            if (loweredLimit) warnings += "The row limit was lowered to ${policy.maxRows}."
+            // A LIMIT we injected OR lowered equals maxRows, so a result that fills the cap counts as
+            // truncated: the connector never sees the overflow row.
+            val truncated = result.truncated || ((autoLimited || loweredLimit) && result.rowCount >= cappedMax)
             result.copy(warnings = warnings, truncated = truncated)
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e // a user-initiated cancel: propagate unwrapped and unaudited

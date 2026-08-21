@@ -23,7 +23,7 @@ What each field means:
 | Field | Meaning | Required when |
 |-------|---------|---------------|
 | `provider` | Which SDK adapter to load. Picks the wire protocol and default endpoint. | always |
-| `model` | The model id to call (`gpt-4o-mini`, `llama-3.3-70b-versatile`, ...). For **classic Azure**, this is your **deployment name**, not the base model name. | always |
+| `model` | The model id to call (`gpt-4o-mini`, `openai/gpt-oss-20b`, ...). For **classic Azure**, this is your **deployment name**, not the base model name. | always |
 | `apiKey` | Your provider secret, sent as the bearer token. Keep it on the server, never in the browser. | `openai`, `anthropic`, `google`, `azure`, `groq`, `nvidia`. Not required for `ollama` or `openai-compatible` (pass one if your endpoint wants it) |
 | `baseURL` | Full endpoint URL to override the provider default. Point it at a local runtime (Ollama), any OpenAI-compatible host, or an Azure AI Foundry endpoint. | `openai-compatible`; optional for `ollama` (defaults to `http://localhost:11434/v1`) |
 | `resourceName` | Classic Azure OpenAI resource subdomain, from `https://<resourceName>.openai.azure.com`. Used only to build the classic Azure endpoint. | classic `azure` when `baseURL` is not set |
@@ -62,7 +62,7 @@ resolveModel({ provider: 'anthropic', model: 'claude-3-5-haiku-latest', apiKey }
 resolveModel({ provider: 'google', model: 'gemini-2.0-flash', apiKey });
 
 // Groq
-resolveModel({ provider: 'groq', model: 'llama-3.3-70b-versatile', apiKey });
+resolveModel({ provider: 'groq', model: 'openai/gpt-oss-20b', apiKey });
 
 // NVIDIA (build.nvidia.com; OpenAI-compatible, endpoint pre-seeded for you)
 resolveModel({ provider: 'nvidia', model: 'meta/llama-3.3-70b-instruct', apiKey });

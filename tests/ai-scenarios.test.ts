@@ -24,7 +24,7 @@ beforeAll(async () => {
   if (process.env['GROQ_API_KEY']) {
     model = await resolveModel({
       provider: 'groq',
-      model: process.env['ASKSQL_GROQ_MODEL'] ?? 'llama-3.3-70b-versatile',
+      model: process.env['ASKSQL_GROQ_MODEL'] ?? 'openai/gpt-oss-20b',
       apiKey: process.env['GROQ_API_KEY'],
     });
     label = 'groq';

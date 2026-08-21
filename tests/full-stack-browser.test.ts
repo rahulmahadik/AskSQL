@@ -31,7 +31,7 @@ const PG_URL = process.env['ASKSQL_PG_URL'] ?? 'postgres://postgres:root@localho
 
 async function pickModel() {
   if (process.env['GROQ_API_KEY'])
-    return resolveModel({ provider: 'groq', model: 'llama-3.3-70b-versatile', apiKey: process.env['GROQ_API_KEY'] });
+    return resolveModel({ provider: 'groq', model: 'openai/gpt-oss-20b', apiKey: process.env['GROQ_API_KEY'] });
   // Probe Ollama.
   try {
     const r = await fetch('http://localhost:11434/api/tags', { signal: AbortSignal.timeout(1500) });

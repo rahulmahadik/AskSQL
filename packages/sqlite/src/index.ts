@@ -16,6 +16,7 @@ import {
   JSON_SAMPLE_ROWS,
   MAX_HINT_PROBES,
   MAX_HINT_PROBES_PER_TABLE,
+  hintProbesPerTable,
 } from '@asksql/core';
 import { closeSync, openSync, readSync, statSync } from 'node:fs';
 import {
@@ -317,9 +318,12 @@ export class SqliteConnector implements Connector {
     // Key names are cell data; the accessor is not. See jsonHint.
     const nameKeys = this.config.sampleColumnValues === true;
 
+    const perTable = hintProbesPerTable(objs.length);
     for (const o of objs) {
       // Per table, so filler tables early in the catalog cannot spend every probe.
-      let hintBudget = Math.min(MAX_HINT_PROBES_PER_TABLE, hintTotal);
+      // A fair share of the global budget, not a flat 4: the cap is spent first-come, so on a schema
+      // wider than 50 tables every table past that point silently got no hints at all.
+      let hintBudget = Math.min(perTable, hintTotal);
       const name = String(o['name']);
       const type = String(o['type']);
       const ddl = o['sql'] == null ? null : String(o['sql']);

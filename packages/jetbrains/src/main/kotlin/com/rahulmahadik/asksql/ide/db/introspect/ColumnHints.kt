@@ -25,6 +25,14 @@ object ColumnHints {
 
     /** Per table, so a wide schema degrades evenly instead of the first tables taking every probe. */
     private const val MAX_PROBES_PER_TABLE = 4
+
+    /**
+     * The per-table probe share for a schema of [tableCount] tables, so the global cap spreads evenly
+     * instead of the first tables spending it all. Matches packages/core/src/column-hints.ts.
+     */
+    internal fun probesPerTable(tableCount: Int): Int =
+        maxOf(1, minOf(MAX_PROBES_PER_TABLE, MAX_PROBES / maxOf(1, tableCount)))
+
     private const val JSON_SAMPLE_ROWS = 20
     private const val JSON_MAX_KEYS = 12
     private const val JSON_MIN_ROWS_TO_NAME = 3
@@ -48,7 +56,7 @@ object ColumnHints {
         "^(?:big\\s*int|int|integer|int2|int4|int8|smallint|tinyint|mediumint|unsigned\\s+big\\s+int|numeric|number|decimal)\\b",
         RegexOption.IGNORE_CASE,
     )
-    private val TEXTISH = Regex("^(?:json|jsonb|text|longtext|mediumtext|varchar|character varying|citext|char|clob|nclob|nvarchar|string)", RegexOption.IGNORE_CASE)
+    private val TEXTISH = Regex("^(?:json|jsonb|text|longtext|mediumtext|tinytext|varchar|character varying|citext|char|clob|nclob|nvarchar|string)", RegexOption.IGNORE_CASE)
 
     /** A key that reads as a field name. One that does not is data: a map keyed by an address or an id. */
     private val JSON_KEY = Regex("^[A-Za-z_][A-Za-z0-9_]{0,39}$")
@@ -216,9 +224,10 @@ object ColumnHints {
     ): List<TableInfo> {
         val s = syntaxFor(engine)
         var total = MAX_PROBES
+        val perTable = probesPerTable(tables.size)
         return tables.map { table ->
             if (table.kind == TableKind.VIEW || total <= 0) return@map table
-            var budget = minOf(MAX_PROBES_PER_TABLE, total)
+            var budget = minOf(perTable, total)
             val rel = table.schema?.let { "${s.quote(it)}.${s.quote(table.name)}" } ?: s.quote(table.name)
             val columns = table.columns.map inner@{ col ->
                 val moment = isMoment(col.name, col.dbType)

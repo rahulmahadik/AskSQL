@@ -7,10 +7,13 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { MongodbConnector } from '../src/index.js';
 
 const HOST = process.env['ASKSQL_MONGO_HOST'] ?? 'localhost:27017';
-const USER = process.env['ASKSQL_MONGO_USER'] ?? 'root';
-const PASS = process.env['ASKSQL_MONGO_PASS'] ?? 'secret';
+const USER = process.env['ASKSQL_MONGO_USER'];
+const PASS = process.env['ASKSQL_MONGO_PASS'];
 const DB = 'asksql_live_test';
-const withCreds = `mongodb://${USER}:${PASS}@${HOST}`;
+// Credentials only when supplied. Defaulting them to root/secret meant a local server started without
+// auth - which is how mongod runs out of the box - refused every connection, so this whole file sat
+// dark while reporting green.
+const withCreds = USER && PASS ? `mongodb://${USER}:${PASS}@${HOST}` : `mongodb://${HOST}`;
 
 let ready = false;
 
@@ -39,7 +42,13 @@ beforeAll(async () => {
   }
 }, 20_000);
 
-const maybe = (name: string, fn: () => Promise<void>) => it(name, async () => (ready ? fn() : undefined), 15_000);
+  // Returning undefined reports a PASS, so an unreachable database looked like a green run.
+  // ctx.skip() marks it skipped, which shows up in the summary as the gap it is.
+const maybe = (name: string, fn: () => Promise<void>) =>
+  it(name, async (ctx) => {
+    if (!ready) ctx.skip();
+    await fn();
+  }, 15_000);
 
 describe('MongoDB connector (live)', () => {
   maybe('introspects collections and runs an aggregate (creds in the connection string)', async () => {
