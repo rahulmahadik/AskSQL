@@ -1,6 +1,6 @@
 {
   "name": "@asksql/mongodb",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "MongoDB connector for AskSQL. Sampling-based schema inference across collections + guarded read-only aggregation pipelines.",
   "type": "module",
   "main": "./dist/index.js",
@@ -23,7 +23,7 @@
     "mongodb": ">=6.0"
   },
   "devDependencies": {
-    "@asksql/core": "workspace:>=0.9.0",
+    "@asksql/core": "workspace:>=0.10.0",
     "mongodb": "^6.10.0"
   },
   "license": "Apache-2.0",
