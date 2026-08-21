@@ -13,6 +13,7 @@ import {
   MYSQL_DIALECT,
   SQLITE_DIALECT,
   DUCKDB_DIALECT,
+  ORACLE_DIALECT,
   buildSqlSystem,
   buildSqlUser,
   buildRepairUser,
@@ -39,6 +40,7 @@ const DIALECTS = {
   mysql: MYSQL_DIALECT,
   sqlite: SQLITE_DIALECT,
   duckdb: DUCKDB_DIALECT,
+  oracle: ORACLE_DIALECT,
 };
 
 function loadCorpus() {
@@ -71,7 +73,17 @@ function exportGuardVectors() {
 }
 
 function exportPromptVectors() {
-  const dialect = POSTGRES_DIALECT;
+  // One entry per engine. Postgres alone left the other four dialects' notes unguarded, and Oracle's
+  // drifted until the two surfaces told the model opposite things about row limits.
+  const vectors = {};
+  for (const [engine, dialect] of Object.entries(DIALECTS)) {
+    vectors[engine] = promptVectorsFor(dialect);
+  }
+  writeFileSync(join(outDir, 'prompts.json'), JSON.stringify(vectors, null, 2) + '\n');
+  console.log(`Wrote prompt vectors for ${Object.keys(vectors).length} engines -> tools/parity/vectors/prompts.json`);
+}
+
+function promptVectorsFor(dialect) {
   const maxRows = 1000;
   const schemaText = [
     'TABLE users [~1200 rows]',
@@ -86,7 +98,7 @@ function exportPromptVectors() {
     ' orders.user_id = users.id',
   ].join('\n');
 
-  const vectors = {
+  return {
     system: buildSqlSystem(dialect, maxRows),
     // The schema-answer path drifted silently before it was vectored: it carries the
     // scope guard, so a reworded rule on one side changes what the other side refuses.
@@ -109,8 +121,7 @@ function exportPromptVectors() {
       dialect,
     }),
   };
-  writeFileSync(join(outDir, 'prompts.json'), JSON.stringify(vectors, null, 2) + '\n');
-  console.log('Wrote prompt vectors -> tools/parity/vectors/prompts.json');
+  return vectors;
 }
 
 /**

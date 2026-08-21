@@ -16,7 +16,14 @@ object OracleIntrospector : Introspector {
 
     override fun introspect(connection: Connection, nameKeys: Boolean): SchemaCatalog {
         val currentSchema = connection.schema ?: connection.metaData.userName
-        val raw = CommonIntrospection.listTables(connection, catalog = null, schemaPattern = currentSchema)
+        val batched = OracleConstraints.load(connection, currentSchema)
+        val raw = CommonIntrospection.listTables(
+            connection,
+            catalog = null,
+            schemaPattern = currentSchema,
+            loadConstraints = batched == null,
+            constraintsOf = batched?.let { { it } },
+        )
 
         val tableComments = tableComments(connection, currentSchema)
         val columnComments = columnComments(connection, currentSchema)

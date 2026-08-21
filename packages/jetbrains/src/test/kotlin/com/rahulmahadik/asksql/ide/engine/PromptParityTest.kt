@@ -21,7 +21,44 @@ class PromptParityTest {
         val file = candidates.firstOrNull { it.exists() }
             ?: error("prompts.json golden vectors not found - run `./gradlew parityVectors` first")
         val obj = JsonParser.parseString(file.readText()).asJsonObject
-        return obj.entrySet().associate { it.key to it.value.asString }
+        // Per-engine since the vector widened past PostgreSQL; the existing assertions read Postgres.
+        val engine = obj.getAsJsonObject("postgres")
+        return engine.entrySet().associate { it.key to it.value.asString }
+    }
+
+    /** Every engine's notes, so a dialect outside PostgreSQL cannot drift unnoticed. */
+    private fun loadAllVectors(): Map<String, Map<String, String>> {
+        val candidates = listOf(
+            File("tools/parity/vectors/prompts.json"),
+            File("../tools/parity/vectors/prompts.json"),
+            File(System.getProperty("user.dir"), "tools/parity/vectors/prompts.json"),
+        )
+        val file = candidates.firstOrNull { it.exists() }
+            ?: error("prompts.json golden vectors not found - run `./gradlew parityVectors` first")
+        val obj = JsonParser.parseString(file.readText()).asJsonObject
+        return obj.entrySet().associate { (engine, node) ->
+            engine to node.asJsonObject.entrySet().associate { it.key to it.value.asString }
+        }
+    }
+
+    /**
+     * The system prompt for EVERY engine. Covering PostgreSQL alone let Oracle's notes drift until the
+     * two implementations instructed the model in opposite directions about row limits.
+     */
+    @Test
+    fun `every engine's system prompt matches published core byte for byte`() {
+        val byEngine = mapOf(
+            "postgres" to Dialects.POSTGRES,
+            "mysql" to Dialects.MYSQL,
+            "sqlite" to Dialects.SQLITE,
+            "duckdb" to Dialects.DUCKDB,
+            "oracle" to Dialects.ORACLE,
+        )
+        val vectors = loadAllVectors()
+        for ((name, dialect) in byEngine) {
+            val expected = vectors[name]?.get("system") ?: error("no vector for engine '$name'")
+            assertEquals("system prompt drifted for $name", expected, Prompts.buildSqlSystem(dialect, 1000))
+        }
     }
 
     private val schemaText = listOf(

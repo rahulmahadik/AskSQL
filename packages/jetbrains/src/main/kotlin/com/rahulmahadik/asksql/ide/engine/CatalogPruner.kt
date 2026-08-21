@@ -26,7 +26,11 @@ object CatalogPruner {
 
     enum class Strategy { NONE, TERM_MATCH_FK_CLOSURE, BUDGET_TRIM }
 
-    data class PrunerSettings(val maxTables: Int = 40, val maxSchemaTokens: Int = 6000)
+    /**
+     * [maxTables] guards the full render from a pathological schema; the token budget decides what is
+     * actually sent. Matches packages/core/src/catalog.ts.
+     */
+    data class PrunerSettings(val maxTables: Int = 200, val maxSchemaTokens: Int = 6000)
 
     data class PruneResult(
         val catalog: SchemaCatalog,
@@ -101,6 +105,17 @@ object CatalogPruner {
 
     private const val MAX_INDEXES_PER_TABLE = 8
     private const val MAX_OBJECTS = 30
+    /** Max join paths rendered; a wide schema has far more edges than the model can use. */
+    private const val MAX_EDGES = 200
+    /** Max callable functions rendered. */
+    private const val MAX_FUNCTIONS = 40
+
+    /**
+     * Marks a list the renderer cut short. A silent cut reads as the complete set, so the model treats
+     * a name it was never shown as one that does not exist. Matches packages/core/src/catalog.ts.
+     */
+    private fun andMore(total: Int, shown: Int): String =
+        if (total > shown) " (and ${total - shown} more not shown)" else ""
 
     fun formatCatalogForPrompt(catalog: SchemaCatalog): String {
         val multiSchema = catalog.schemas.size > 1
@@ -148,7 +163,7 @@ object CatalogPruner {
         }
 
         if (catalog.triggers.isNotEmpty()) {
-            lines += "TRIGGERS:"
+            lines += "TRIGGERS:${andMore(catalog.triggers.size, MAX_OBJECTS)}"
             for (tr in catalog.triggers.take(MAX_OBJECTS)) {
                 val on = if (tr.schema != null) "${tr.schema}.${tr.table}" else tr.table
                 lines += " ${tr.name} ${tr.timing} ${tr.events.joinToString("/")} ON $on" + if (tr.enabled) "" else " [disabled]"
@@ -158,7 +173,7 @@ object CatalogPruner {
         val procedures = catalog.routines.filter { it.kind == RoutineKind.PROCEDURE }
         if (procedures.isNotEmpty()) {
             // Listed so "what procedures exist" can be answered; never offered as something to call.
-            lines += "STORED PROCEDURES (reference only - NEVER call these; a read-only query cannot invoke them):"
+            lines += "STORED PROCEDURES (reference only - NEVER call these; a read-only query cannot invoke them):${andMore(procedures.size, MAX_OBJECTS)}"
             for (r in procedures.take(MAX_OBJECTS)) {
                 lines += " ${if (multiSchema && r.schema != null) "${r.schema}.${r.name}" else r.name}(${r.args})"
             }
@@ -167,20 +182,20 @@ object CatalogPruner {
         if (catalog.sequences.isNotEmpty()) {
             val names = catalog.sequences.take(MAX_OBJECTS)
                 .joinToString(", ") { if (multiSchema && it.schema != null) "${it.schema}.${it.name}" else it.name }
-            lines += "SEQUENCES: $names"
+            lines += "SEQUENCES: $names${andMore(catalog.sequences.size, MAX_OBJECTS)}"
         }
 
         if (catalog.enums.isNotEmpty()) {
-            lines += "ENUM TYPES:"
-            for (e in catalog.enums) lines += " ${e.name}: ${e.values.take(32).joinToString("|") { sanitizeValue(it) }}"
+            lines += "ENUM TYPES:${andMore(catalog.enums.size, MAX_OBJECTS)}"
+            for (e in catalog.enums.take(MAX_OBJECTS)) lines += " ${e.name}: ${e.values.take(32).joinToString("|") { sanitizeValue(it) }}"
         }
 
         val callable = catalog.routines.filter {
             it.kind == RoutineKind.FUNCTION && (it.volatility == RoutineVolatility.IMMUTABLE || it.volatility == RoutineVolatility.STABLE)
         }
         if (callable.isNotEmpty()) {
-            lines += "CALLABLE READ-ONLY FUNCTIONS (safe to use in SELECT; call by the exact name shown):"
-            for (r in callable.take(40)) {
+            lines += "CALLABLE READ-ONLY FUNCTIONS (safe to use in SELECT; call by the exact name shown):${andMore(callable.size, MAX_FUNCTIONS)}"
+            for (r in callable.take(MAX_FUNCTIONS)) {
                 val fnName = if (multiSchema && r.schema != null) "${r.schema}.${r.name}" else r.name
                 lines += " $fnName(${r.args})${if (r.returns != null) " -> ${r.returns}" else ""}"
             }
@@ -188,8 +203,8 @@ object CatalogPruner {
 
         val edges = joinGraph(catalog)
         if (edges.isNotEmpty()) {
-            lines += "RELATIONSHIPS (join paths):"
-            for (e in edges.take(200)) lines += " $e"
+            lines += "RELATIONSHIPS (join paths):${andMore(edges.size, MAX_EDGES)}"
+            for (e in edges.take(MAX_EDGES)) lines += " $e"
         }
 
         return lines.joinToString("\n")
@@ -418,7 +433,14 @@ object CatalogPruner {
         for (t in candidate) {
             if (kept.size >= maxTables) break
             val cost = estimateTableTokens(t)
-            if (kept.size >= 1 && used + cost > perTableBudget) break
+            if (kept.isEmpty()) {
+                // Always kept, charged at most half the budget so siblings still fit.
+                kept += t
+                used += minOf(cost, perTableBudget / 2)
+                continue
+            }
+            // Skip what does not fit rather than stopping: smaller tables behind it may still have room.
+            if (used + cost > perTableBudget) continue
             kept += t
             used += cost
         }

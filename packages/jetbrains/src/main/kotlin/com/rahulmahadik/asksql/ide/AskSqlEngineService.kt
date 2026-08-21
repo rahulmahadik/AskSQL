@@ -53,8 +53,8 @@ class AskSqlEngineService(private val project: Project, private val scope: Corou
         it.allowDataInPrompt = AskSqlAppSettings.getInstance().allowDataInPrompt
     }
 
-    /** Clamps the configured schema-token budget to a sane floor and ceiling. */
-    fun currentSchemaTokenBudget(): Int = AskSqlAppSettings.getInstance().maxSchemaTokens.coerceIn(1000, 60_000)
+    /** Clamps the configured schema-token budget; the ceiling catches a typo, not a large schema. */
+    fun currentSchemaTokenBudget(): Int = AskSqlAppSettings.getInstance().maxSchemaTokens.coerceIn(1000, 200_000)
 
     fun currentGuardPolicy(): GuardPolicy {
         val settings = AskSqlAppSettings.getInstance()

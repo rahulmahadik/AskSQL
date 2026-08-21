@@ -13,6 +13,7 @@ import com.rahulmahadik.asksql.ide.errors.AskSqlErrorCode
 import com.rahulmahadik.asksql.ide.errors.AskSqlException
 import com.rahulmahadik.asksql.ide.errors.ErrorPresenter
 import com.rahulmahadik.asksql.ide.model.EngineEvent
+import com.rahulmahadik.asksql.ide.model.GuardVerdict
 import com.rahulmahadik.asksql.ide.model.Stage
 import com.rahulmahadik.asksql.ide.settings.AskSqlAppSettings
 import com.rahulmahadik.asksql.ide.settings.AskSqlSecrets
@@ -383,14 +384,14 @@ class ChatPanel(private val project: Project) : Disposable {
                             turn.showSqlPendingApproval(
                                 sql = result.sql,
                                 explanation = result.explanation,
-                                onRun = { runApprovedSql(turn, descriptor, password, result.sql, question) },
+                                onRun = { runApprovedSql(turn, descriptor, password, result.sql, question, result.guard) },
                                 onCancel = { turn.showError("Cancelled."); endBusy() },
                             )
                         }
                     } else {
                         onEdt { turn.showSqlOnly(result.sql, result.explanation) }
                         handedOffToExecute = true
-                        runApprovedSql(turn, descriptor, password, result.sql, question)
+                        runApprovedSql(turn, descriptor, password, result.sql, question, result.guard)
                     }
                     onEdt {
                         contextTurns.addLast(Prompts.ContextTurn(question, result.sql))
@@ -463,13 +464,24 @@ class ChatPanel(private val project: Project) : Disposable {
         }
     }
 
-    /** Runs an approved (or auto-run) query on a NEW tracked job via [beginBusy], so Stop covers the query itself. */
-    private fun runApprovedSql(turn: TurnPanel, descriptor: ConnectionDescriptor, password: String?, sql: String, question: String) {
+    /**
+     * Runs an approved (or auto-run) query on a NEW tracked job via [beginBusy], so Stop covers the query
+     * itself. [priorVerdict] is the ask-time verdict for this same SQL; without it the re-guard sees the
+     * LIMIT already in the text and reports no cap, hiding that the answer was truncated.
+     */
+    private fun runApprovedSql(
+        turn: TurnPanel,
+        descriptor: ConnectionDescriptor,
+        password: String?,
+        sql: String,
+        question: String,
+        priorVerdict: GuardVerdict? = null,
+    ) {
         val job = scope.launch {
             try {
                 onEdt { turn.updateStatus("Running…") }
                 val engineService = AskSqlEngineService.getInstance(project)
-                val resultSet = engineService.pipeline.execute(sql, descriptor, password, question)
+                val resultSet = engineService.pipeline.execute(sql, descriptor, password, question, priorVerdict = priorVerdict)
                 onEdt {
                     turn.updateStatus("")
                     turn.showResult(

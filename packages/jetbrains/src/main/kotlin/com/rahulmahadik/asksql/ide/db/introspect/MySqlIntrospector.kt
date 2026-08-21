@@ -14,7 +14,14 @@ object MySqlIntrospector : Introspector {
 
     override fun introspect(connection: Connection, nameKeys: Boolean): SchemaCatalog {
         val currentSchema = connection.catalog
-        val raw = CommonIntrospection.listTables(connection, catalog = currentSchema, schemaPattern = null)
+        val batched = currentSchema?.let { MysqlConstraints.load(connection, it) }
+        val raw = CommonIntrospection.listTables(
+            connection,
+            catalog = currentSchema,
+            schemaPattern = null,
+            loadConstraints = batched == null,
+            constraintsOf = batched?.let { { it } },
+        )
 
         val tableComments = mutableMapOf<String, String>()
         val columnComments = mutableMapOf<String, String>()

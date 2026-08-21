@@ -135,8 +135,8 @@ class AskSqlConfigurable : Configurable {
                     intTextField(1..100_000).bindIntText({ maxRowsField }, { maxRowsField = it })
                 }.comment("A LIMIT is added automatically to any query that doesn't already have one at or below this cap.")
                 row("Max schema tokens:") {
-                    intTextField(1000..60_000).bindIntText({ maxSchemaTokensField }, { maxSchemaTokensField = it })
-                }.comment("Schema text sent to the model (estimate at ~4 chars/token). Raise it for large schemas with many joins; lower it for limited-context models.")
+                    intTextField(1000..200_000).bindIntText({ maxSchemaTokensField }, { maxSchemaTokensField = it })
+                }.comment("Schema text sent to the model (estimate at ~4 chars/token). Raise it for large schemas with many joins; lower it for limited-context models. A 200-table schema costs roughly 10,000.")
                 row {
                     checkBox("Require explicit approval before running generated SQL")
                         .bindSelected({ requireApprovalField }, { requireApprovalField = it })

@@ -29,7 +29,10 @@ class CatalogPrunerTest {
         val result = CatalogPruner.pruneCatalog(catalog, "how many rows are in table_42")
         val elapsedMs = (System.nanoTime() - started) / 1_000_000
 
-        assertTrue("expected pruning to keep well under the full 5000 tables", result.catalog.tables.size < 100)
+        // The guarantee is the TOKEN budget, not a table count: narrow tables are cheap.
+        assertTrue("expected pruning to keep well under the full 5000 tables", result.catalog.tables.size < 500)
+        val tokens = CatalogPruner.estimateTokens(result.schemaText)
+        assertTrue("rendered schema was $tokens tokens, over the 6000 budget", tokens <= 6000)
         assertTrue("expected pruning of a 5000-table schema to complete quickly, took ${elapsedMs}ms", elapsedMs < 5000)
     }
 
@@ -220,4 +223,18 @@ class CatalogPrunerTest {
             actualTokens < settings.maxSchemaTokens + 500,
         )
     }
+    /** Mirrors packages/core/test/scale.test.ts: one oversized table must not evict its siblings. */
+    @Test fun `one table too wide to fit does not evict the smaller ones behind it`() {
+        val wide = table("invoices_wide", (0 until 400).map { "col_$it" })
+        val small = (0 until 8).map { table("invoices_part_$it", listOf("id")) }
+        val catalog = SchemaCatalog(engine = EngineKind.POSTGRES, tables = listOf(wide) + small)
+
+        val result = CatalogPruner.pruneCatalog(
+            catalog, "invoices", CatalogPruner.PrunerSettings(maxTables = 200, maxSchemaTokens = 1200),
+        )
+        val names = result.catalog.tables.map { it.name }
+        assertTrue("expected more than the one wide table, got $names", names.size > 1)
+        assertTrue("expected smaller siblings to survive, got $names", names.any { it.startsWith("invoices_part_") })
+    }
+
 }
