@@ -31,6 +31,7 @@ import {
   sqlStr,
   uniqueTableName,
   validateSqlDump,
+  assertSqlDumpSize,
   withQueryTimeout,
   type FileFormat,
 } from './shared.js';
@@ -134,6 +135,13 @@ function positionalRows(batch: ArrowBatch, colCount: number): unknown[][] {
   }
   const names = batch.schema.fields.map((f) => f.name);
   return arrowRows(batch).map((row) => names.map((n) => row[n]));
+}
+
+/** Byte length available before decoding; a JS string reports UTF-16 units, an upper bound for ASCII SQL text. */
+function byteSizeOf(data: Blob | ArrayBuffer | Uint8Array | string): number {
+  if (typeof data === 'string') return data.length;
+  if (data instanceof Blob) return data.size;
+  return data.byteLength;
 }
 
 /** Decode uploaded .sql content (File/Blob/buffer/text) to a string. */
@@ -274,6 +282,9 @@ export class DuckDbWasmConnector implements Connector {
    * Vendor dumps (mysqldump / pg_dump) and file/network statements are rejected before running.
    */
   private async registerSqlDump(file: BrowserFileSource): Promise<string> {
+    // Checked before decoding, not on the loaded string: decoding a large dump is what OOMs the
+    // tab, so a check running after that decode never gets the chance to matter.
+    assertSqlDumpSize(byteSizeOf(file.data));
     const conn = this.connection();
     const content = await readAsText(file.data);
     validateSqlDump(content);

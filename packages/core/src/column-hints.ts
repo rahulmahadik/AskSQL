@@ -146,6 +146,16 @@ export const MAX_HINT_PROBES = 200;
 
 /** Per table, so a wide schema degrades evenly instead of the first tables taking every probe. */
 export const MAX_HINT_PROBES_PER_TABLE = 4;
+
+/**
+ * The per-table probe share for a schema of `tableCount` tables, so the global cap spreads evenly
+ * instead of the first tables spending it all. Never returns 0, and total spend across all tables
+ * never exceeds MAX_HINT_PROBES.
+ */
+export function hintProbesPerTable(tableCount: number): number {
+  const fairShare = Math.floor(MAX_HINT_PROBES / Math.max(1, tableCount));
+  return Math.max(1, Math.min(MAX_HINT_PROBES_PER_TABLE, fairShare));
+}
 export const JSON_SAMPLE_ROWS = 20;
 
 /** A probe reads only enough of a cell to judge its shape; the rest is bandwidth and parse cost. */

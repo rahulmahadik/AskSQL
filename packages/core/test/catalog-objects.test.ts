@@ -114,3 +114,41 @@ describe('a DBA question can be answered from the prompt', () => {
     expect(bare).not.toContain('INDEXES:');
   });
 });
+
+describe('a list the renderer cut short says so', () => {
+  // A silent cut reads as the complete set: the model concludes a name it was never shown does not
+  // exist, and answers "there is no such table" with total confidence.
+  const many = <T,>(n: number, make: (i: number) => T): T[] => Array.from({ length: n }, (_v, i) => make(i));
+
+  it('marks triggers, procedures, sequences and enums past the cap', () => {
+    const cat: SchemaCatalog = {
+      ...CATALOG,
+      enums: many(45, (i) => ({ name: `enum_${i}`, values: ['a', 'b'] })),
+      sequences: many(45, (i) => ({ schema: 'shop', name: `seq_${i}` })),
+      triggers: many(45, (i) => ({
+        name: `trg_${i}`,
+        schema: 'shop',
+        table: 'orders',
+        timing: 'AFTER' as const,
+        events: ['INSERT'],
+        enabled: true,
+      })),
+      routines: many(45, (i) => ({ schema: 'shop', name: `proc_${i}`, kind: 'procedure' as const, args: '' })),
+    };
+    const text = formatCatalogForPrompt(cat);
+    expect(text).toMatch(/TRIGGERS:.*15 more not shown/);
+    expect(text).toMatch(/STORED PROCEDURES.*15 more not shown/);
+    expect(text).toMatch(/SEQUENCES:.*15 more not shown/);
+    expect(text).toMatch(/ENUM TYPES:.*15 more not shown/);
+  });
+
+  it('caps enums at all, which it previously did not', () => {
+    const cat: SchemaCatalog = { ...CATALOG, enums: many(200, (i) => ({ name: `enum_${i}`, values: ['a'] })) };
+    const rendered = formatCatalogForPrompt(cat).split('\n').filter((l) => /^ enum_\d+:/.test(l));
+    expect(rendered.length).toBe(30);
+  });
+
+  it('says nothing extra when everything fits', () => {
+    expect(formatCatalogForPrompt(CATALOG)).not.toMatch(/more not shown/);
+  });
+});

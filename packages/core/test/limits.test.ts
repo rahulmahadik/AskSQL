@@ -174,6 +174,17 @@ describe('maxRows clamp (H3) and truncation signal (M1)', () => {
     expect(res.warnings.join(' ')).not.toMatch(/export/i);
   });
 
+  it('reports truncated when a LOWERED limit fills the cap', async () => {
+    // The model asked for more than the ceiling, so the guard lowers its LIMIT rather than adding one:
+    // autoLimited stays false. Crediting only autoLimited reported a full answer while the rows the
+    // question asked for were missing.
+    const conn = new Capturing(100);
+    const engine = createAskSql({ connectors: [conn], model: async () => 'x', policy: { maxRows: 100 } });
+    const res = await engine.execute('SELECT * FROM users LIMIT 5000');
+    expect(res.truncated).toBe(true);
+    expect(res.warnings.join(' ')).toMatch(/lowered/i);
+  });
+
   it('does not over-report truncation for a result under the cap', async () => {
     const conn = new Capturing(3);
     const engine = createAskSql({ connectors: [conn], model: async () => 'x', policy: { maxRows: 100 } });

@@ -17,6 +17,7 @@ import {
   JSON_SAMPLE_ROWS,
   MAX_HINT_PROBES,
   MAX_HINT_PROBES_PER_TABLE,
+  hintProbesPerTable,
   type ColumnInfo,
   type ForeignKeyInfo,
   type IndexInfo,
@@ -104,6 +105,7 @@ async function withMyColumnHints(
 ): Promise<TableInfo[]> {
   let total = MAX_HINT_PROBES;
   const out: TableInfo[] = [];
+  const perTable = hintProbesPerTable(tables.length);
   for (const table of tables) {
     if (table.kind !== 'table' || total <= 0) {
       out.push(table);
@@ -111,7 +113,7 @@ async function withMyColumnHints(
     }
     const rel = `${backtick(database)}.${backtick(table.name)}`;
     // Per table, so filler tables early in the catalog cannot spend every probe.
-    let budget = Math.min(MAX_HINT_PROBES_PER_TABLE, total);
+    let budget = Math.min(perTable, total);
     const columns: ColumnInfo[] = [];
     for (const col of table.columns) {
       const moment = isMomentColumn(col.name, col.dbType);

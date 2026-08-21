@@ -24,11 +24,10 @@ afterAll(async () => {
 });
 
 const maybe = (name: string, fn: () => Promise<void> | void) =>
-  it(name, async () => {
-    if (!available) {
-      console.warn('[skip] Postgres not reachable at', URL);
-      return;
-    }
+  it(name, async (ctx) => {
+    // An early return reports a PASS, so an unreachable database looked like a green run.
+    // ctx.skip() marks it skipped, which shows up in the summary as the gap it is.
+    if (!available) ctx.skip();
     await fn();
   });
 

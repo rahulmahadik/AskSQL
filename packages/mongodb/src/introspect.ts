@@ -286,10 +286,19 @@ async function introspectCollection(
 
   if (docs.length === 0) return emptyTable(name, rowEstimate);
 
+  const columns = inferColumns(docs, sampleColumnValues);
+  // Hitting the path cap means fields exist that the model is never shown, so it concludes they do not
+  // exist. A document store has no DDL to check against, which makes an unannounced cut unrecoverable.
+  if (columns.length >= MAX_PATHS) {
+    warnings.push(
+      `Collection '${name}' has more than ${MAX_PATHS} distinct fields; only the first ${MAX_PATHS} are described.`,
+    );
+  }
+
   return {
     name,
     kind: 'table',
-    columns: inferColumns(docs, sampleColumnValues),
+    columns,
     primaryKey: ['_id'],
     foreignKeys: [],
     uniques: [],

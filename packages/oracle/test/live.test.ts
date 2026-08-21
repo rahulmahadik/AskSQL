@@ -57,8 +57,13 @@ afterAll(async () => {
   if (conn) await conn.close();
 });
 
+  // Returning undefined reports a PASS, so an unreachable database looked like a green run.
+  // ctx.skip() marks it skipped, which shows up in the summary as the gap it is.
 const maybe = (name: string, fn: () => Promise<void>, timeout = 30_000) =>
-  it(name, async () => (ready ? fn() : undefined), timeout);
+  it(name, async (ctx) => {
+    if (!ready) ctx.skip();
+    await fn();
+  }, timeout);
 
 describe('Oracle connector (live)', () => {
   maybe(

@@ -540,8 +540,9 @@ export function createAskSql(config: AskSqlConfig): AskSqlEngine {
       if (loweredLimit) {
         warnings.push(`The row limit was lowered to ${policy.maxRows}.`);
       }
-      // An auto-limited result that filled the cap counts as truncated: the injected LIMIT hides the overflow row.
-      const truncated = result.truncated || (autoLimited && result.rowCount >= cappedMax);
+      // A capped result that filled the cap counts as truncated: a LIMIT we injected OR lowered hides
+      // the overflow row, so the connector never sees one.
+      const truncated = result.truncated || ((autoLimited || loweredLimit) && result.rowCount >= cappedMax);
       return { ...result, warnings, truncated };
     } catch (err) {
       // A driver may reject a cancelled query with its own AbortError rather than
@@ -654,7 +655,17 @@ export function createAskSql(config: AskSqlConfig): AskSqlEngine {
     let pruned = pruneCatalog(fullCatalog, q, config.pruner);
     let schemaText = pruned.schemaText;
     if (pruned.dropped > 0) {
-      emit({ type: 'warning', message: `Schema narrowed to ${pruned.catalog.tables.length} relevant tables.` }, opts);
+      // The count that matters is the one the model never saw, not the one that survived.
+      emit(
+        {
+          type: 'warning',
+          message:
+            `Schema narrowed to the ${pruned.catalog.tables.length} tables most relevant to this question; ` +
+            `${pruned.dropped} of ${pruned.catalog.tables.length + pruned.dropped} were not sent to the model. ` +
+            `If the answer missed a table, name it in the question or raise the schema token budget.`,
+        },
+        opts,
+      );
     }
 
     // Few-shot retrieval, scoped to the connection and (in server mode) the requesting user.

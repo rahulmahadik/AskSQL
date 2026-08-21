@@ -26,7 +26,7 @@ import {
   type ResultSet,
   type SchemaCatalog,
 } from '@asksql/core/runtime';
-import { readFile } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import {
   assertSafeFilePath,
   buildDuckCatalog,
@@ -44,6 +44,7 @@ import {
   shapeDuckValue,
   uniqueTableName,
   validateSqlDump,
+  assertSqlDumpSize,
   withQueryTimeout,
   type FileSource,
 } from './shared.js';
@@ -77,6 +78,8 @@ interface DuckPrepared {
 interface DuckConnection {
   run(sql: string): Promise<unknown>;
   runAndReadUntil(sql: string, targetRowCount: number): Promise<DuckReader>;
+  /** Reads to actual completion, unlike runAndReadUntil which silently stops at its row-count target. */
+  runAndReadAll(sql: string): Promise<DuckReader>;
   /** Compiles exactly ONE statement; throws on a multi-statement string. */
   prepare(sql: string): Promise<DuckPrepared>;
   /** Aborts the running query so a timeout doesn't wedge the shared connection. */
@@ -230,6 +233,14 @@ export class DuckDbConnector implements Connector {
    */
   private async registerSqlDump(file: FileSource): Promise<string> {
     assertSafeFilePath(file);
+    // Checked before the read, not on the loaded string: parsing a large dump into memory is what
+    // OOMs the process, so a check running after that read never gets the chance to matter.
+    try {
+      assertSqlDumpSize((await stat(file.path)).size);
+    } catch (err) {
+      if (err instanceof AskSqlError) throw err;
+      throw mapFileError(file, err);
+    }
     let content: string;
     try {
       content = await readFile(file.path, 'utf8');
@@ -257,9 +268,8 @@ export class DuckDbConnector implements Connector {
 
   /** Names of tables/views currently in the main schema. */
   private async tableNames(): Promise<Set<string>> {
-    const reader = await this.connection().runAndReadUntil(
+    const reader = await this.connection().runAndReadAll(
       "SELECT table_name FROM information_schema.tables WHERE table_schema = 'main'",
-      100_000,
     );
     return new Set(reader.getRowObjects().map((r) => String(r['table_name'])));
   }
@@ -303,14 +313,16 @@ export class DuckDbConnector implements Connector {
     const warnings: string[] = [];
     let columnRows: Record<string, unknown>[] = [];
     try {
-      columnRows = (await conn.runAndReadUntil(INTROSPECT_COLUMNS_SQL, 100_000)).getRowObjects();
+      // runAndReadAll reads to actual completion; runAndReadUntil(sql, N) silently stops at N rows (one
+      // per column across the whole database) with no signal that anything was cut.
+      columnRows = (await conn.runAndReadAll(INTROSPECT_COLUMNS_SQL)).getRowObjects();
     } catch (err) {
       warnings.push(`Could not introspect columns: ${err instanceof Error ? err.message : String(err)}`);
     }
     let viewNames = new Set<string>();
     try {
       viewNames = new Set(
-        (await conn.runAndReadUntil(INTROSPECT_VIEWS_SQL, 100_000)).getRowObjects().map((r) => String(r['table_name'])),
+        (await conn.runAndReadAll(INTROSPECT_VIEWS_SQL)).getRowObjects().map((r) => String(r['table_name'])),
       );
     } catch {
       /* views are optional */
